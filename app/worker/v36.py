@@ -19,6 +19,7 @@ from typing import Any
 from app.agy_state import is_agy_console_active
 from app.config import settings
 from app.database import system_status_col, users_col
+from app.observability_v50 import _provider_status_safe
 from app.storage_metrics_v48 import storage_metrics
 from app.storage_runtime_v48 import storage_runtime
 from app.version import COMMIT, VERSION
@@ -128,8 +129,11 @@ def _collect_due_users(
 
 
 def _runtime_diagnostics_v50() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Build a cheap in-memory diagnostics payload for the existing heartbeat."""
-    provider_health = monitor.get_provider_manager().get_all_provider_status()
+    """Build a cheap, secret-safe in-memory payload for the existing heartbeat."""
+    provider_health = [
+        _provider_status_safe(status)
+        for status in monitor.get_provider_manager().get_all_provider_status()
+    ]
     runtime_storage = storage_runtime.snapshot()
     storage_diag = storage_metrics.snapshot(
         write_queue_depth=int(runtime_storage["critical_write_queue_depth"]) + int(runtime_storage["status_write_queue_depth"]),
