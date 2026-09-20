@@ -1,4 +1,4 @@
-"""Plane? v3.4 Spotting Intelligence monitoring loop."""
+"""Plane Alerts deterministic spotting-intelligence monitoring loop."""
 from __future__ import annotations
 
 import asyncio
@@ -23,8 +23,10 @@ from app.intelligence.lifecycle import (
     decide_lifecycle,
     prediction_changed,
     should_cancel_active_alert,
+    should_finalize_observed_pass,
 )
 from app.intelligence.celestial import positions as celestial_positions
+from app.intelligence.elevation_v51 import resolve_observer_elevation
 from app.intelligence.environment import detect_crossing, estimate_atmosphere, estimate_contrail, interpolate_flight_level
 from app.intelligence.route_history import route_history_service
 from app.intelligence.trajectory import HistorySample, TrajectoryHistoryStore, predict_trajectory
@@ -93,6 +95,29 @@ async def _record_worker_heartbeat(active_count: int, notifications_sent: int) -
         pass
 
 
+def _altitude_relevance_enabled(prefs: dict) -> bool:
+    raw = prefs.get("proximity_3d") or {}
+    if not isinstance(raw, dict):
+        return True
+    return bool(raw.get("altitude_relevance", True))
+
+
+def _queue_observer_elevation(uid: int, loc: dict) -> None:
+    """Best-effort optional terrain lookup; never blocks the five-second path."""
+    if loc.get("elevation_m") is not None:
+        return
+    try:
+        lat = float(loc["latitude"])
+        lon = float(loc["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return
+    enrichment.get(
+        ("observer_elevation_v51", int(uid), round(lat, 3), round(lon, 3)),
+        lambda: resolve_observer_elevation(int(uid), lat, lon),
+        ttl=900,
+    )
+
+
 async def _get_active_users() -> list[dict]:
     cursor = users_col().find({"setup_complete": True}, {"user_id": 1})
     ids = [d["user_id"] async for d in cursor]
@@ -101,6 +126,7 @@ async def _get_active_users() -> list[dict]:
         loc = await locations_col().find_one({"user_id": uid})
         prefs = await preferences_col().find_one({"user_id": uid})
         if loc and prefs:
+            _queue_observer_elevation(int(uid), loc)
             out.append({"user_id": uid, "location": loc, "preferences": prefs})
     return out
 
@@ -278,23 +304,21 @@ async def _process_region(geohash_key: str, region_users: list[dict]) -> int:
     for ac in aircraft:
         if not ac.has_position:
             continue
-        s = _sample(ac, now)
+        sample = _sample(ac, now)
         before = _history.get(ac.icao24)
-        history = _history.add(ac.icao24, s)
-        if _accepted_latest(s, history):
+        history = _history.add(ac.icao24, sample)
+        if _accepted_latest(sample, history):
             accepted_aircraft.append(ac)
         else:
             previous = before[-1] if before else None
-            jump = haversine(previous.latitude, previous.longitude, s.latitude, s.longitude) if previous else -1.0
+            jump = haversine(previous.latitude, previous.longitude, sample.latitude, sample.longitude) if previous else -1.0
             logger.warning(
                 "adsb_outlier_rejected icao=%s jump_km=%.2f sample_age=%.1f",
                 ac.icao24,
                 jump,
-                s.position_age_s,
+                sample.position_age_s,
             )
 
-    # Persist a bounded local route trace by flight callsign, not by tail/ICAO24.
-    # The service self-throttles samples, so this is cheap on 5-second monitor cycles.
     if accepted_aircraft:
         observations = await asyncio.gather(
             *(route_history_service.observe(ac, now=now) for ac in accepted_aircraft),
@@ -330,6 +354,11 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
     radius = float(loc.get("radius_km", settings.default_radius_km))
     lat = float(loc["latitude"])
     lon = float(loc["longitude"])
+    try:
+        observer_altitude_m = float(loc["elevation_m"]) if loc.get("elevation_m") is not None else None
+    except (TypeError, ValueError):
+        observer_altitude_m = None
+    altitude_relevance = _altitude_relevance_enabled(prefs)
     states = get_db()["approach_states"]
     count = 0
     config_key = hashlib.sha256(json.dumps({"location": {k: loc.get(k) for k in ("latitude", "longitude", "radius_km")},
@@ -347,20 +376,30 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
         hist = _history.get(ac.icao24)
         try:
             with phase("prediction"):
-                pred = predict_trajectory(hist, lat, lon, radius, now=time.time())
+                pred = predict_trajectory(
+                    hist,
+                    lat,
+                    lon,
+                    radius,
+                    now=time.time(),
+                    user_altitude_m=observer_altitude_m,
+                    altitude_relevance=altitude_relevance,
+                )
         except Exception:
             logger.exception("cpa_calculation_failed icao=%s user=%s", ac.icao24, uid)
             continue
 
         logger.debug(
-            "cpa icao=%s user=%s state=%s current=%.2f cpa=%.2f t=%.1f confidence=%s",
+            "cpa icao=%s user=%s state=%s current=%.2f cpa=%.2f cpa3d=%s t=%.1f confidence=%s altitude_confidence=%s",
             ac.icao24,
             uid,
             pred.state,
             pred.current_distance_km,
             pred.projected_closest_km,
+            f"{pred.projected_closest_3d_km:.2f}" if pred.projected_closest_3d_km is not None else "na",
             pred.time_to_cpa_s or -1,
             pred.confidence,
+            pred.altitude_confidence,
         )
         old = await states.find_one({"user_id": uid, "aircraft_icao24": ac.icao24})
         old_time = (old or {}).get("updated_at")
@@ -402,15 +441,23 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 )
                 route_suppressed = route_gate.suppress_alert
             except Exception:
-                # An unavailable gate cannot validate a new predictive alert.
-                # Preserve active messages through outages; direct observation wins.
                 route_suppressed = not active and pred.current_distance_km > radius
-                # Route enrichment must never break the deterministic live CPA loop.
                 logger.exception("route_gate_failed callsign=%s icao=%s user=%s", ac.callsign, ac.icao24, uid)
 
         qualifies = live_qualifies and not route_suppressed
-        route_state = {"config_key": config_key, "last_observation_at": observed_at,
-                       "prediction_version": PREDICTION_VERSION, "route_callsign": ac.callsign}
+        route_state = {
+            "config_key": config_key,
+            "last_observation_at": observed_at,
+            "prediction_version": PREDICTION_VERSION,
+            "route_callsign": ac.callsign,
+            "horizontal_cpa_km": pred.projected_closest_km,
+            "three_d_cpa_km": pred.projected_closest_3d_km,
+            "three_d_cpa_lower_bound_km": pred.projected_closest_3d_lower_bound_km,
+            "time_to_3d_cpa_s": pred.time_to_3d_cpa_s,
+            "altitude_confidence": pred.altitude_confidence,
+            "altitude_relevance_applied": pred.altitude_relevance_applied,
+            "observer_altitude_known": pred.observer_altitude_known,
+        }
         if route_gate is not None:
             route_state.update({
                 "route_callsign": route_gate.callsign,
@@ -441,7 +488,14 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 route_gate.reason if route_gate else "route gate",
             )
 
-        if old and old.get("message_id") and old.get("active") and (pred.already_passed or pred.state == "Passed"):
+        observed_pass = bool(
+            old
+            and old.get("message_id")
+            and old.get("active")
+            and fresh_observation
+            and should_finalize_observed_pass(pred, observed_closest, radius)
+        )
+        if observed_pass:
             delivered = await send_or_update_approach(
                 uid, ac, pred, "passed", old.get("notification_id", "") or "", old.get("message_id"),
                 previous_cpa_km=stable_previous_cpa,
