@@ -1,0 +1,23 @@
+{
+  "now": 2000000000.0,
+  "messages": 187654,
+  "aircraft": [
+    {
+      "hex": "4b1801",
+      "flight": "THY7   ",
+      "lat": 41.018,
+      "lon": 28.944,
+      "seen_pos": 0.4,
+      "alt_baro": 11975,
+      "gs": 356.2,
+      "track": 301.4,
+      "baro_rate": -832,
+      "t": "A359"
+    },
+    {
+      "hex": "4b1802",
+      "flight": "TEST2  ",
+      "seen": 0.2
+    }
+  ]
+}

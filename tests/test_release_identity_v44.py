@@ -1,10 +1,11 @@
 from pathlib import Path
 
-from app.version import VERSION
+from app.version import PREDICTION_VERSION, VERSION
 
 
-def test_v44_has_one_canonical_runtime_version():
-    assert VERSION == "4.4.0"
+def test_v45_has_one_canonical_runtime_version_without_renaming_predictor():
+    assert VERSION == "4.5.0"
+    assert PREDICTION_VERSION == "4.4-observation-confirmations"
     main = Path("app/main.py").read_text(encoding="utf-8")
     worker = Path("app/worker/v36.py").read_text(encoding="utf-8")
     assert "from app.version import VERSION, COMMIT" in main
