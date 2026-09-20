@@ -136,11 +136,11 @@ def _sample(ac, now: float) -> HistorySample:
     age = float(getattr(ac, "position_age_s", 0.0) or 0.0)
     try:
         if raw is not None:
-            v = float(raw)
-            if v > 1_000_000_000:
-                age = max(age, max(0.0, now - v))
-            elif 0 <= v < 600:
-                age = max(age, v)
+            value = float(raw)
+            if value > 1_000_000_000:
+                age = max(age, max(0.0, now - value))
+            elif 0 <= value < 600:
+                age = max(age, value)
     except Exception:
         pass
     return HistorySample(
@@ -209,12 +209,12 @@ async def _environment(user: dict, ac, pred, spot: dict) -> dict:
         layers, upper_error = upper or ([], "Upper-air refresh pending or unavailable")
         fl = interpolate_flight_level(layers, float(ac.altitude))
         contrail = estimate_contrail(fl, ac.aircraft_type)
-    c = celestial_positions(lat, lon)
+    celestial = celestial_positions(lat, lon)
     sun_cross = moon_cross = None
-    if spot["solar_crossing_alerts"] and c["sun_azimuth_deg"] is not None and c["sun_elevation_deg"] is not None:
-        sun_cross = detect_crossing(pred.path, lat, lon, c["sun_azimuth_deg"], c["sun_elevation_deg"], threshold_deg=1.2, solar=True)
-    if spot["moon_crossing_alerts"] and c["moon_azimuth_deg"] is not None and c["moon_elevation_deg"] is not None and c["moon_elevation_deg"] > 0:
-        moon_cross = detect_crossing(pred.path, lat, lon, c["moon_azimuth_deg"], c["moon_elevation_deg"], threshold_deg=1.0)
+    if spot["solar_crossing_alerts"] and celestial["sun_azimuth_deg"] is not None and celestial["sun_elevation_deg"] is not None:
+        sun_cross = detect_crossing(pred.path, lat, lon, celestial["sun_azimuth_deg"], celestial["sun_elevation_deg"], threshold_deg=1.2, solar=True)
+    if spot["moon_crossing_alerts"] and celestial["moon_azimuth_deg"] is not None and celestial["moon_elevation_deg"] is not None and celestial["moon_elevation_deg"] > 0:
+        moon_cross = detect_crossing(pred.path, lat, lon, celestial["moon_azimuth_deg"], celestial["moon_elevation_deg"], threshold_deg=1.0)
     return {
         "weather": weather,
         "solar": solar,
@@ -260,8 +260,8 @@ async def _monitor_cycle() -> None:
         await _record_worker_heartbeat(0, 0)
         return
     regions = defaultdict(list)
-    for u in users:
-        regions[u["location"]["geohash"]].append(u)
+    for user in users:
+        regions[user["location"]["geohash"]].append(user)
     notifications = 0
     for gh, group in regions.items():
         try:
@@ -287,9 +287,9 @@ def _accepted_latest(sample: HistorySample, history: list[HistorySample]) -> boo
 
 async def _process_region(geohash_key: str, region_users: list[dict]) -> int:
     boxes = []
-    for u in region_users:
-        r = float(u["location"].get("radius_km", settings.default_radius_km)) + 120.0
-        boxes.append(bounding_box(u["location"]["latitude"], u["location"]["longitude"], r))
+    for user in region_users:
+        radius = float(user["location"].get("radius_km", settings.default_radius_km)) + 120.0
+        boxes.append(bounding_box(user["location"]["latitude"], user["location"]["longitude"], radius))
     merged = merge_bounding_boxes(boxes)
     clat = (merged[0] + merged[1]) / 2
     clon = (merged[2] + merged[3]) / 2
@@ -328,18 +328,18 @@ async def _process_region(geohash_key: str, region_users: list[dict]) -> int:
         if failures:
             logger.warning("flight_route_observation_failures count=%d", failures)
 
-    for u in region_users:
+    for user in region_users:
         await provider_learner.record_cycle_observation(
-            user_id=u["user_id"],
+            user_id=user["user_id"],
             geohash=geohash_key,
             results_by_provider=by_provider,
-            user_lat=u["location"]["latitude"],
-            user_lon=u["location"]["longitude"],
-            radius_km=u["location"].get("radius_km", settings.default_radius_km),
+            user_lat=user["location"]["latitude"],
+            user_lon=user["location"]["longitude"],
+            radius_km=user["location"].get("radius_km", settings.default_radius_km),
         )
     count = 0
-    for u in region_users:
-        count += await _match_user_aircraft(u, accepted_aircraft, by_provider)
+    for user in region_users:
+        count += await _match_user_aircraft(user, accepted_aircraft, by_provider)
     return count
 
 
@@ -389,6 +389,13 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             logger.exception("cpa_calculation_failed icao=%s user=%s", ac.icao24, uid)
             continue
 
+        cpa3d = getattr(pred, "projected_closest_3d_km", None)
+        cpa3d_lower = getattr(pred, "projected_closest_3d_lower_bound_km", None)
+        time_to_3d_cpa = getattr(pred, "time_to_3d_cpa_s", None)
+        altitude_confidence = str(getattr(pred, "altitude_confidence", "Unavailable") or "Unavailable")
+        altitude_relevance_applied = bool(getattr(pred, "altitude_relevance_applied", False))
+        observer_altitude_known = bool(getattr(pred, "observer_altitude_known", False))
+
         logger.debug(
             "cpa icao=%s user=%s state=%s current=%.2f cpa=%.2f cpa3d=%s t=%.1f confidence=%s altitude_confidence=%s",
             ac.icao24,
@@ -396,10 +403,10 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             pred.state,
             pred.current_distance_km,
             pred.projected_closest_km,
-            f"{pred.projected_closest_3d_km:.2f}" if pred.projected_closest_3d_km is not None else "na",
+            f"{cpa3d:.2f}" if cpa3d is not None else "na",
             pred.time_to_cpa_s or -1,
             pred.confidence,
-            pred.altitude_confidence,
+            altitude_confidence,
         )
         old = await states.find_one({"user_id": uid, "aircraft_icao24": ac.icao24})
         old_time = (old or {}).get("updated_at")
@@ -451,12 +458,12 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             "prediction_version": PREDICTION_VERSION,
             "route_callsign": ac.callsign,
             "horizontal_cpa_km": pred.projected_closest_km,
-            "three_d_cpa_km": pred.projected_closest_3d_km,
-            "three_d_cpa_lower_bound_km": pred.projected_closest_3d_lower_bound_km,
-            "time_to_3d_cpa_s": pred.time_to_3d_cpa_s,
-            "altitude_confidence": pred.altitude_confidence,
-            "altitude_relevance_applied": pred.altitude_relevance_applied,
-            "observer_altitude_known": pred.observer_altitude_known,
+            "three_d_cpa_km": cpa3d,
+            "three_d_cpa_lower_bound_km": cpa3d_lower,
+            "time_to_3d_cpa_s": time_to_3d_cpa,
+            "altitude_confidence": altitude_confidence,
+            "altitude_relevance_applied": altitude_relevance_applied,
+            "observer_altitude_known": observer_altitude_known,
         }
         if route_gate is not None:
             route_state.update({
