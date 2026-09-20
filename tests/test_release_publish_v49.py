@@ -65,19 +65,27 @@ def test_railway_deploy_runs_only_after_trusted_green_main_push():
     assert "contents: read" in workflow
 
 
-def test_railway_deploy_uses_exact_tested_sha_and_refuses_stale_main():
+def test_railway_deploy_gate_runs_outside_railway_container_and_refuses_stale_main():
     workflow = _deploy_workflow_text()
     tested_sha = "${{ github.event.workflow_run.head_sha }}"
-    assert f"DEPLOY_SHA: {tested_sha}" in workflow
-    assert f"ref: {tested_sha}" in workflow
-    assert "fetch-depth: 0" in workflow
-    assert "git fetch --force --no-tags origin main" in workflow
-    assert 'CURRENT_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"' in workflow
-    assert 'if [ "${CURRENT_MAIN_SHA}" != "${DEPLOY_SHA}" ]' in workflow
-    assert 'echo "deploy=false" >> "$GITHUB_OUTPUT"' in workflow
-    assert workflow.count("if: steps.head.outputs.deploy == 'true'") >= 4
-    assert '--message "Plane Alerts main ${DEPLOY_SHA}"' in workflow
-    assert '--message "Plane Alerts AGY ${DEPLOY_SHA}"' in workflow
+    gate_block, deploy_block = workflow.split("\n  deploy:\n", 1)
+    assert "  gate:" in gate_block
+    assert "runs-on: ubuntu-latest" in gate_block
+    assert "container:" not in gate_block
+    assert f"DEPLOY_SHA: {tested_sha}" in gate_block
+    assert 'gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq' in gate_block
+    assert 'if [[ "${CURRENT_MAIN_SHA}" != "${DEPLOY_SHA}" ]]' in gate_block
+    assert 'echo "deploy=false" >> "$GITHUB_OUTPUT"' in gate_block
+    assert "git fetch" not in gate_block
+    assert "git rev-parse" not in gate_block
+
+    assert "needs: gate" in deploy_block
+    assert "if: needs.gate.outputs.deploy == 'true'" in deploy_block
+    assert "container: ghcr.io/railwayapp/cli:latest" in deploy_block
+    assert f"DEPLOY_SHA: {tested_sha}" in deploy_block
+    assert f"ref: {tested_sha}" in deploy_block
+    assert '--message "Plane Alerts main ${DEPLOY_SHA}"' in deploy_block
+    assert '--message "Plane Alerts AGY ${DEPLOY_SHA}"' in deploy_block
 
 
 def test_v490_release_notes_exist_for_automatic_publishing():

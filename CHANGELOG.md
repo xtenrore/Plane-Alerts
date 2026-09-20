@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.1.1 — Railway deploy-gate compatibility patch
+
+- Fixed the trusted post-CI Railway deployment workflow after v5.1.0 exposed that the Railway CLI container does not include `git`.
+- Moved current-main SHA verification into a separate standard GitHub-hosted gate job using the authenticated GitHub API/CLI.
+- Preserved same-repository successful-main-push trust checks and stale-tested-commit refusal.
+- Physical prediction version remains `5.1-3d-proximity`; no trajectory, CPA, ETA, qualification, cancellation or terminal logic changed.
+
 ## v5.1.0 — 3D Proximity & Advanced Geometry
 
 - Added deterministic vertical separation and true three-dimensional CPA while retaining horizontal CPA as a separate, always-visible value.

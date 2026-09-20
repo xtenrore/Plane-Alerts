@@ -29,8 +29,8 @@ def _sample(lat, *, heading=0.0, t=NOW, alt=1200.0):
     return HistorySample(t, lat, 29.0, alt, 360.0, heading, 0.0, 0.0)
 
 
-def test_v510_has_explicit_physical_prediction_identity():
-    assert VERSION == "5.1.0"
+def test_v511_keeps_v51_physical_prediction_identity():
+    assert VERSION == "5.1.1"
     assert PREDICTION_VERSION == "5.1-3d-proximity"
 
 
