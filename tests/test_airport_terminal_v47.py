@@ -64,9 +64,18 @@ def test_terminal_area_entry_reduces_shadow_confidence_without_hard_veto():
 
 def test_sustained_base_turn_requires_multiple_consistent_samples():
     airport = _airport()
-    headings = [0, 15, 30, 45, 60, 75, 90, 105, 120]
-    samples = [_s(i * 10, 0.22 - i * 0.012, 0.05, heading, alt=1700 - i * 70) for i, heading in enumerate(headings)]
-    result = v47.assess_terminal(samples, airport, now=80)
+    # A coherent descending arc toward runway 18: the position track follows the
+    # same sustained right turn described by the heading samples instead of
+    # moving straight while headings rotate independently.
+    samples = [
+        _s(0, 0.130, -0.080, 100, alt=1700),
+        _s(10, 0.126, -0.055, 110, alt=1630),
+        _s(20, 0.118, -0.032, 120, alt=1560),
+        _s(30, 0.107, -0.014, 130, alt=1490),
+        _s(40, 0.092, -0.002, 140, alt=1420),
+        _s(50, 0.075, 0.004, 150, alt=1350),
+    ]
+    result = v47.assess_terminal(samples, airport, now=50)
     assert result.vector_state == "SUSTAINED_TURN"
     assert result.state in {"DOWNWIND_TO_BASE", "BASE_TURN"}
 
