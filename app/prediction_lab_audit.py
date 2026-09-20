@@ -54,6 +54,13 @@ def _horizon_bucket(seconds: float | None) -> str:
     return ">60m"
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | None) -> dict:
     """Attach shadow/provenance evidence without retaining user location."""
     merged = dict(diagnostics or {})
@@ -97,6 +104,20 @@ def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | No
         "field_provenance": {str(key): str(value) for key, value in list(provenance.items())[:16]},
         "merge_notes": [str(item)[:160] for item in list(merge_notes)[:8]],
     }
+    merged["proximity_3d"] = {
+        "available": bool(getattr(prediction, "three_d_available", False)),
+        "observer_altitude_known": bool(getattr(prediction, "observer_altitude_known", False)),
+        "current_vertical_separation_m": _safe_float(getattr(prediction, "current_vertical_separation_m", None)),
+        "projected_closest_3d_km": _safe_float(getattr(prediction, "projected_closest_3d_km", None)),
+        "projected_closest_3d_lower_bound_km": _safe_float(getattr(prediction, "projected_closest_3d_lower_bound_km", None)),
+        "time_to_3d_cpa_s": _safe_float(getattr(prediction, "time_to_3d_cpa_s", None)),
+        "horizontal_at_3d_cpa_km": _safe_float(getattr(prediction, "horizontal_at_3d_cpa_km", None)),
+        "vertical_at_3d_cpa_m": _safe_float(getattr(prediction, "vertical_at_3d_cpa_m", None)),
+        "altitude_confidence": str(getattr(prediction, "altitude_confidence", "Unavailable") or "Unavailable"),
+        "altitude_uncertainty_m": _safe_float(getattr(prediction, "altitude_uncertainty_m", None)),
+        "altitude_relevance_applied": bool(getattr(prediction, "altitude_relevance_applied", False)),
+        "altitude_relevance_reason": str(getattr(prediction, "altitude_relevance_reason", "") or "")[:500],
+    }
     return merged
 
 
@@ -124,11 +145,7 @@ async def record_prediction_snapshot(
     _prune_throttle(now_mono)
 
     now = datetime.now(timezone.utc)
-    t_cpa = getattr(prediction, "time_to_cpa_s", None)
-    try:
-        t_cpa = float(t_cpa) if t_cpa is not None else None
-    except (TypeError, ValueError):
-        t_cpa = None
+    t_cpa = _safe_float(getattr(prediction, "time_to_cpa_s", None))
 
     doc = {
         "kind": "prediction",
@@ -141,13 +158,20 @@ async def record_prediction_snapshot(
         "callsign": str(getattr(aircraft, "callsign", "") or "").strip(),
         "aircraft_type": str(getattr(aircraft, "aircraft_type", "") or getattr(aircraft, "display_type", "") or ""),
         "current_distance_km": float(getattr(prediction, "current_distance_km", 0.0) or 0.0),
+        "current_slant_km": _safe_float(getattr(prediction, "current_slant_km", None)),
         "projected_closest_km": float(getattr(prediction, "projected_closest_km", 0.0) or 0.0),
+        "projected_closest_3d_km": _safe_float(getattr(prediction, "projected_closest_3d_km", None)),
+        "projected_closest_3d_lower_bound_km": _safe_float(getattr(prediction, "projected_closest_3d_lower_bound_km", None)),
         "time_to_cpa_s": t_cpa,
+        "time_to_3d_cpa_s": _safe_float(getattr(prediction, "time_to_3d_cpa_s", None)),
         "horizon_bucket": _horizon_bucket(t_cpa),
         "state": str(getattr(prediction, "state", "") or ""),
+        "decision_reason": str(getattr(prediction, "reason", "") or "")[:500],
         "confidence": str(getattr(prediction, "confidence", "") or ""),
         "confidence_score": float(getattr(prediction, "confidence_score", 0.0) or 0.0),
         "enters_alert_radius": bool(getattr(prediction, "enters_alert_radius", False)),
+        "altitude_relevance_applied": bool(getattr(prediction, "altitude_relevance_applied", False)),
+        "altitude_confidence": str(getattr(prediction, "altitude_confidence", "Unavailable") or "Unavailable"),
         "alert_radius_km": float(alert_radius_km),
         "qualifies": bool(qualifies),
         "route_suppressed": bool(route_suppressed),
@@ -176,10 +200,7 @@ async def record_prediction_outcome(
     """Persist ground truth/lifecycle outcome for later replay and calibration."""
     now = datetime.now(timezone.utc)
     icao = str(getattr(aircraft, "icao24", "") or "").lower().strip()
-    try:
-        previous_cpa = float(previous_projected_closest_km) if previous_projected_closest_km is not None else None
-    except (TypeError, ValueError):
-        previous_cpa = None
+    previous_cpa = _safe_float(previous_projected_closest_km)
     doc = {
         "kind": "outcome",
         "prediction_version": PREDICTION_VERSION,
@@ -195,9 +216,13 @@ async def record_prediction_outcome(
         "observed_closest_km": float(observed_closest_km),
         "previous_projected_closest_km": previous_cpa,
         "final_projected_closest_km": float(getattr(final_prediction, "projected_closest_km", 0.0) or 0.0),
+        "final_projected_closest_3d_km": _safe_float(getattr(final_prediction, "projected_closest_3d_km", None)),
+        "final_projected_closest_3d_lower_bound_km": _safe_float(getattr(final_prediction, "projected_closest_3d_lower_bound_km", None)),
         "final_time_to_cpa_s": getattr(final_prediction, "time_to_cpa_s", None),
+        "final_time_to_3d_cpa_s": getattr(final_prediction, "time_to_3d_cpa_s", None),
         "final_state": str(getattr(final_prediction, "state", "") or ""),
         "final_confidence": str(getattr(final_prediction, "confidence", "") or ""),
+        "final_altitude_relevance_applied": bool(getattr(final_prediction, "altitude_relevance_applied", False)),
         "route_suppressed": bool(route_suppressed),
         "route_reason": str(route_reason or "")[:500],
         "coverage_mode": "regional_adsb_current_predictor",
@@ -214,7 +239,10 @@ def enqueue_snapshot(*, user_id, aircraft, prediction, alert_radius_km, qualifie
     # existing Prediction Lab record without retaining projected paths.
     merged_diagnostics = _snapshot_diagnostics(aircraft, prediction, diagnostics)
     pred = SimpleNamespace(**{name: getattr(prediction, name, None) for name in (
-        "time_to_cpa_s", "current_distance_km", "projected_closest_km", "state", "confidence", "confidence_score", "enters_alert_radius")})
+        "time_to_cpa_s", "time_to_3d_cpa_s", "current_distance_km", "current_slant_km",
+        "projected_closest_km", "projected_closest_3d_km", "projected_closest_3d_lower_bound_km",
+        "state", "reason", "confidence", "confidence_score", "enters_alert_radius",
+        "altitude_relevance_applied", "altitude_confidence")})
     ac = SimpleNamespace(icao24=aircraft.icao24, callsign=aircraft.callsign, aircraft_type=aircraft.aircraft_type)
     audit_work.get(("prediction", user_id, ac.icao24), lambda: record_prediction_snapshot(
         user_id=user_id, aircraft=ac, prediction=pred, alert_radius_km=alert_radius_km,
