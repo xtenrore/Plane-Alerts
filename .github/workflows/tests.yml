@@ -6,6 +6,7 @@ on:
       - main
       - "chatgpt/**"
       - "fix/**"
+      - "release/**"
   pull_request:
 
 permissions:
