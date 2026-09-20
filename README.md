@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.7.0**
+**Current code version: Plane Alerts v4.7.1**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
@@ -14,7 +14,7 @@ v4.7 extends the existing v4.2/v4.6 prediction stack instead of introducing a co
 
 ### Terminal intelligence
 
-Plane Alerts now records deterministic terminal-area evidence for:
+Plane Alerts records deterministic terminal-area evidence for:
 
 - sustained vector changes
 - downwind/base transitions
@@ -26,9 +26,19 @@ A single noisy ADS-B heading is not enough to establish a turn. Terminal evidenc
 
 Airport context produces an explicit uncertainty penalty for diagnostics. Fresh live geometry remains authoritative: being near an airport or having that airport as the route destination is never an automatic suppression rule.
 
+### Worldwide airport and runway data
+
+v4.7.1 adds a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot. The complete airport catalogue is compiled during the production image build into `data/aviation/compiled/global_airports.sqlite3`; runtime monitoring performs local read-only SQLite lookups and does not call OurAirports or MongoDB for static airport/runway reference data.
+
+The global snapshot includes large, medium and small airports, heliports, seaplane bases, local-code-only facilities and closed facilities represented by the source. Closed facilities remain in the reference database but are excluded from normal nearby-airport inference. Runway rows are preserved even when the source lacks endpoint geometry; Plane Alerts only uses runway-relative prediction when the required coordinates/headings are present.
+
+Airport lookups use a bounded spatial-cell index and a small runtime cache instead of loading the worldwide catalogue into memory or scanning every airport in the five-second loop.
+
+Maintained official overrides take precedence over the global source. LTFM/IST uses the verified operational runway set maintained by Plane Alerts, so a generic upstream record cannot silently reintroduce stale or planned runway geometry.
+
 ### Runway geometry and inference
 
-Runway geometry lives in a dedicated data layer rather than being scattered through prediction code. The initial maintained production runway set includes Istanbul Airport (LTFM/IST), while the classifier accepts generic single, parallel and crossing-runway layouts.
+Runway geometry lives in a dedicated data layer rather than being scattered through prediction code. The classifier accepts generic single, parallel and crossing-runway layouts worldwide.
 
 Likely runway direction is inferred from recent observed traffic only when multiple aircraft support the same direction. The inference retains supporting-aircraft count, recency and confidence; one aircraft cannot create an active-runway conclusion. Configuration changes require fresh multi-aircraft evidence.
 
@@ -36,7 +46,7 @@ Recent airport movement clusters are bounded, deduplicated per aircraft and time
 
 ### Shadow validation and live safety
 
-New runway/base/final/holding suppression hypotheses are **shadow-only in v4.7.0**. They are recorded in Prediction Lab with their model identifier and do not control live qualification or cancellation.
+New runway/base/final/holding suppression hypotheses remain **shadow-only**. They are recorded in Prediction Lab and do not control live qualification or cancellation.
 
 One narrow fail-safe is authoritative: if an aircraft was being held only because a landing turn was expected, strong observed go-around or missed-approach evidence can invalidate that old expectation and return control to the fresh live trajectory. The confirmed cancellation latch is not bypassed.
 
@@ -50,7 +60,7 @@ Google Contrails remains separate photography/environment enrichment. It does no
 
 ### Known limitations
 
-Runway-aware suppression remains shadow-only until enough replay and production outcomes demonstrate improvement without missed genuine passes. Airports without maintained runway geometry still receive generic terminal context, but runway-specific inference remains uncertain. If maintained runway data becomes incomplete, runway-specific inference is disabled rather than blocking monitoring. Published ATC procedures and official live runway assignments are not treated as physical truth.
+Runway-aware suppression remains shadow-only until enough replay and production outcomes demonstrate improvement without missed genuine passes. The worldwide reference catalogue is community-maintained and is not treated as authoritative operational truth; maintained Plane Alerts overrides can replace records for airports where stronger sources are available. Some airports or runway rows do not have complete endpoint coordinates/headings, so runway-specific inference remains uncertain there. Published procedures and inferred runway configuration never override fresh physical observations.
 
 ## Alert-critical architecture
 
@@ -64,7 +74,9 @@ ADS-B ingestion
   -> qualification / cancellation lifecycle
   -> Telegram alert
 
-ADS-B merged snapshots
+Pinned OurAirports snapshot (build time only)
+  -> local SQLite + spatial-cell index
+  -> on-demand airport/runway geometry
   -> bounded v4.7 terminal history
   -> runway evidence + recent movement clusters
   -> base/final/holding/go-around classification
@@ -140,32 +152,36 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 ## Testing and release gates
 
-Pull-request CI runs compile/static validation, the complete pytest suite, preserved Error Museum/provider/interaction regressions, v4.7 airport replays and deterministic performance benchmarks.
+Pull-request CI runs compile/static validation, builds and verifies the pinned worldwide airport database, runs the complete pytest suite, preserves Error Museum/provider/interaction regressions, and enforces deterministic performance benchmarks.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
+python scripts/build_airport_database.py
+python scripts/verify_airport_database.py
 pytest -q
 pytest -q tests/test_error_museum_v42.py tests/test_v44_monitor_reliability_replay.py tests/test_eta_stability_hotfix.py
 pytest -q tests/test_v45_provider_resilience.py tests/test_v45_local_provider_area_recovery.py
 pytest -q tests/test_interaction_v46.py
 pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
+pytest -q tests/test_global_airport_data_v471.py
 python scripts/benchmark_v42.py
 python scripts/benchmark_v45_provider_resilience.py
 python scripts/benchmark_v46_prediction.py
 python scripts/benchmark_v46_interaction.py
 python scripts/benchmark_v47_terminal.py
+python scripts/benchmark_v471_airport_lookup.py
 pip check
 ```
 
 ## Deployment
 
-Production runs on Railway with MongoDB persistence. Deployment occurs only after the exact `main` commit passes CI. The deployed build reports its exact commit through runtime metadata; deployment SHAs are not hard-coded in source.
+Production runs on Railway with MongoDB persistence for live/user/history state. Static worldwide airport/runway reference data is kept outside MongoDB in the local image database. Deployment occurs only after the exact `main` commit passes CI. The deployed build reports its exact commit through runtime metadata; deployment SHAs are not hard-coded in source.
 
 The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and may suggest hypotheses, but it does not control trajectory or notification decisions. Railway AI is not used.
 
 ## Running locally
 
-Plane Alerts uses Python 3.11 and MongoDB.
+Plane Alerts uses Python 3.11 and MongoDB. Build the pinned airport reference database once before starting the application:
 
 ```bash
 git clone https://github.com/xtenrore/Plane-Alerts.git
@@ -173,6 +189,7 @@ cd Plane-Alerts
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python scripts/build_airport_database.py
 cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
