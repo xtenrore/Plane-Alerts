@@ -1,4 +1,4 @@
-"""Pure alert lifecycle decisions for Plane? v3.4."""
+"""Pure alert lifecycle decisions for Plane Alerts."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,6 +42,55 @@ def prediction_changed(previous_cpa_km: float | None, new_cpa_km: float, alert_r
     delta = abs(float(new_cpa_km) - previous)
     threshold = max(3.0, float(alert_radius_km) * 0.35, abs(previous) * 0.50)
     return delta >= threshold
+
+
+def should_finalize_observed_pass(
+    prediction,
+    observed_closest_km: float | None,
+    alert_radius_km: float,
+) -> bool:
+    """Return whether an active alert has *observably* completed its pass.
+
+    A projected CPA inside the radius is not ground truth.  We only finalize a
+    pass after Plane Alerts has actually observed the aircraft inside the user's
+    radius and a later fresh trajectory shows it receding from that observed
+    minimum.  This prevents close-looking predictions that later turn away from
+    being mislabeled as successful passes, while also preventing a genuine
+    observed pass from being emitted as a cancellation after route/CPA evidence
+    changes.
+
+    Missing/stale ADS-B remains unresolved: stale observations never finalize a
+    pass.
+    """
+    if getattr(prediction, "stale", False) or observed_closest_km is None:
+        return False
+    try:
+        radius = float(alert_radius_km)
+        observed = float(observed_closest_km)
+        current = float(getattr(prediction, "current_distance_km"))
+    except (TypeError, ValueError):
+        return False
+    if observed > radius:
+        return False
+
+    # Require real separation from the recorded minimum, not ordinary provider
+    # jitter.  The floor is deliberately small so a low/slow nearby aircraft is
+    # not kept active for an excessive period after its closest point.
+    receded_km = current - observed
+    if receded_km < max(0.15, radius * 0.01):
+        return False
+
+    trend = getattr(prediction, "distance_trend_km_s", None)
+    try:
+        moving_away = trend is not None and float(trend) >= 0.002
+    except (TypeError, ValueError):
+        moving_away = False
+    state = str(getattr(prediction, "state", "") or "")
+    return bool(
+        moving_away
+        or state in {"Moving away", "Turning away", "Passed"}
+        or getattr(prediction, "already_passed", False)
+    )
 
 
 def should_cancel_active_alert(prediction, previous_cpa_km: float | None, alert_radius_km: float) -> bool:
