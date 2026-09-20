@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.7.2**
+**Current code version: Plane Alerts v4.7.3**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
@@ -26,7 +26,7 @@ A single noisy ADS-B heading is not enough to establish a turn. Terminal evidenc
 
 Airport context produces an explicit uncertainty penalty for diagnostics. Fresh live geometry remains authoritative: being near an airport or having that airport as the route destination is never an automatic suppression rule.
 
-v4.7.2 adds one narrow authoritative **initial qualification hold** for the recurring terminal-arrival false-alert class. Before the first Telegram notification only, a candidate may be held when fresh observations jointly show a strong low/slow/descending airport arrival and the temporary straight-line observer CPA conflicts with that terminal evidence. Destination metadata such as `ISL` or `IST` is supporting evidence only and cannot suppress an alert by itself. The hold releases for stale/insufficient evidence, go-around or missed approach, a trajectory change that disproves the expected turn, a runway continuation that can physically enter the observer radius, or fresh physical entry into the configured radius. Once released for an encounter, the v4.7.2 initial hold cannot re-arm to cancel an already-visible alert.
+v4.7.2 adds one narrow authoritative **initial qualification hold** for the recurring terminal-arrival false-alert class. Before the first Telegram notification only, a candidate may be held when fresh observations jointly show a strong low/slow/descending airport arrival and the temporary straight-line observer CPA conflicts with that terminal evidence. Destination metadata such as `ISL` or `IST` is supporting evidence only and cannot suppress an alert by itself. The initial hold requires fresh sufficient evidence and releases for go-around or missed approach, a trajectory change that disproves the expected turn, a landing path that can physically enter the observer radius, or fresh physical entry into the configured radius. The landing path ends at the far runway end; the former 18 km airborne extension is shadow context only. v4.7.3 evaluates this guard until the first successful Telegram delivery. Candidate qualification, missing evidence and failed sends cannot permanently disable it; existing delivered messages use the established cancellation lifecycle.
 
 ### Worldwide airport and runway data
 
@@ -50,7 +50,7 @@ Recent airport movement clusters are bounded, deduplicated per aircraft and time
 
 Broad runway/base/final/holding suppression hypotheses remain **shadow-only**. They are recorded in Prediction Lab and do not directly control live qualification or cancellation.
 
-The v4.7.2 initial terminal-arrival hold is deliberately narrower: it can delay only the first notification when several fresh physical arrival signals agree. It is not a destination-airport veto and it is encounter-scoped. Strong go-around/missed-approach evidence or a live trajectory that disproves the expected airport turn returns authority to current geometry. Fresh physical radius entry always wins.
+The v4.7.2 initial terminal-arrival hold is deliberately narrower: it can delay only the first notification when several fresh physical arrival signals agree. It is not a destination-airport veto and it ends only after actual per-user message delivery. Strong go-around/missed-approach evidence can release an older landing-turn hold. Airport-distance growth, a single climb or a hypothetical runway extension cannot by themselves override that hold; the existing bounded expected-turn lifecycle remains in control. Fresh physical radius entry always wins.
 
 This protects both sides of the historical Istanbul problem: normal arrivals can avoid premature straight-line false alerts while genuine overhead/transit, changed-trajectory or go-around passes remain alertable.
 
@@ -62,7 +62,7 @@ Google Contrails remains separate photography/environment enrichment. It does no
 
 ### Known limitations
 
-Only the narrow v4.7.2 initial terminal-arrival hold is authoritative; broader runway/history hypotheses remain shadow evidence until additional replay and production outcomes demonstrate improvement without missed genuine passes. The worldwide reference catalogue is community-maintained and is not treated as official operational truth; maintained Plane Alerts overrides can replace records for airports where stronger sources are available. Some airports or runway rows do not have complete endpoint coordinates/headings, so runway-specific inference remains uncertain there. Published procedures and inferred runway configuration never override fresh physical observations.
+Only the narrow initial terminal-arrival hold, corrected in v4.7.3, is authoritative; broader runway/history hypotheses remain shadow evidence until additional replay and production outcomes demonstrate improvement without missed genuine passes. The worldwide reference catalogue is community-maintained and is not treated as official operational truth; maintained Plane Alerts overrides can replace records for airports where stronger sources are available. Some airports or runway rows do not have complete endpoint coordinates/headings, so runway-specific inference remains uncertain there. Published procedures and inferred runway configuration never override fresh physical observations.
 
 ## Alert-critical architecture
 
@@ -73,7 +73,7 @@ ADS-B ingestion
   -> production trajectory / CPA / ETA
   -> v4.6 confidence + position uncertainty
   -> existing terminal / route guard
-  -> v4.7.2 initial terminal-arrival qualification hold
+  -> v4.7.3 terminal-arrival guard until successful notification delivery
   -> qualification / cancellation lifecycle
   -> Telegram alert
 
@@ -125,7 +125,7 @@ Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle ch
 
 ## Prediction Lab
 
-Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v4.7 adds structured terminal diagnostics including airport, terminal state, runway candidate/confidence/support, recent movement cluster, holding/go-around state, runway-aware historical support, live CPA and the shadow decision reason. v4.7.2 also records whether the authoritative initial hold candidate existed, whether it was effectively applied, the destination match, evidence age, airport-distance trend and heading error.
+Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v4.7 adds structured terminal diagnostics including airport, terminal state, runway candidate/confidence/support, recent movement cluster, holding/go-around state, runway-aware historical support, live CPA and the shadow decision reason. v4.7.3 records initial-hold candidates, effective holds, actual notification visibility, bounded landing-path CPA, destination match, evidence age, airport-distance trend and heading error. Throttled `terminal_qualification` logs make bypasses inspectable without logging observer coordinates.
 
 Missing ADS-B coverage is unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 

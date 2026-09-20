@@ -1,0 +1,44 @@
+{
+  "case_id": "v473-terminal-delivery-and-landing-path",
+  "baseline_commit": "b332053a4e19e64892b6ddd59354e6420c1c1060",
+  "classification": "code-derived decision-sequence and synthetic geometry regression",
+  "raw_production_track_available": false,
+  "production_context": {
+    "release": "4.7.2",
+    "date_utc": "2026-09-20",
+    "report": "User reports continued unwanted Ataturk/LTBA and LTFM arrival alerts after v4.7.2.",
+    "health_verified": true,
+    "monitor_interval_p95_ms": 5001.1,
+    "observed_decisions": [
+      {"flight": "THY640", "time_utc": "12:09:10", "hold_airport": "LTBU", "destination": "unknown"},
+      {"flight": "THY640", "time_utc": "12:09:20", "hold_airport": "LTFM", "destination": "IST"},
+      {"flight": "THY8MS", "time_utc": "12:12:39", "hold_airport": "LTFM", "destination": "IST"}
+    ],
+    "limits": "These logs establish active arrival gating and delayed route identity. They do not identify all unwanted Telegram messages or prove subsequent touchdown. Railway's connected variable API withheld credentials, so authenticated stored snapshots were not read. No missing coverage or absence of logs is scored as a pass or miss."
+  },
+  "reproductions": [
+    {
+      "failure": "An unsent candidate sets initial state to released; later fresh arrival evidence is ignored.",
+      "sequences": ["insufficient history -> qualified candidate -> fresh arrival", "unfresh evidence -> qualified candidate -> fresh arrival", "unknown airport identity -> qualified candidate -> fresh arrival"],
+      "baseline_failures": 3,
+      "expected": "Reevaluate until actual per-user Telegram delivery. A failed send cannot end initial scope."
+    },
+    {
+      "failure": "A weak initial-gate release overrides the older TURN_STARTED hold.",
+      "signals": ["airport-distance/heading divergence", "single climb", "hypothetical runway continuation"],
+      "baseline_failures": 3,
+      "expected": "Only independently detected go-around/missed approach overrides the landing hold. Existing bounded expected-turn expiry remains unchanged."
+    },
+    {
+      "failure": "An 18 km airborne extension beyond the runway is mistaken for the landing path.",
+      "airports": ["LTBA", "LTFM"],
+      "scenario": "100 m/s descending established final, 8 km before threshold; observer 16 km beyond threshold, radius 2 km.",
+      "baseline_failures": 2,
+      "expected": "Hold the predictive alert when the landing path through the far runway end misses the observer. Preserve passes before touchdown and observed go-arounds."
+    }
+  ],
+  "additional_protection": "An unsent speculative qualification cannot accumulate the cancellation latch.",
+  "tests": "tests/test_terminal_lifecycle_v473.py",
+  "promotion_scope": "Corrections to delivery state and existing terminal guard geometry; no new trajectory predictor or model promotion.",
+  "outcome_scoring": "unresolved; representative live before/after false-positive and false-negative rates still require covered outcomes"
+}

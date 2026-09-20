@@ -1,7 +1,6 @@
 """Plane Alerts v4.7 airport/runway context layered on the existing route guard.
 
-v4.7.2 keeps the v4.3 cancellation latch and v4.2 terminal ensemble intact and
-adds one narrow authoritative behavior: strong, fresh terminal-arrival evidence
+v4.7.3 scopes the initial guard to actual per-user notification delivery: strong, fresh terminal-arrival evidence
 may hold the *initial* notification. Broad runway/holding hypotheses remain
 shadow evidence. The hold fails open for go-arounds, changed trajectories and
 genuine physical passes.
@@ -27,17 +26,9 @@ from app.intelligence import terminal_arrival_hold_v472 as hold_v472
 logger = logging.getLogger(__name__)
 _INSTALLED = False
 _ORIGINAL_QUERY_PROVIDERS = ProviderManager.query_providers
-_INITIAL_HOLD_TTL_S = 1800.0
-_INITIAL_HOLD_MAX = 2048
-
-
-@dataclass(slots=True)
-class InitialHoldState:
-    last_seen_mono: float
-    status: str  # holding | released
-
-
-_initial_hold_states: "OrderedDict[tuple, InitialHoldState]" = OrderedDict()
+# Bounded diagnostic throttling only. Alert visibility comes from persisted
+# per-user message state, never an observer/aircraft qualification cache.
+_decision_logs: "OrderedDict[tuple, tuple[float, tuple]]" = OrderedDict()
 
 
 @dataclass(slots=True, frozen=True)
@@ -152,57 +143,22 @@ def _choose_airport(ac: Any, destination: Any | None) -> airport_v47.AirportGeom
         return None
 
 
-def _prune_initial_hold_states(now_mono: float) -> None:
-    for key in list(_initial_hold_states):
-        if now_mono - _initial_hold_states[key].last_seen_mono > _INITIAL_HOLD_TTL_S:
-            _initial_hold_states.pop(key, None)
-    while len(_initial_hold_states) > _INITIAL_HOLD_MAX:
-        _initial_hold_states.popitem(last=False)
-
-
-def _apply_initial_hold_state(
+def _apply_initial_hold(
     *,
-    key: tuple,
     decision: hold_v472.TerminalArrivalHoldDecision,
     base: route_mod.RouteGateResult,
-    was_prequalified: bool,
-    now_mono: float,
+    notification_sent: bool,
 ) -> tuple[route_mod.RouteGateResult, bool]:
-    state = _initial_hold_states.get(key)
-    if state is not None:
-        state.last_seen_mono = now_mono
-        _initial_hold_states.move_to_end(key)
-
-    # Do not introduce the v4.7.2 initial gate in the middle of an encounter
-    # that had already crossed the older qualification boundary before this
-    # evaluation. Once released, the gate never re-arms for that encounter.
-    if state is None and was_prequalified:
-        _initial_hold_states[key] = InitialHoldState(now_mono, "released")
+    # Qualification, stale evidence and a failed send are not delivery. Evaluate
+    # every unsent candidate again; only an actual message ends initial scope.
+    if notification_sent or not decision.hold:
         return base, False
-    if state is not None and state.status == "released":
-        return base, False
-
-    if decision.hold:
-        if state is None:
-            _initial_hold_states[key] = InitialHoldState(now_mono, "holding")
-        else:
-            state.status = "holding"
-        return replace(
-            base,
-            suppress_alert=True,
-            reason=f"v4.7.2 TERMINAL_ARRIVAL_INITIAL_HOLD: {decision.reason}",
-            qualification_state="TERMINAL_ARRIVAL_INITIAL_HOLD",
-        ), True
-
-    if state is not None and state.status == "holding":
-        state.status = "released"
-        return base, False
-
-    # If the legacy gate has now qualified the encounter without a v4.7.2 hold,
-    # record release so later terminal evidence cannot cancel an active alert.
-    if not bool(base.suppress_alert):
-        _initial_hold_states[key] = InitialHoldState(now_mono, "released")
-    return base, False
+    return replace(
+        base,
+        suppress_alert=True,
+        reason=f"v4.7.3 TERMINAL_ARRIVAL_INITIAL_HOLD: {decision.reason}",
+        qualification_state="TERMINAL_ARRIVAL_INITIAL_HOLD",
+    ), True
 
 
 def _can_release_expected_landing_hold(
@@ -220,16 +176,11 @@ def _can_release_expected_landing_hold(
         return False
     if state not in {"EXPECTED_TURN_PENDING", "TURN_STARTED", "TURN_CONFIRMED"}:
         return False
-    if assessment.go_around or assessment.missed_approach:
-        return True
-    return bool(
-        terminal_hold
-        and terminal_hold.code in {
-            "RELEASE_TRAJECTORY_CHANGED",
-            "RELEASE_CLIMBING",
-            "RELEASE_RUNWAY_PATH_CAN_PASS",
-        }
-    )
+    # Moving away from an airport can be a normal downwind/base leg. A single
+    # climb or a hypothetical runway extension is also not proof the landing
+    # turn is obsolete. Retain the baseline's bounded expected-turn handling;
+    # only independently detected go-around/missed-approach can override it.
+    return bool(assessment.go_around or assessment.missed_approach)
 
 
 async def evaluate_route_v47(
@@ -241,11 +192,10 @@ async def evaluate_route_v47(
     user_lon: float,
     alert_radius_km: float,
     current_samples: Iterable[Any],
+    notification_sent: bool = False,
 ) -> route_mod.RouteGateResult:
     current_samples = list(current_samples)
     encounter_key = v42._encounter_key(ac, user_lat, user_lon, alert_radius_km)
-    previous_encounter = v42._encounters.get(encounter_key)
-    was_prequalified = bool(previous_encounter and previous_encounter.qualified)
 
     base = await v43.evaluate_route_v43(
         self,
@@ -255,6 +205,7 @@ async def evaluate_route_v47(
         user_lon=user_lon,
         alert_radius_km=alert_radius_km,
         current_samples=current_samples,
+        notification_sent=notification_sent,
     )
     key = route_mod.normalize_flight_key(getattr(ac, "callsign", ""))
     route, _ = v2._cached_route(self, key) if key else (None, False)
@@ -305,20 +256,12 @@ async def evaluate_route_v47(
     authoritative_override = ""
     updated_base = base
     if _can_release_expected_landing_hold(base, assessment, pred, terminal_hold):
-        if assessment.go_around or assessment.missed_approach:
-            authoritative_override = "GO_AROUND_LIVE_REEVALUATION"
-            reason = (
-                "v4.7.2 observed go-around/missed-approach invalidated the prior landing-turn expectation; "
-                "fresh live geometry remains authoritative"
-            )
-            qualification_state = "GO_AROUND_LIVE_REEVALUATION"
-        else:
-            authoritative_override = "TERMINAL_TRAJECTORY_CHANGED_LIVE_REEVALUATION"
-            reason = (
-                "v4.7.2 fresh terminal trajectory no longer supports the landing hold; "
-                "fresh live geometry remains authoritative"
-            )
-            qualification_state = "TERMINAL_TRAJECTORY_CHANGED_LIVE_REEVALUATION"
+        authoritative_override = "GO_AROUND_LIVE_REEVALUATION"
+        reason = (
+            "v4.7.3 observed go-around/missed-approach invalidated the prior landing-turn expectation; "
+            "fresh live geometry remains authoritative"
+        )
+        qualification_state = "GO_AROUND_LIVE_REEVALUATION"
         updated_base = replace(
             base,
             suppress_alert=False,
@@ -327,14 +270,11 @@ async def evaluate_route_v47(
             reason=reason,
         )
 
-    updated_base, effective_initial_hold = _apply_initial_hold_state(
-        key=encounter_key,
+    updated_base, effective_initial_hold = _apply_initial_hold(
         decision=terminal_hold,
         base=updated_base,
-        was_prequalified=was_prequalified,
-        now_mono=now_mono,
+        notification_sent=notification_sent,
     )
-    _prune_initial_hold_states(now_mono)
 
     payload = airport_v47.diagnostic_payload(
         assessment,
@@ -359,10 +299,11 @@ async def evaluate_route_v47(
         "terminal_airport_trend_km_s": terminal_hold.airport_trend_km_s,
         "terminal_heading_error_deg": terminal_hold.heading_error_deg,
         "terminal_evidence_age_s": terminal_hold.fresh_age_s,
-        "authoritative_scope": "initial_qualification_only",
+        "authoritative_scope": "before_first_delivery",
+        "notification_sent": notification_sent,
     })
     airport_v47.record_prediction_diagnostics(pred, payload)
-    logger.debug("v47_terminal_decision %s", json.dumps({
+    decision_log = {
         "aircraft": str(getattr(ac, "icao24", "") or ""),
         "flight": str(getattr(ac, "callsign", "") or ""),
         **payload,
@@ -370,7 +311,20 @@ async def evaluate_route_v47(
         "live_current_km": round(float(getattr(pred, "current_distance_km", math.inf)), 3),
         "baseline_suppress": bool(base.suppress_alert),
         "effective_suppress": bool(updated_base.suppress_alert),
-    }, sort_keys=True, separators=(",", ":")))
+    }
+    signature = (assessment.airport_icao, terminal_hold.code, effective_initial_hold,
+                 notification_sent, bool(updated_base.suppress_alert))
+    previous_log = _decision_logs.get(encounter_key)
+    # Log at most once per ten seconds per encounter, and unchanged decisions
+    # once per minute. No observer coordinates or user IDs are emitted.
+    if (previous_log is None or
+            (now_mono - previous_log[0] >= 10.0 and signature != previous_log[1]) or
+            now_mono - previous_log[0] >= 60.0):
+        logger.info("terminal_qualification %s", json.dumps(decision_log, sort_keys=True, separators=(",", ":")))
+        _decision_logs[encounter_key] = (now_mono, signature)
+        _decision_logs.move_to_end(encounter_key)
+        while len(_decision_logs) > 2048:
+            _decision_logs.popitem(last=False)
 
     return RouteGateResultV47(
         **asdict(updated_base),
@@ -408,7 +362,7 @@ async def evaluate_route_v47(
 
 
 def reset_v472_initial_hold_state_for_tests() -> None:
-    _initial_hold_states.clear()
+    _decision_logs.clear()
 
 
 def install_route_guard_v47() -> None:
@@ -420,6 +374,6 @@ def install_route_guard_v47() -> None:
     route_mod.RouteHistoryService.evaluate = evaluate_route_v47
     _INSTALLED = True
     logger.info(
-        "Plane Alerts v4.7.2 airport terminal intelligence enabled: model=%s broad_holds=shadow initial_terminal_hold=authoritative go_around_fail_safe=active",
+        "Plane Alerts v4.7.3 airport terminal intelligence enabled: model=%s broad_holds=shadow initial_terminal_hold=authoritative go_around_fail_safe=active",
         airport_v47.AIRPORT_SHADOW_MODEL_VERSION,
     )

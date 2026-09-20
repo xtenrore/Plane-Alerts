@@ -459,6 +459,7 @@ class RouteHistoryService:
         user_lon: float,
         alert_radius_km: float,
         current_samples: Iterable[Any],
+        notification_sent: bool = False,
     ) -> RouteGateResult:
         key = normalize_flight_key(getattr(ac, "callsign", ""))
         if not key:

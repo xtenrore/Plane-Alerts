@@ -135,6 +135,7 @@ class TerminalAssessment:
     missed_approach: bool
     runway_path_cpa_km: float | None
     reasons: tuple[str, ...] = ()
+    runway_landing_cpa_km: float | None = None
 
 
 def _rw(icao: str, a: tuple[str, float, float, float], b: tuple[str, float, float, float]) -> RunwayGeometry:
@@ -609,6 +610,30 @@ def runway_continuation_cpa_km(sample: TerminalSample, end: RunwayEnd, observer_
     )
 
 
+def runway_landing_cpa_km(
+    sample: TerminalSample, end: RunwayEnd, airport: AirportGeometry,
+    observer_lat: float, observer_lon: float,
+) -> float | None:
+    """Bound an arrival path at the opposite runway end, without a go-around.
+
+    The older 18 km airborne extension remains shadow context. It cannot prove
+    that an aircraft descending to land will pass an observer beyond the airport.
+    """
+    for runway in airport.runways:
+        if end == runway.end_a:
+            far_end = runway.end_b
+        elif end == runway.end_b:
+            far_end = runway.end_a
+        else:
+            continue
+        observer = (observer_lat, observer_lon)
+        return min(
+            _segment_cpa((sample.latitude, sample.longitude), (end.latitude, end.longitude), observer),
+            _segment_cpa((end.latitude, end.longitude), (far_end.latitude, far_end.longitude), observer),
+        )
+    return None
+
+
 def _cluster_label(icao: str, sample: TerminalSample, airport: AirportGeometry, evidence: RunwayEvidence | None) -> tuple[str, str, str]:
     history = history_for(icao)
     holding, _ = _holding(history)
@@ -814,6 +839,8 @@ def assess_terminal(
         missed_approach,
         runway_cpa,
         tuple(reasons),
+        runway_landing_cpa_km(latest, end, airport, observer_lat, observer_lon)
+        if end is not None and observer_lat is not None and observer_lon is not None else None,
     )
 
 
@@ -931,6 +958,7 @@ def diagnostic_payload(
         "go_around": assessment.go_around,
         "missed_approach": assessment.missed_approach,
         "runway_path_cpa_km": assessment.runway_path_cpa_km,
+        "runway_landing_cpa_km": assessment.runway_landing_cpa_km,
         "route_cluster_runway": route_cluster_runway,
         "route_cluster_support": route_cluster_support,
         "route_cluster_total": route_cluster_total,
