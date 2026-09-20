@@ -7,6 +7,7 @@ legacy terminal-only rule.
 Design rules:
 * route and history data may veto a live CPA but never create one;
 * network route resolution always runs in the background;
+* cold route-history reads run in bounded background refreshes;
 * first predictive alerts may be held only for one short bounded grace window;
 * a fresh aircraft physically inside the user's radius is never hidden;
 * route-history writes are background work, not notification-path work.
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 _NEGATIVE_CACHE_S = 20.0
 _HISTORY_CACHE_S = 120.0
+_HISTORY_STALE_MAX_S = 600.0
+_HISTORY_READ_TIMEOUT_S = 2.0
+_HISTORY_REFRESH_CONCURRENCY = 3
+_HISTORY_REFRESH_TASK_LIMIT = 32
 _INITIAL_ROUTE_GRACE_S = 6.0
 _PRETERMINAL_DESTINATION_KM = 240.0
 _PRETERMINAL_MIN_CPA_S = 55.0
@@ -162,29 +167,100 @@ async def observe_nonblocking(
     task.add_done_callback(_finished)
 
 
-async def _historical_paths_cached(
+def _history_cache_entry(
     self: route_mod.RouteHistoryService,
     key: str,
-) -> list[list[route_mod.RoutePoint]]:
-    cache: dict[str, tuple[float, list[list[route_mod.RoutePoint]]]] = getattr(
+) -> tuple[list[list[route_mod.RoutePoint]], bool, bool]:
+    """Return cached paths, freshness, and whether stale data is still safe to reuse."""
+    cache: dict[str, tuple[float, list[list[route_mod.RoutePoint]], float]] = getattr(
         self, "_route_guard_v2_history_cache", {}
     )
-    now = time.monotonic()
-    cached = cache.get(key)
-    if cached and now - cached[0] < _HISTORY_CACHE_S:
-        return cached[1]
-    try:
-        paths = await self._historical_paths(key)
-    except Exception:
-        logger.exception("flight_route_history_read_failed callsign=%s", key)
-        paths = []
-    cache[key] = (now, paths)
+    entry = cache.get(key)
+    if not entry:
+        return [], False, False
+    timestamp, paths, ttl = entry
+    age = max(0.0, time.monotonic() - timestamp)
+    return paths, age < ttl, age < _HISTORY_STALE_MAX_S
+
+
+def _store_history_cache(
+    self: route_mod.RouteHistoryService,
+    key: str,
+    paths: list[list[route_mod.RoutePoint]],
+    *,
+    ttl: float,
+) -> None:
+    cache: dict[str, tuple[float, list[list[route_mod.RoutePoint]], float]] = getattr(
+        self, "_route_guard_v2_history_cache", {}
+    )
+    cache[key] = (time.monotonic(), paths, float(ttl))
     if len(cache) > 256:
         oldest = sorted(cache.items(), key=lambda item: item[1][0])[:64]
         for old_key, _ in oldest:
             cache.pop(old_key, None)
     self._route_guard_v2_history_cache = cache
-    return paths
+
+
+async def _history_refresh(self: route_mod.RouteHistoryService, key: str) -> None:
+    semaphore = getattr(self, "_route_guard_v2_history_semaphore", None)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_HISTORY_REFRESH_CONCURRENCY)
+        self._route_guard_v2_history_semaphore = semaphore
+    async with semaphore:
+        try:
+            paths = await asyncio.wait_for(
+                self._historical_paths(key),
+                timeout=_HISTORY_READ_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "flight_route_history_read_timeout callsign=%s timeout_s=%.1f",
+                key,
+                _HISTORY_READ_TIMEOUT_S,
+            )
+            _store_history_cache(self, key, [], ttl=_NEGATIVE_CACHE_S)
+        except Exception:
+            logger.exception("flight_route_history_read_failed callsign=%s", key)
+            _store_history_cache(self, key, [], ttl=_NEGATIVE_CACHE_S)
+        else:
+            _store_history_cache(self, key, paths, ttl=_HISTORY_CACHE_S)
+
+
+def _schedule_history_refresh(self: route_mod.RouteHistoryService, key: str) -> None:
+    tasks: dict[str, asyncio.Task] = getattr(self, "_route_guard_v2_history_tasks", {})
+    existing = tasks.get(key)
+    if existing is not None and not existing.done():
+        return
+    if len(tasks) >= _HISTORY_REFRESH_TASK_LIMIT:
+        logger.warning("route_history_read_saturated pending=%d", len(tasks))
+        return
+
+    task = asyncio.create_task(_history_refresh(self, key), name=f"route-history-read:{key}")
+    tasks[key] = task
+    self._route_guard_v2_history_tasks = tasks
+
+    def _finished(done: asyncio.Task, *, callsign: str = key) -> None:
+        tasks.pop(callsign, None)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("route_history_refresh_failed callsign=%s", callsign)
+
+    task.add_done_callback(_finished)
+
+
+async def _historical_paths_cached(
+    self: route_mod.RouteHistoryService,
+    key: str,
+) -> list[list[route_mod.RoutePoint]]:
+    """Return immediately from memory and refresh a cold/stale cache off-path."""
+    paths, fresh, stale_usable = _history_cache_entry(self, key)
+    if fresh:
+        return paths
+    _schedule_history_refresh(self, key)
+    return paths if stale_usable else []
 
 
 def evaluate_route_gate_destination_aware(
@@ -429,6 +505,6 @@ def install_route_guard_v2() -> None:
     route_mod.RouteHistoryService.evaluate = evaluate_route_nonblocking
     _INSTALLED = True
     logger.info(
-        "Route guard v2 enabled: non-blocking history writes, background route lookup, %.0fs max initial route grace, preterminal turn veto",
+        "Route guard v2 enabled: non-blocking history reads/writes, background route lookup, %.0fs max initial route grace, preterminal turn veto",
         _INITIAL_ROUTE_GRACE_S,
     )
