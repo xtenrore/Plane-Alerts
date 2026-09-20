@@ -4,98 +4,128 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.7.3**
+**Current code version: Plane Alerts v4.8.0**  
+**Current prediction version: `4.7.3-terminal-delivery-landing-path`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v4.7 — Airport, Runway & Terminal Intelligence
+## Real-time architecture
 
-v4.7 extends the existing v4.2/v4.6 prediction stack instead of introducing a competing predictor.
-
-### Terminal intelligence
-
-Plane Alerts records deterministic terminal-area evidence for:
-
-- sustained vector changes
-- downwind/base transitions
-- final intercept and established final
-- probable holding behavior
-- go-arounds and missed approaches
-
-A single noisy ADS-B heading is not enough to establish a turn. Terminal evidence uses bounded observation history and the existing v4.6 sustained-turn checks.
-
-Airport context produces an explicit uncertainty penalty for diagnostics. Fresh live geometry remains authoritative: being near an airport or having that airport as the route destination is never an automatic suppression rule.
-
-v4.7.2 adds one narrow authoritative **initial qualification hold** for the recurring terminal-arrival false-alert class. Before the first Telegram notification only, a candidate may be held when fresh observations jointly show a strong low/slow/descending airport arrival and the temporary straight-line observer CPA conflicts with that terminal evidence. Destination metadata such as `ISL` or `IST` is supporting evidence only and cannot suppress an alert by itself. The initial hold requires fresh sufficient evidence and releases for go-around or missed approach, a trajectory change that disproves the expected turn, a landing path that can physically enter the observer radius, or fresh physical entry into the configured radius. The landing path ends at the far runway end; the former 18 km airborne extension is shadow context only. v4.7.3 evaluates this guard until the first successful Telegram delivery. Candidate qualification, missing evidence and failed sends cannot permanently disable it; existing delivered messages use the established cancellation lifecycle.
-
-### Worldwide airport and runway data
-
-v4.7.1 added a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot. The complete airport catalogue is compiled during the production image build into `data/aviation/compiled/global_airports.sqlite3`; runtime monitoring performs local read-only SQLite lookups and does not call OurAirports or MongoDB for static airport/runway reference data.
-
-The global snapshot includes large, medium and small airports, heliports, seaplane bases, local-code-only facilities and closed facilities represented by the source. Closed facilities remain in the reference database but are excluded from normal nearby-airport inference. Runway rows are preserved even when the source lacks endpoint geometry; Plane Alerts only uses runway-relative prediction when the required coordinates/headings are present.
-
-Airport lookups use a bounded spatial-cell index and a small runtime cache instead of loading the worldwide catalogue into memory or scanning every airport in the five-second loop.
-
-Maintained official overrides take precedence over the global source. LTFM/IST uses the verified operational runway set maintained by Plane Alerts, so a generic upstream record cannot silently reintroduce stale or planned runway geometry. v4.7.2 also verifies the compiled LTBA/ISL identity and active runway geometry as a release gate because Atatürk arrivals are a primary Error Museum case.
-
-### Runway geometry and inference
-
-Runway geometry lives in a dedicated data layer rather than being scattered through prediction code. The classifier accepts generic single, parallel and crossing-runway layouts worldwide.
-
-Likely runway direction is inferred from recent observed traffic only when multiple aircraft support the same direction. The inference retains supporting-aircraft count, recency and confidence; one aircraft cannot create an active-runway conclusion. Configuration changes require fresh multi-aircraft evidence.
-
-Recent airport movement clusters are bounded, deduplicated per aircraft and time-decayed. Historical route paths can also be associated with runway families as supporting evidence. Neither source overrides fresh motion.
-
-### Shadow validation and live safety
-
-Broad runway/base/final/holding suppression hypotheses remain **shadow-only**. They are recorded in Prediction Lab and do not directly control live qualification or cancellation.
-
-The v4.7.2 initial terminal-arrival hold is deliberately narrower: it can delay only the first notification when several fresh physical arrival signals agree. It is not a destination-airport veto and it ends only after actual per-user message delivery. Strong go-around/missed-approach evidence can release an older landing-turn hold. Airport-distance growth, a single climb or a hypothetical runway extension cannot by themselves override that hold; the existing bounded expected-turn lifecycle remains in control. Fresh physical radius entry always wins.
-
-This protects both sides of the historical Istanbul problem: normal arrivals can avoid premature straight-line false alerts while genuine overhead/transit, changed-trajectory or go-around passes remain alertable.
-
-### Weather and contrails
-
-Weather remains optional context and is not a hard runway selector. Provider failure must not block ADS-B ingestion, CPA or alerting.
-
-Google Contrails remains separate photography/environment enrichment. It does not influence trajectory, airport classification, runway inference, CPA, ETA, qualification, cancellation or alert timing.
-
-### Known limitations
-
-Only the narrow initial terminal-arrival hold, corrected in v4.7.3, is authoritative; broader runway/history hypotheses remain shadow evidence until additional replay and production outcomes demonstrate improvement without missed genuine passes. The worldwide reference catalogue is community-maintained and is not treated as official operational truth; maintained Plane Alerts overrides can replace records for airports where stronger sources are available. Some airports or runway rows do not have complete endpoint coordinates/headings, so runway-specific inference remains uncertain there. Published procedures and inferred runway configuration never override fresh physical observations.
-
-## Alert-critical architecture
+The alert-critical path is deliberately ordered by priority:
 
 ```text
 ADS-B ingestion
-  -> canonical fresh observation
-  -> deterministic motion history
-  -> production trajectory / CPA / ETA
-  -> v4.6 confidence + position uncertainty
-  -> existing terminal / route guard
-  -> v4.7.3 terminal-arrival guard until successful notification delivery
+  -> freshness / canonical observation
+  -> deterministic trajectory
+  -> CPA / ETA / confidence
+  -> route + terminal evidence
+  -> v4.7.3 terminal-arrival delivery guard
   -> qualification / cancellation lifecycle
-  -> Telegram alert
-
-Pinned OurAirports snapshot (build time only)
-  -> local SQLite + spatial-cell index
-  -> on-demand airport/runway geometry
-  -> bounded v4.7 terminal history
-  -> runway evidence + recent movement clusters
-  -> base/final/holding/go-around classification
-  -> broad airport candidate decision (shadow)
-  -> Prediction Lab / AGY evidence
+  -> Telegram delivery
 ```
 
-Runtime AI is outside this path.
+v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
+
+A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## Storage resilience
+
+MongoDB remains the primary production persistence layer, but it is not treated as the authority for every individual five-second computation.
+
+### Last-known-good configuration
+
+Active location/preferences/admin-control data is loaded as an atomic configuration image. Location and preference documents must share the same `config_revision`; mixed old/new pairs are not published to the live worker.
+
+Successful active-profile materialization invalidates the cached image so it is refreshed promptly. If the refresh fails, Plane Alerts retains the previous verified image rather than replacing it with partial state.
+
+A cold process without a verified configuration does **not** invent monitoring state during a database outage.
+
+### Encounter state and duplicate protection
+
+Active approach/alert lifecycle state is cached in memory and restored from Mongo at startup when available. Lifecycle updates are applied to memory immediately and coalesced for bounded background persistence.
+
+Persisted writes use timestamp guards so delayed work cannot silently overwrite a newer lifecycle record. Delivery state still follows the v4.4 rule: a Telegram lifecycle notification is not considered delivered until Telegram delivery succeeds.
+
+A warm process can therefore continue trajectory, CPA, qualification, cancellation and pass detection while Mongo is temporarily unavailable. A process restart during a simultaneous Mongo outage cannot reconstruct state that never reached durable storage; readiness stays conservative instead of guessing.
+
+### Bounded queues and backpressure
+
+Storage work has explicit limits:
+
+- encounter-state cache: 4,096 records
+- critical encounter persistence queue: 4,096 coalesced records
+- system-status queue: 32 coalesced records
+- optional analytical queue: 512 coalesced records
+- Mongo connection pool: 5 connections
+- background writes: bounded batches with per-operation timeout
+- outage retries: bounded exponential backoff
+
+Under pressure, optional/diagnostic work is dropped before live processing. Critical-state pressure is surfaced explicitly in diagnostics rather than allowing unbounded memory growth.
+
+Existing bounded route-history, provider-learning, Prediction Lab and enrichment workers remain isolated from the live alert path.
+
+### Database degraded mode
+
+When Mongo becomes unavailable after a verified warm start, Plane Alerts can continue:
+
+- ADS-B ingestion and provider failover
+- trajectory calculation
+- CPA / ETA / confidence
+- active qualification and cancellation
+- physical-pass detection
+- Telegram alerts for users whose active configuration is already known
+
+Features that require new durable state may be temporarily unavailable or delayed, including profile/settings writes, historical persistence, Prediction Lab writes, analytics and other optional evidence.
+
+Telegram settings failures return a clear temporary-unavailability message. The application never pretends a setting was saved when persistence failed.
+
+`/health` and `/ready` distinguish application readiness from database degradation. A warm live worker may remain operational while `database_degraded` is true; a cold process without verified configuration is not marked ready.
+
+### Storage diagnostics
+
+Health output includes bounded, content-free storage telemetry:
+
+- database state
+- read latency p50 / p95 / p99 / max
+- write latency p50 / p95 / p99 / max
+- failures and timeouts
+- retry and reconnect counts
+- critical and optional queue depth
+- optional/critical dropped-write counters
+- last successful database command
+- expected schema version
+
+Queries, document bodies, credentials and precise user coordinates are not included in these diagnostics.
+
+## Schema migrations and backup/export
+
+v4.8 introduces explicit, versioned Mongo schema migrations. Migrations have a unique version and ID, are restart-safe/idempotent where practical, verify after application, and refuse a version whose recorded migration ID does not match the expected migration.
+
+The v4.8 storage export/import utility is allow-listed rather than a raw database dump. Exact location documents are excluded by default and require explicit opt-in. Secret-like fields are removed. Import validates the export format/schema, rejects unsupported collections and malformed records, uses natural identities to avoid duplicates, and does not overwrite a record that is demonstrably newer.
+
+Error Museum evidence is not expired or downsampled by v4.8.
+
+## SQLite status
+
+SQLite persistence for self-hosted user/configuration state was evaluated for v4.8 but is **not enabled**. The existing persistence model is Mongo-centric and a second mutable backend would require a broader repository abstraction with meaningful divergence and restart-risk. v4.8 therefore keeps Mongo as the only mutable production backend rather than introducing an under-tested partial implementation.
+
+Plane Alerts already uses a separate read-only SQLite database for the compiled worldwide airport/runway reference catalogue. That static database is unrelated to user/alert persistence.
+
+## Airport, runway and terminal intelligence
+
+The v4.7 family remains intact in v4.8. Plane Alerts uses a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot and maintained overrides. Runtime monitoring does not call OurAirports or MongoDB for static airport/runway geometry.
+
+Terminal evidence includes sustained vector changes, downwind/base transitions, final intercept, holding-like behavior, go-arounds and missed approaches. Broad runway/base/final/holding suppression hypotheses remain shadow-only.
+
+The v4.7.3 initial terminal-arrival guard remains authoritative only until the first successful Telegram delivery. It requires fresh physical arrival evidence, cannot be triggered by destination metadata alone, releases for genuine physical entry/go-around/trajectory contradiction, and uses landing geometry that ends at the far runway end. The LTBA/ISL Error Museum regressions and LTFM protections remain release gates.
+
+Fresh live geometry remains authoritative.
 
 ## ADS-B providers and local receiver support
 
-Plane Alerts can combine public ADS-B providers with an optional local readsb/dump1090-compatible receiver. Local data is preferred when it is healthy and fresh, while bounded public-provider participation preserves fallback and wider coverage.
+Plane Alerts can combine public ADS-B providers with an optional local readsb/dump1090-compatible receiver. Local data is preferred when healthy and fresh; bounded public-provider participation preserves fallback and wider coverage.
 
 Supported local receiver families include readsb, dump1090, dump1090-fa and ultrafeeder/tar1090 aircraft JSON.
-
-Example configuration:
 
 ```env
 LOCAL_ADSB_URL=http://receiver.local
@@ -123,15 +153,17 @@ Profile defaults
 
 Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle checks.
 
-## Prediction Lab
+## Prediction Lab and Error Museum
 
-Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v4.7 adds structured terminal diagnostics including airport, terminal state, runway candidate/confidence/support, recent movement cluster, holding/go-around state, runway-aware historical support, live CPA and the shadow decision reason. v4.7.3 records initial-hold candidates, effective holds, actual notification visibility, bounded landing-path CPA, destination match, evidence age, airport-distance trend and heading error. Throttled `terminal_qualification` logs make bypasses inspectable without logging observer coordinates.
+Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. Missing ADS-B coverage remains unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 
-Missing ADS-B coverage is unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
+Database outage does not turn a missing outcome write into a successful prediction or a miss. Error Museum fixtures remain permanent regression evidence and are not subject to transient-data TTL cleanup.
 
-## Photography intelligence
+## Photography and contrails
 
-Plane Alerts also provides deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. Photography, weather and contrail enrichment do not control alert qualification.
+Plane Alerts provides deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing.
+
+Google Contrails, when configured through `GOOGLE_CONTRAILS_API_KEY`, remains optional enrichment. Its failure or storage cache cannot influence trajectory, CPA, ETA, confidence, airport/runway inference, qualification, cancellation or alert timing.
 
 ## Telegram commands
 
@@ -155,34 +187,29 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 ## Testing and release gates
 
-Pull-request CI runs compile/static validation, builds and verifies the pinned worldwide airport database, runs the complete pytest suite, preserves Error Museum/provider/interaction regressions, and enforces deterministic performance benchmarks.
+CI runs compile validation, builds/verifies the pinned airport database, runs the full pytest suite, preserves all v4.4-v4.7 Error Museum/provider/Telegram/terminal regressions, and executes deterministic performance gates.
+
+v4.8 adds explicit outage/restart/migration/export/import tests and a storage-isolation benchmark that injects 100 ms, 500 ms, 1 second and failed persistence while measuring the memory-only live path.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_error_museum_v42.py tests/test_v44_monitor_reliability_replay.py tests/test_eta_stability_hotfix.py
-pytest -q tests/test_v45_provider_resilience.py tests/test_v45_local_provider_area_recovery.py
-pytest -q tests/test_interaction_v46.py
-pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
-pytest -q tests/test_global_airport_data_v471.py
-pytest -q tests/test_terminal_arrival_hold_v472.py
-python scripts/benchmark_v42.py
-python scripts/benchmark_v45_provider_resilience.py
-python scripts/benchmark_v46_prediction.py
-python scripts/benchmark_v46_interaction.py
-python scripts/benchmark_v47_terminal.py
-python scripts/benchmark_v471_airport_lookup.py
-python scripts/benchmark_v472_terminal_hold.py
+pytest -q tests/test_storage_v48.py tests/test_database_atlas.py
+python scripts/benchmark_storage_v48.py
 pip check
 ```
 
+All prior release regression and benchmark commands remain enforced in GitHub Actions.
+
 ## Deployment
 
-Production runs on Railway with MongoDB persistence for live/user/history state. Static worldwide airport/runway reference data is kept outside MongoDB in the local image database. Deployment occurs only after the exact `main` commit passes CI. The deployed build reports its exact commit through runtime metadata; deployment SHAs are not hard-coded in source.
+Production runs on Railway. Deployment occurs only after the exact `main` commit passes CI and final engineering review. The deployed build reports its exact commit through runtime metadata; deployment SHAs are not hard-coded in source.
 
 The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and may suggest hypotheses, but it does not control trajectory or notification decisions. Railway AI is not used.
+
+The existing AGY persistent volume and unrelated staged Railway configuration changes are not modified as part of a normal source release.
 
 ## Running locally
 
@@ -198,3 +225,11 @@ python scripts/build_airport_database.py
 cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+## Known limitations
+
+- A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
+- Optional analytics can be dropped under prolonged storage pressure and are counted in diagnostics.
+- Mutable SQLite persistence is not implemented in v4.8.
+- The worldwide airport catalogue is community-maintained; maintained Plane Alerts overrides and fresh physical observations take precedence where stronger evidence exists.
+- Broader runway/history suppression remains shadow-only pending representative outcome evidence.

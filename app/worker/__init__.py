@@ -9,33 +9,26 @@ if "pytest" not in sys.modules:
 
     install_reliability_guards()
 
-    # Install the midpoint trajectory integrator before monitor.py imports
-    # predict_trajectory by name. This keeps the robust v3.4/v4.2 predictor but
-    # removes the systematic full-step acceleration/turn integration bias.
+    # Keep the robust trajectory predictor but remove systematic full-step
+    # acceleration/turn integration bias.
     from app.intelligence.trajectory_hotfix_v43 import install_trajectory_hotfix_v43
 
     install_trajectory_hotfix_v43()
 
-    # The v4.4 direct-presence guard runs after the midpoint predictor. It does
-    # not weaken normal confidence thresholds: only two fresh independent ADS-B
-    # positions physically inside the configured radius can promote an
-    # otherwise-uncertain close pass into the existing qualification pipeline.
+    # Fresh direct physical presence inside the configured radius can recover an
+    # otherwise-uncertain close pass without weakening ordinary thresholds.
     from app.intelligence.direct_presence_guard_v44 import install_direct_presence_guard_v44
 
     install_direct_presence_guard_v44()
 
-    # v4.6 keeps the established CPA geometry authoritative while adding
-    # speed-dependent freshness, explicit uncertainty, formal confidence
-    # evidence, and linear/turn-aware shadow candidates.
+    # v4.6 adds speed-dependent freshness, uncertainty and formal confidence
+    # evidence around the established CPA geometry.
     from app.intelligence.prediction_v46 import install_prediction_v46
 
     install_prediction_v46()
 
-    # Install the route resolver/read cache first. v4.6 then repoints v2's
-    # original persistence target BEFORE the v4.4 bounded writer module is
-    # imported, so that queue captures the 35-day-retention writer rather than
-    # the legacy 8-day writer. Clustering still runs only during background
-    # history refresh, never in the five-second alert path.
+    # Route resolver/read caches are installed before the bounded writer so the
+    # route persistence target retains the newer 35-day v4.6 behavior.
     from app.intelligence.route_guard import install_route_guard
     from app.intelligence.route_guard_v2 import install_route_guard_v2
 
@@ -54,50 +47,49 @@ if "pytest" not in sys.modules:
     install_route_guard_v42()
     install_requalification_guard_v43()
 
-    # Keep the maintained LTFM geometry aligned with the current operational
-    # runway set verified from Türkiye AIP before terminal/runway inference is
-    # installed. Secondary airport datasets may include non-operational records.
+    # Maintain current LTFM runway data before terminal/runway inference.
     from app.intelligence.runway_data_v47 import install_current_runway_data_v47
 
     install_current_runway_data_v47()
 
-    # v4.7 extends the established route guard instead of replacing its
-    # predictor. Runway/base/final/holding conclusions stay shadow-only; strong
-    # observed go-around evidence may only release an obsolete landing-turn
-    # expectation so fresh live geometry can be evaluated again.
+    # v4.7 terminal/runway evidence and the narrow v4.7.2 initial hold remain
+    # authoritative exactly as before this storage-only release.
     from app.intelligence.route_guard_v47 import install_route_guard_v47
 
     install_route_guard_v47()
 
-    # Final hot-path protection: cap individual provider latency and prevent
-    # stale ADS-B positions from creating brand-new approach alerts.
+    # Cap individual provider latency and prevent stale ADS-B positions from
+    # creating brand-new approach alerts.
     from app.worker.critical_timing import install_critical_timing_guards
 
     install_critical_timing_guards()
 
-    # v4.3 applies active-profile/category/aircraft filtering before the legacy
-    # matcher. Install it before v4.2.3 batching so one state prefetch still
-    # covers the whole user evaluation even when custom radii create groups.
+    # v4.3 profile filtering runs before v4.2.3 batching so one state snapshot
+    # covers all custom-radius groups in a user evaluation.
     from app.worker.profile_filter_guard_v43 import install_profile_filter_guard_v43
 
     install_profile_filter_guard_v43()
 
-    # v4.2.3 removes database fan-out and non-critical learning work from the
-    # five-second alert path, and bounds a single shared provider refresh.
+    # v4.2.3 bounds provider latency, batches state reads and moves provider
+    # learning out of the five-second path.
     from app.worker.cadence_guard_v423 import install_cadence_guard_v423
 
     install_cadence_guard_v423()
 
-    # v4.2.4 prevents normal scheduler jitter from turning a near-five-second
-    # evaluation interval into a skipped cycle and roughly ten-second gap.
+    # v4.2.4 prevents ordinary scheduler jitter from creating ~10-second skips.
     from app.worker.cadence_due_guard_v424 import install_cadence_due_guard_v424
 
     install_cadence_due_guard_v424()
 
+    # v4.8 installs last so it can replace only the remaining storage-facing
+    # hooks from v4.2.3/v4.4. Prediction, route and notification semantics are
+    # deliberately left untouched.
+    from app.worker.storage_guard_v48 import install_storage_guard_v48
+
+    install_storage_guard_v48()
+
     # Notification telemetry is integrated directly in notifications.py and
-    # runs through its own bounded post-delivery queue. Do not install a second
-    # wrapper around the sender: edits, retries and lifecycle updates must be
-    # recorded once against the same logical alert.
+    # runs through its own bounded post-delivery queue. Do not wrap it again.
 
     # app.main imports the Telegram modules before app.worker. Install the
     # interaction layer only in that runtime shape to avoid pulling bot/UI code

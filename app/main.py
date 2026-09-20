@@ -1,4 +1,4 @@
-"""Plane Alerts v4.4 reliability runtime, profiles, Prediction Lab, bot, and web server."""
+"""Plane Alerts runtime, Telegram bot and resilient integrated aircraft worker."""
 from __future__ import annotations
 
 import asyncio
@@ -30,16 +30,19 @@ from app.bot.next60 import build_next60_docs, register_next60_handlers
 from app.bot.next60_web import NEXT60_HTML, serialize_next60, validate_telegram_init_data
 from app.bot.profile_handlers import register_profile_handlers
 from app.bot.profile_legacy import register_profile_legacy_handlers
+from app.bot.storage_failure_v48 import register_storage_failure_handler
 from app.config import settings
 from app.version import VERSION, COMMIT
 from app.worker import timing
 from app.worker.notification_telemetry import close as close_notification_telemetry
 from app.worker.notification_telemetry import snapshot as notification_telemetry_snapshot
 from app.worker.optional_work import enrichment
-from app.database import close_db, connect_db, get_db, system_status_col, users_col
+from app.database import close_db, connect_db, ping_db, system_status_col, users_col
 from app.logging_security import configure_secure_logging
 from app.photography.telegram import register_photography_handlers
 from app.sentinel_network import EUROPE_SENTINELS, run_sentinel_network
+from app.storage_metrics_v48 import storage_metrics
+from app.storage_runtime_v48 import storage_runtime
 from app.worker.monitor import get_cycle_stats, init_services
 from app.worker.v36 import run_monitor_cycle_v36 as run_monitor_cycle
 
@@ -56,7 +59,7 @@ def webhook_secret() -> str:
 
 
 async def _monitor_loop() -> None:
-    """Run the ADS-B monitor in-process to fit small container memory limits."""
+    """Run ADS-B monitoring independently from non-critical Mongo availability."""
     logger.info(
         "Integrated ADS-B worker enabled: base interval=%ds, shared polling + Plane Alerts v%s active",
         settings.poll_interval_seconds,
@@ -66,7 +69,6 @@ async def _monitor_loop() -> None:
     while True:
         cycle_started = timing.start_cycle()
         try:
-            get_db()
             await run_monitor_cycle()
             if not first_cycle_confirmed:
                 stats = get_cycle_stats()
@@ -79,8 +81,6 @@ async def _monitor_loop() -> None:
                     first_cycle_confirmed = True
         except asyncio.CancelledError:
             raise
-        except RuntimeError:
-            logger.debug("Integrated worker waiting for MongoDB connection")
         except Exception:
             logger.exception("Integrated ADS-B monitor iteration failed")
 
@@ -104,21 +104,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     sentinel_task: asyncio.Task | None = None
 
     async def _reconnect_db_loop() -> None:
-        while True:
+        backoff = 2.0
+        while not storage_runtime.monitoring_safe:
             try:
-                await connect_db(max_retries=1, retry_delay=1.0, timeout_ms=10000)
-                logger.info("MongoDB background connection established.")
-                break
+                db = await connect_db(max_retries=1, retry_delay=1.0, timeout_ms=3000)
+                await storage_runtime.warm(db)
+                storage_runtime.start()
+                logger.info("MongoDB background connection and storage warm established.")
+                return
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("MongoDB not ready yet (%s). Retrying in 5s...", type(exc).__name__)
-                await asyncio.sleep(5)
+                logger.warning(
+                    "MongoDB/storage not ready yet (%s). Retrying in %.0fs...",
+                    type(exc).__name__,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(30.0, backoff * 2.0)
 
     try:
-        await connect_db(max_retries=2, retry_delay=1.0, timeout_ms=10000)
+        db = await connect_db(max_retries=2, retry_delay=1.0, timeout_ms=5000)
+        await storage_runtime.warm(db)
+        storage_runtime.start()
     except Exception as exc:
-        logger.warning("MongoDB not reachable immediately: %s. Launching reconnect loop...", type(exc).__name__)
+        logger.warning(
+            "MongoDB not reachable/warm immediately: %s. Launching bounded reconnect loop...",
+            type(exc).__name__,
+        )
         db_reconnect_task = asyncio.create_task(_reconnect_db_loop(), name="mongo-reconnect")
 
     key_count = opensky_key_manager.load_keys()
@@ -133,15 +146,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if bot_token and bot_token != "your_bot_token_from_botfather":
         try:
             telegram_app = Application.builder().token(bot_token).update_queue(asyncio.Queue(maxsize=256)).concurrent_updates(False).build()
-            # Private owner-only AGY bridge runs in an earlier handler group so
-            # OAuth codes and interactive AGY input are never mistaken for
-            # ordinary Plane Alerts setup text.
+            register_storage_failure_handler(telegram_app)
             register_agy_console_handlers(telegram_app)
-            # Legacy setup/location entry points are routed into profile-aware
-            # flows before both the profile state router and old catch-alls.
             register_profile_legacy_handlers(telegram_app)
-            # Profile handlers use a negative group so profile callbacks and
-            # profile text/location states are handled before legacy catch-alls.
             register_profile_handlers(telegram_app)
             register_handlers(telegram_app)
             register_next60_handlers(telegram_app)
@@ -217,13 +224,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await audit_work.close()
     await close_notification_telemetry()
     await enrichment.close()
+    await storage_runtime.close()
     await close_http_client()
     await close_db()
 
 
 app = FastAPI(
     title="Plane Alerts",
-    description="Deterministic real-time ADS-B spotting intelligence with profiles, reliability guards and inherited aircraft filters",
+    description="Deterministic real-time ADS-B spotting intelligence with storage-isolated live alerts",
     version=VERSION,
     lifespan=lifespan,
 )
@@ -264,7 +272,17 @@ async def next60_api(request: Request) -> Response:
             headers={"Cache-Control": "no-store"},
         )
 
-    user_doc = await users_col().find_one({"user_id": user_id}, {"setup_complete": 1})
+    try:
+        user_doc = await asyncio.wait_for(
+            users_col().find_one({"user_id": user_id}, {"setup_complete": 1}),
+            timeout=1.0,
+        )
+    except Exception:
+        return JSONResponse(
+            {"detail": "Storage is temporarily unavailable. Live aircraft monitoring is still running when cached configuration is available."},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={"Cache-Control": "no-store"},
+        )
     if not user_doc or not user_doc.get("setup_complete"):
         return JSONResponse(
             {"detail": "setup required"},
@@ -282,68 +300,73 @@ async def root_health_check() -> Response:
     return Response(content="OK", media_type="text/plain", status_code=status.HTTP_200_OK)
 
 
+def _bot_status() -> str:
+    if not settings.telegram_bot_token or settings.telegram_bot_token == "your_bot_token_from_botfather":
+        return "unconfigured"
+    if telegram_app and telegram_app.running:
+        return "webhook" if settings.webhook_url.strip() else "polling"
+    return "stopped"
+
+
+def _in_process_worker_info() -> dict[str, Any]:
+    stats = get_cycle_stats()
+    total = int(stats.get("total_cycles", 0) or 0)
+    last_cycle = float(stats.get("last_cycle_time", 0.0) or 0.0)
+    stale = total <= 0 or (last_cycle > 0 and time.time() - last_cycle > settings.poll_interval_seconds * 4)
+    return {
+        "status": "stale" if stale else "active",
+        "version": VERSION,
+        "commit": COMMIT,
+        "total_cycles": total,
+        "last_cycle_duration_ms": stats.get("last_cycle_duration_ms", 0.0),
+        "seconds_since_last_cycle": round(max(0.0, time.time() - last_cycle), 1) if last_cycle else None,
+        "polling_mode": "adaptive-shared-regions-priority-storage-isolated",
+    }
+
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check() -> dict[str, Any]:
-    db_ok = False
-    try:
-        db = get_db()
-        await asyncio.wait_for(db.command("ping"), timeout=1.0)
-        db_ok = True
-    except Exception:
-        pass
-
-    bot_status = "unconfigured"
-    if settings.telegram_bot_token and settings.telegram_bot_token != "your_bot_token_from_botfather":
-        if telegram_app and telegram_app.running:
-            bot_status = "webhook" if settings.webhook_url.strip() else "polling"
-        else:
-            bot_status = "stopped"
-
-    worker_info: dict[str, Any] = {"status": "unknown", "version": VERSION, "commit": COMMIT}
+    db_ok = await ping_db(timeout_s=0.75)
+    bot_status = _bot_status()
+    worker_info = _in_process_worker_info()
     sentinel_info: dict[str, Any] = {"enabled": True, "regions": len(EUROPE_SENTINELS), "mode": "shadow-only"}
-    try:
-        doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=1.0)
-        if doc:
-            last_time = doc.get("last_cycle_time", 0.0)
-            is_stale = (time.time() - last_time) > (settings.poll_interval_seconds * 4)
-            worker_info = {
-                "status": "active" if not is_stale else "stale",
-                "version": doc.get("plane_version") or VERSION,
-                "commit": doc.get("plane_commit") or COMMIT,
-                "total_cycles": doc.get("total_cycles", 0),
-                "last_cycle_duration_ms": doc.get("last_cycle_duration_ms", 0.0),
-                "seconds_since_last_cycle": round(time.time() - last_time, 1),
-                "polling_mode": doc.get("polling_mode", "adaptive-shared-regions-priority"),
-                "shared_regions_last_cycle": doc.get("shared_regions_last_cycle", 0),
-                "provider_queries_last_cycle": doc.get("provider_queries_last_cycle", 0),
-                "shared_snapshot_cache_hits_last_cycle": doc.get("shared_snapshot_cache_hits_last_cycle", 0),
-                "priority_users_last_cycle": doc.get("priority_users_last_cycle", 0),
-                "deferred_users_last_cycle": doc.get("deferred_users_last_cycle", 0),
-                "notifications_paused_last_cycle": doc.get("notifications_paused_last_cycle", 0),
-            }
-        else:
-            stats = get_cycle_stats()
-            if stats.get("total_cycles", 0) > 0:
-                worker_info = {
-                    "status": "active (in-process)",
-                    "version": VERSION,
-                    "commit": COMMIT,
-                    "total_cycles": stats.get("total_cycles", 0),
-                }
-        sentinel_doc = await asyncio.wait_for(system_status_col().find_one({"_id": "prediction_lab_sentinels"}), timeout=1.0)
-        if sentinel_doc:
-            sentinel_info.update({
-                "last_region": sentinel_doc.get("last_region"),
-                "last_provider": sentinel_doc.get("last_provider"),
-                "last_aircraft": sentinel_doc.get("last_aircraft", 0),
-                "last_points_stored": sentinel_doc.get("last_points_stored", 0),
-                "poll_interval_seconds": sentinel_doc.get("poll_interval_seconds", 30),
-            })
-    except Exception:
-        pass
+
+    if db_ok:
+        try:
+            doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=0.75)
+            if doc:
+                worker_info.update({
+                    "shared_regions_last_cycle": doc.get("shared_regions_last_cycle", 0),
+                    "provider_queries_last_cycle": doc.get("provider_queries_last_cycle", 0),
+                    "shared_snapshot_cache_hits_last_cycle": doc.get("shared_snapshot_cache_hits_last_cycle", 0),
+                    "priority_users_last_cycle": doc.get("priority_users_last_cycle", 0),
+                    "deferred_users_last_cycle": doc.get("deferred_users_last_cycle", 0),
+                    "notifications_paused_last_cycle": doc.get("notifications_paused_last_cycle", 0),
+                })
+            sentinel_doc = await asyncio.wait_for(system_status_col().find_one({"_id": "prediction_lab_sentinels"}), timeout=0.75)
+            if sentinel_doc:
+                sentinel_info.update({
+                    "last_region": sentinel_doc.get("last_region"),
+                    "last_provider": sentinel_doc.get("last_provider"),
+                    "last_aircraft": sentinel_doc.get("last_aircraft", 0),
+                    "last_points_stored": sentinel_doc.get("last_points_stored", 0),
+                    "poll_interval_seconds": sentinel_doc.get("poll_interval_seconds", 30),
+                })
+        except Exception:
+            db_ok = False
+
+    runtime_storage = storage_runtime.snapshot()
+    storage_diag = storage_metrics.snapshot(
+        write_queue_depth=int(runtime_storage["critical_write_queue_depth"]) + int(runtime_storage["status_write_queue_depth"]),
+        optional_queue_depth=int(runtime_storage["optional_write_queue_depth"]),
+    )
+    live_worker = worker_info.get("status") == "active"
+    application_ready = bool(storage_runtime.monitoring_safe and live_worker and bot_status != "stopped")
+    application_status = "healthy" if application_ready else "degraded"
 
     return {
-        "status": "healthy" if db_ok and bot_status != "stopped" and worker_info.get("status", "").startswith("active") and get_cycle_stats().get("total_cycles", 0) > 0 else "degraded",
+        "status": application_status,
+        "application_ready": application_ready,
         "version": VERSION,
         "commit": COMMIT,
         "release_match": worker_info.get("version") == VERSION and worker_info.get("commit") == COMMIT,
@@ -351,6 +374,9 @@ async def health_check() -> dict[str, Any]:
         "optional_work": {"pending": len(enrichment.pending), "dropped": enrichment.dropped, "failures": enrichment.failures},
         "notification_telemetry": notification_telemetry_snapshot(),
         "database_connected": db_ok,
+        "database_degraded": not db_ok,
+        "storage_runtime": runtime_storage,
+        "storage_diagnostics": storage_diag,
         "bot_mode": bot_status,
         "uptime_seconds": round(time.time() - _server_start_time, 1),
         "worker": worker_info,
@@ -367,6 +393,7 @@ async def health_check() -> dict[str, Any]:
             "priority_admin_controls": True,
             "monochrome_ui": True,
             "alert_profiles": True,
+            "storage_isolated_live_path": True,
         },
         "python_version": platform.python_version(),
     }
@@ -374,27 +401,28 @@ async def health_check() -> dict[str, Any]:
 
 @app.api_route("/stats", methods=["GET", "HEAD"])
 async def stats() -> dict[str, Any]:
-    active_users = 0
-    total_users = 0
+    active_users = len(storage_runtime.active_users())
+    total_users = active_users
     worker_metrics: dict[str, Any] = {}
-    try:
-        active_users = await users_col().count_documents({"setup_complete": True})
-        total_users = await users_col().count_documents({})
-        doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=1.0)
-        if doc:
-            worker_metrics = {
-                "version": doc.get("plane_version") or VERSION,
-                "commit": doc.get("plane_commit") or COMMIT,
-                "shared_regions_last_cycle": doc.get("shared_regions_last_cycle", 0),
-                "provider_queries_last_cycle": doc.get("provider_queries_last_cycle", 0),
-                "shared_snapshot_cache_hits_last_cycle": doc.get("shared_snapshot_cache_hits_last_cycle", 0),
-                "priority_users_last_cycle": doc.get("priority_users_last_cycle", 0),
-                "deferred_users_last_cycle": doc.get("deferred_users_last_cycle", 0),
-                "notifications_paused_last_cycle": doc.get("notifications_paused_last_cycle", 0),
-                "polling_mode": doc.get("polling_mode", "adaptive-shared-regions-priority"),
-            }
-    except Exception:
-        pass
+    if await ping_db(timeout_s=0.5):
+        try:
+            active_users = await asyncio.wait_for(users_col().count_documents({"setup_complete": True}), timeout=0.75)
+            total_users = await asyncio.wait_for(users_col().count_documents({}), timeout=0.75)
+            doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=0.75)
+            if doc:
+                worker_metrics = {
+                    "version": doc.get("plane_version") or VERSION,
+                    "commit": doc.get("plane_commit") or COMMIT,
+                    "shared_regions_last_cycle": doc.get("shared_regions_last_cycle", 0),
+                    "provider_queries_last_cycle": doc.get("provider_queries_last_cycle", 0),
+                    "shared_snapshot_cache_hits_last_cycle": doc.get("shared_snapshot_cache_hits_last_cycle", 0),
+                    "priority_users_last_cycle": doc.get("priority_users_last_cycle", 0),
+                    "deferred_users_last_cycle": doc.get("deferred_users_last_cycle", 0),
+                    "notifications_paused_last_cycle": doc.get("notifications_paused_last_cycle", 0),
+                    "polling_mode": doc.get("polling_mode", "adaptive-shared-regions-priority-storage-isolated"),
+                }
+        except Exception:
+            pass
     return {
         "version": VERSION,
         "commit": COMMIT,
@@ -409,6 +437,7 @@ async def stats() -> dict[str, Any]:
         "cooldown_minutes": settings.cooldown_minutes,
         "cycle_stats": get_cycle_stats(),
         "shared_polling": worker_metrics,
+        "storage_runtime": storage_runtime.snapshot(),
         "prediction_lab_sentinel_regions": len(EUROPE_SENTINELS),
     }
 
@@ -432,8 +461,6 @@ async def telegram_webhook(request: Request) -> Response:
         if update_id in _recent_updates:
             return Response(status_code=200)
         update = Update.de_json(data, telegram_app.bot)
-        # PTB's single consumer preserves setup-state order across webhook
-        # requests; admission is bounded and Telegram retries on saturation.
         telegram_app.update_queue.put_nowait(update)
         _recent_updates[update_id] = now
         return Response(status_code=200)
@@ -450,7 +477,7 @@ async def telegram_webhook(request: Request) -> Response:
 @app.get("/ready")
 async def readiness() -> Response:
     health = await health_check()
-    return JSONResponse(health, status_code=200 if health["status"] == "healthy" else 503)
+    return JSONResponse(health, status_code=200 if health["application_ready"] else 503)
 
 
 if __name__ == "__main__":
