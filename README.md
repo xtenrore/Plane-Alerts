@@ -4,8 +4,8 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.0.0**  
-**Current prediction version: `4.7.3-terminal-delivery-landing-path`**
+**Current code version: Plane Alerts v5.1.0**  
+**Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
@@ -17,7 +17,7 @@ The alert-critical path is deliberately ordered by priority:
 ADS-B ingestion
   -> freshness / canonical observation
   -> deterministic trajectory
-  -> CPA / ETA / confidence
+  -> horizontal CPA + uncertainty-aware 3D CPA / ETA / confidence
   -> route + terminal evidence
   -> v4.7.3 terminal-arrival delivery guard
   -> qualification / cancellation lifecycle
@@ -27,6 +27,18 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v5.1 3D proximity and advanced geometry
+
+v5.1 keeps horizontal CPA as an explicit, always-visible result and adds deterministic altitude-aware relevance rather than replacing the proven horizontal model. When altitude evidence is physically plausible, Plane Alerts calculates vertical separation, true three-dimensional/slant CPA, time to 3D CPA, and the horizontal and vertical components at that closest point.
+
+Altitude may suppress an otherwise horizontally qualifying approach only when the altitude evidence is trustworthy and a conservative uncertainty-adjusted 3D lower bound still proves the aircraft remains outside the configured radius. Missing, stale, malformed or discontinuous altitude fails open to the established horizontal result. This prevents bad altitude data from silently suppressing a real nearby pass.
+
+Observer terrain elevation is optional. If it is not already stored, Plane Alerts schedules a free Open-Meteo terrain lookup through the existing bounded optional-enrichment worker; the live predictor never waits for that network request. Until observer elevation is known, a conservative global terrain envelope is used and ambiguous cases retain horizontal qualification.
+
+Altitude relevance can be disabled per preferences through `proximity_3d.altitude_relevance`. Horizontal CPA remains available regardless of this setting.
+
+v5.1 also tightens pass-versus-cancellation semantics. A close projected CPA is not ground truth: an active encounter is finalized as passed only after Plane Alerts has actually observed the aircraft inside the configured radius and a later fresh observation shows it receding from the observed closest point. Missing or stale ADS-B never counts as a completed pass.
 
 ## v5.0 observability and explainability
 
@@ -215,14 +227,15 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_observability_v50.py tests/test_agy_mongo_resilience_v50.py tests/test_agy_prediction_bridge.py
+pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py
+python scripts/benchmark_v51_geometry.py
 python scripts/benchmark_v50_observability.py
 python scripts/benchmark_v49_doctor.py
 docker compose config --quiet
@@ -258,10 +271,13 @@ For native Python and Raspberry Pi/ARM64 instructions, health checks, backups, u
 
 ## Known limitations
 
+- If observer terrain elevation is initially unavailable, v5.1 uses conservative altitude bounds and falls back to horizontal relevance when the 3D result is ambiguous.
+- ADS-B altitude is treated as uncertain sensor data; malformed or discontinuous altitude cannot safely suppress a horizontally qualifying pass.
 - A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
 - Optional analytics can be dropped under prolonged storage pressure and are counted in diagnostics.
 - AGY may temporarily serve last-known-good redacted context while its Atlas bridge circuit is degraded; that state is labeled and is not evidence of a successful or missed prediction.
 - Mutable SQLite persistence is not implemented.
 - The worldwide airport catalogue is community-maintained; maintained Plane Alerts overrides and fresh physical observations take precedence where stronger evidence exists.
 - Broader runway/history suppression remains shadow-only pending representative outcome evidence.
+- Longer-range 30–60-minute prediction evaluation remains shadow-only; missing regional ADS-B coverage is unresolved rather than scored as success or failure.
 - Raspberry Pi validation is automated ARM64 Docker build validation; it is not a claim of testing every physical Pi model, receiver or storage device.
