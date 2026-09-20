@@ -64,15 +64,20 @@ def airport_for_info(info: Any | None) -> terminal.AirportGeometry | None:
         return None
     icao = str(getattr(info, "icao", "") or "").upper().strip()
     iata = str(getattr(info, "iata", "") or "").upper().strip()
-    cached = _cached_airport(icao, iata)
-    if cached is not None:
-        return cached
 
+    # A matching record in the pinned local database wins over a pre-existing
+    # in-memory object. This is important for maintained overrides such as LTFM:
+    # an older built-in geometry must not beat the verified compiled override on
+    # the first lookup merely because it was imported earlier.
     reference = airport_repository.by_code(icao) if icao else None
     if reference is None and iata:
         reference = airport_repository.by_code(iata)
     if reference is not None:
         return terminal.register_airport(_geometry(reference))
+
+    cached = _cached_airport(icao, iata)
+    if cached is not None:
+        return cached
 
     # Some route sources provide coordinates but weak/missing codes. Resolve a
     # very-near reference airport before falling back to metadata-only context.
@@ -98,7 +103,9 @@ def nearest_airport(lat: float, lon: float, *, max_distance_km: float = 120.0) -
         return memory
     memory_distance = traj.haversine_km(lat, lon, memory.latitude, memory.longitude)
     global_distance = traj.haversine_km(lat, lon, global_airport.latitude, global_airport.longitude)
-    return global_airport if global_distance < memory_distance else memory
+    # Prefer the compiled reference on ties so an authoritative maintained
+    # override cannot lose to an older object at identical airport coordinates.
+    return global_airport if global_distance <= memory_distance else memory
 
 
 def install_global_airport_data_v471() -> None:
