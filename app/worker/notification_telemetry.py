@@ -47,22 +47,33 @@ async def _persist_event(payload: dict[str, Any]) -> None:
 
     existing = await collection.find_one(
         {"_id": notification_id},
-        {"first_notified_at": 1, "delivery_attempts": 1},
+        {
+            "first_notified_at": 1,
+            "delivery_attempts": 1,
+            "last_delivery_success": 1,
+            "last_logical_event_type": 1,
+            "last_stage": 1,
+        },
     ) or {}
     prior_attempts = int(existing.get("delivery_attempts", 0) or 0)
     has_first_delivery = existing.get("first_notified_at") is not None
-    retrying_first_delivery = input_message_id is None and prior_attempts > 0 and not has_first_delivery
+    retrying_same_event = (
+        prior_attempts > 0
+        and existing.get("last_delivery_success") is False
+        and str(existing.get("last_logical_event_type") or "") == logical_type
+        and str(existing.get("last_stage") or "") == stage
+    )
 
     if not delivered:
         event_type = "failed_delivery"
-    elif retrying_first_delivery:
+    elif retrying_same_event:
         event_type = "retry"
     else:
         event_type = logical_type
 
     attempt_type = (
         "retry"
-        if retrying_first_delivery
+        if retrying_same_event
         else ("initial" if input_message_id is None else "update")
     )
     event = {
@@ -98,6 +109,7 @@ async def _persist_event(payload: dict[str, Any]) -> None:
                 "prediction_confidence": payload.get("prediction_confidence") or "",
                 "last_event_type": event_type,
                 "last_logical_event_type": logical_type,
+                "last_stage": stage,
                 "last_event_at": occurred_at,
                 "last_delivery_success": delivered,
                 "last_message_id": output_message_id,
