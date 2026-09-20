@@ -215,6 +215,10 @@ async def _latest_predictions(
     return await asyncio.wait_for(_cursor_rows(cursor), timeout=1.5)
 
 
+async def _count(db: Any, collection: str, query: dict[str, Any]) -> int:
+    return int(await asyncio.wait_for(db[collection].count_documents(query), timeout=1.0))
+
+
 async def collect_operator_metrics(db: Any) -> dict[str, Any]:
     """Read the latest persisted runtime metrics without touching the live worker."""
     started = time.monotonic()
@@ -228,13 +232,26 @@ async def collect_operator_metrics(db: Any) -> dict[str, Any]:
     ]
     runtime = monitor_doc.get("runtime_metrics_v50") if isinstance(monitor_doc.get("runtime_metrics_v50"), dict) else {}
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    sampled_predictions = await asyncio.wait_for(
-        db["prediction_lab_audit"].count_documents({"kind": "prediction", "captured_at": {"$gte": cutoff}}),
-        timeout=1.0,
-    )
-    lifecycle_outcomes = await asyncio.wait_for(
-        db["prediction_lab_audit"].count_documents({"kind": "outcome", "captured_at": {"$gte": cutoff}}),
-        timeout=1.0,
+    (
+        sampled_predictions,
+        lifecycle_outcomes,
+        first_alert_records,
+        cancellation_records,
+        failed_delivery_records,
+    ) = await asyncio.gather(
+        _count(db, "prediction_lab_audit", {"kind": "prediction", "captured_at": {"$gte": cutoff}}),
+        _count(db, "prediction_lab_audit", {"kind": "outcome", "captured_at": {"$gte": cutoff}}),
+        _count(db, "notification_history", {"first_notified_at": {"$gte": cutoff}}),
+        _count(
+            db,
+            "notification_history",
+            {"events": {"$elemMatch": {"event_type": "cancellation_update", "occurred_at": {"$gte": cutoff}}}},
+        ),
+        _count(
+            db,
+            "notification_history",
+            {"events": {"$elemMatch": {"event_type": "failed_delivery", "occurred_at": {"$gte": cutoff}}}},
+        ),
     )
     return {
         "version": VERSION,
@@ -263,9 +280,15 @@ async def collect_operator_metrics(db: Any) -> dict[str, Any]:
         },
         "providers": provider_health,
         "runtime_metrics": _json_safe(runtime),
+        "delivery_24h": {
+            "notification_records_first_delivered": first_alert_records,
+            "notification_records_with_cancellation_update": cancellation_records,
+            "notification_records_with_failed_delivery": failed_delivery_records,
+            "note": "Counts are durable notification records with matching events, not a reconstruction of missing telemetry.",
+        },
         "prediction_lab_24h": {
-            "sampled_predictions": int(sampled_predictions),
-            "lifecycle_outcomes": int(lifecycle_outcomes),
+            "sampled_predictions": sampled_predictions,
+            "lifecycle_outcomes": lifecycle_outcomes,
             "note": "Prediction Lab snapshots are deliberately rate-limited and are not a count of every five-second prediction calculation.",
         },
     }
