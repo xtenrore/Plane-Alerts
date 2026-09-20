@@ -6,11 +6,19 @@ production monitor_timing telemetry after deployment.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import statistics
+import sys
 import time
 
-from app.aircraft.models import NormalizedAircraft
-from app.aircraft.providers import AircraftDataProvider, ProviderManager
+# Running a file under scripts/ puts scripts/ first on sys.path. Add the
+# repository root explicitly so this benchmark behaves the same in CI/local use.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.aircraft.models import NormalizedAircraft  # noqa: E402
+from app.aircraft.providers import AircraftDataProvider, ProviderManager  # noqa: E402
 
 
 class BenchProvider(AircraftDataProvider):
