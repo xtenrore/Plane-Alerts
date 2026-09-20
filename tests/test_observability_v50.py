@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.observability_v50 import _provider_status_safe, explain_prediction
 from app.version import PREDICTION_VERSION, VERSION
+from app.worker import v36
 
 
 def _prediction() -> dict:
@@ -86,6 +87,33 @@ def test_provider_diagnostics_allowlist_drops_endpoint_and_credentials():
     assert "url" not in safe
     assert "token" not in safe
     assert "api_key" not in safe
+
+
+def test_provider_metrics_are_sanitized_before_existing_heartbeat_write(monkeypatch):
+    class FakeManager:
+        def get_all_provider_status(self):
+            return [
+                {
+                    "name": "opensky",
+                    "request_count": 9,
+                    "last_success_time": 123.0,
+                    "circuit_state": "closed",
+                    "key_rotation": {"keys": ["must-not-persist"]},
+                    "token": "must-not-persist",
+                }
+            ]
+
+    monkeypatch.setattr(v36.monitor, "get_provider_manager", lambda: FakeManager())
+    providers, _ = v36._runtime_diagnostics_v50()
+    assert providers == [
+        {
+            "name": "opensky",
+            "request_count": 9,
+            "last_success_time": 123.0,
+            "circuit_state": "closed",
+        }
+    ]
+    assert "must-not-persist" not in json.dumps(providers)
 
 
 def test_planealerts_launcher_routes_v5_operator_commands():
