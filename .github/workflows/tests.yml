@@ -71,8 +71,8 @@ jobs:
       - name: Run v4.7.3 arrival delivery and landing-path regressions
         run: pytest -q tests/test_terminal_lifecycle_v473.py
 
-      - name: Run v4.8 storage outage, restart, migration, backup and Telegram failure suite
-        run: pytest -q tests/test_storage_v48.py tests/test_storage_failure_v48.py tests/test_database_atlas.py
+      - name: Run v4.8 storage outage, restart, migration, backup, lifecycle-ID and Telegram failure suite
+        run: pytest -q tests/test_storage_v48.py tests/test_storage_guard_v48.py tests/test_storage_failure_v48.py tests/test_database_atlas.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
