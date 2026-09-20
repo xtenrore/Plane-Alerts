@@ -154,9 +154,9 @@ python scripts/benchmark_v42.py
 pip check
 ```
 
-The v4.4 release candidate passed **287 tests** before release documentation was finalized. Coverage includes fresh-observation confirmation, repeated-observation protection, cancellation latching and recovery, failed cancellation retry, stale ADS-B behavior, IST terminal-turn suppression, genuine close-pass recovery, notification update classification, cold route-history isolation, profiles, Prediction Lab outcome handling and existing Error Museum regressions.
+The final v4.4 reliability branch passed **291 tests**. Coverage includes fresh-observation confirmation, repeated-observation protection, production guard composition in a fresh interpreter, cancellation latching and recovery, failed cancellation retry, stale ADS-B behavior, IST terminal-turn suppression, genuine close-pass recovery, notification update classification, cold route-history isolation, profiles, Prediction Lab outcome handling and existing Error Museum regressions.
 
-The terminal-arrival benchmark is also part of CI. Changes are not deployed merely because a branch exists; production deployment is gated on a successful `main` test workflow.
+The final terminal-arrival benchmark evaluated 2,250 observer/path combinations for 250 users at about **1,800 evaluations per second**, with shared bounded motion-path reuse. Changes are not deployed merely because a branch exists; production deployment is gated on a successful `main` test workflow.
 
 ## Deployment
 
