@@ -101,7 +101,14 @@ async def test_message_edit_never_overwrites_first_notification_time(monkeypatch
 
 @pytest.mark.asyncio
 async def test_failed_first_delivery_then_success_is_typed_as_retry_but_counts_one_alert(monkeypatch):
-    failed = FakeCollection({"delivery_attempts": 1})
+    failed = FakeCollection(
+        {
+            "delivery_attempts": 1,
+            "last_delivery_success": False,
+            "last_logical_event_type": "first_notification",
+            "last_stage": "prepare",
+        }
+    )
     monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(failed))
 
     await telemetry._persist_event(_payload())
@@ -110,8 +117,45 @@ async def test_failed_first_delivery_then_success_is_typed_as_retry_but_counts_o
     _query, event_update, _upsert = failed.calls[0]
     assert event_update["$set"]["last_event_type"] == "retry"
     assert event_update["$inc"]["event_counts.retry"] == 1
+    assert event_update["$push"]["events"]["$each"][0]["attempt_type"] == "retry"
     _query, first_update, _upsert = failed.calls[1]
     assert first_update["$inc"]["alert_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_cancellation_update_then_success_is_typed_as_retry_not_new_alert(monkeypatch):
+    first_at = datetime(2026, 9, 20, 8, 0, tzinfo=timezone.utc)
+    collection = FakeCollection(
+        {
+            "first_notified_at": first_at,
+            "delivery_attempts": 3,
+            "last_delivery_success": False,
+            "last_logical_event_type": "cancellation_update",
+            "last_stage": "cancelled",
+        }
+    )
+    monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(collection))
+
+    await telemetry._persist_event(
+        _payload(
+            stage="cancelled",
+            input_message_id=100,
+            output_message_id=100,
+            delivered=True,
+            delivery_detail="edited",
+        )
+    )
+
+    assert len(collection.calls) == 1
+    _query, update, _upsert = collection.calls[0]
+    assert update["$set"]["last_event_type"] == "retry"
+    assert update["$set"]["last_logical_event_type"] == "cancellation_update"
+    assert update["$inc"]["event_counts.retry"] == 1
+    event = update["$push"]["events"]["$each"][0]
+    assert event["attempt_type"] == "retry"
+    assert event["logical_event_type"] == "cancellation_update"
+    assert "alert_count" not in update["$inc"]
+    assert "notified_at" not in update["$set"]
 
 
 @pytest.mark.asyncio
