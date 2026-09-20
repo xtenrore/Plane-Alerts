@@ -66,3 +66,10 @@ if "pytest" not in sys.modules:
     from app.worker.cadence_due_guard_v424 import install_cadence_due_guard_v424
 
     install_cadence_due_guard_v424()
+
+    # The lifecycle reuses one Telegram message. Persist first-delivery timing
+    # once, classify later edits/cancellations/passed updates explicitly, and
+    # keep telemetry writes off the alert-critical path.
+    from app.worker.notification_telemetry_v44 import install_notification_telemetry_v44
+
+    install_notification_telemetry_v44()
