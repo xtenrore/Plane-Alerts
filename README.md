@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.1.1**  
+**Current code version: Plane Alerts v5.1.2**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -41,6 +41,8 @@ Altitude relevance can be disabled per preferences through `proximity_3d.altitud
 v5.1 also tightens pass-versus-cancellation semantics. A close projected CPA is not ground truth: an active encounter is finalized as passed only after Plane Alerts has actually observed the aircraft inside the configured radius and a later fresh observation shows it receding from the observed closest point. Missing or stale ADS-B never counts as a completed pass.
 
 v5.1.1 is a release-infrastructure-only patch. It keeps the same physical predictor and moves the exact-main Railway deployment gate out of the Railway CLI container so the trusted post-CI deploy can verify the tested SHA without depending on tools missing from that container.
+
+v5.1.2 fixes the production wrapper-chain compatibility bug discovered during v5.1.1 verification. The installed v4.6 confidence layer now accepts and forwards the v5.1 `altitude_relevance` option and preserves unknown observer elevation, so the intended `5.1-3d-proximity` model can execute through the real monitor/critical-timing stack.
 
 ## v5.0 observability and explainability
 
@@ -229,14 +231,14 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds a production-wrapper-chain regression so the v4.6 confidence and critical-timing layers must accept and forward the current v5.1 predictor options.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py
+pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py tests/test_v512_predictor_wrapper.py
 python scripts/benchmark_v51_geometry.py
 python scripts/benchmark_v50_observability.py
 python scripts/benchmark_v49_doctor.py
