@@ -21,6 +21,33 @@ _INSTALLED = False
 _ORIGINAL_MATERIALIZE_PROFILE = None
 
 
+def _memory_state_id(user_id: int, icao24: str) -> str:
+    """Stable in-process identity for a lifecycle record not yet assigned Mongo _id."""
+    return f"v48-memory:{int(user_id)}:{str(icao24)}"
+
+
+def _normalize_state_query(
+    user_id: int,
+    cache: dict[str, dict[str, Any]],
+    query: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert legacy _id updates to the unique natural lifecycle identity.
+
+    v4.8 can create a lifecycle record in memory before Mongo has acknowledged an
+    upsert, so a Mongo-assigned ``_id`` is not a safe hot-path requirement. The
+    collection already has a unique (user_id, aircraft_icao24) identity. Convert
+    both real and synthetic cached IDs to that identity before applying the
+    memory-first update.
+    """
+    if "_id" not in query or "aircraft_icao24" in query:
+        return dict(query)
+    wanted = query.get("_id")
+    for icao24, document in cache.items():
+        if document.get("_id") == wanted:
+            return {"user_id": int(user_id), "aircraft_icao24": str(icao24)}
+    return dict(query)
+
+
 async def _get_active_users_cached() -> list[dict[str, Any]]:
     """Return last-known-good config; only the first cold cycle may warm Mongo."""
     if not storage_runtime.config_loaded:
@@ -50,7 +77,13 @@ async def _prefetch_approach_states_cached(
         for aircraft in aircraft_list
         if str(getattr(aircraft, "icao24", "") or "").strip()
     }
-    return storage_runtime.approach_states(int(user_id), icao24s)
+    states = storage_runtime.approach_states(int(user_id), icao24s)
+    # The legacy monitor still reads old["_id"] on later pass/cancel paths. A
+    # memory-first record may not have reached Mongo yet, so provide a stable
+    # in-process ID and normalize it back to the natural identity on update.
+    for icao24, document in states.items():
+        document.setdefault("_id", _memory_state_id(int(user_id), icao24))
+    return states
 
 
 async def _approach_update_cached(
@@ -62,10 +95,11 @@ async def _approach_update_cached(
     **_kwargs: Any,
 ) -> Any:
     """Commit lifecycle state to memory immediately; Mongo flush is background."""
+    normalized = _normalize_state_query(int(self._user_id), self._cache, query)
     return storage_runtime.apply_approach_update(
         int(self._user_id),
         self._cache,
-        query,
+        normalized,
         update,
         upsert=bool(upsert),
     )
