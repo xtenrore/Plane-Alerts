@@ -74,8 +74,8 @@ jobs:
       - name: Run v4.8 storage outage, restart, migration, backup, lifecycle-ID and Telegram failure suite
         run: pytest -q tests/test_storage_v48.py tests/test_storage_guard_v48.py tests/test_storage_failure_v48.py tests/test_database_atlas.py
 
-      - name: Run v4.9 self-hosting and doctor suite
-        run: pytest -q tests/test_self_hosting_v49.py
+      - name: Run v4.9 self-hosting, doctor and release-publish suite
+        run: pytest -q tests/test_self_hosting_v49.py tests/test_release_publish_v49.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
