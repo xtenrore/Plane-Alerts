@@ -52,6 +52,13 @@ def _geometry(reference: AirportReference) -> terminal.AirportGeometry:
     )
 
 
+def _runway_signature(airport: terminal.AirportGeometry) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(
+        (runway.end_a.identifier, runway.end_b.identifier)
+        for runway in airport.runways
+    ))
+
+
 def _cached_airport(icao: str, iata: str) -> terminal.AirportGeometry | None:
     for airport in tuple(terminal._airports.values()):
         if (icao and airport.icao == icao) or (iata and airport.iata == iata):
@@ -73,7 +80,15 @@ def airport_for_info(info: Any | None) -> terminal.AirportGeometry | None:
     if reference is None and iata:
         reference = airport_repository.by_code(iata)
     if reference is not None:
-        return terminal.register_airport(_geometry(reference))
+        compiled = _geometry(reference)
+        cached = _cached_airport(icao, iata)
+        if (
+            cached is not None
+            and cached.icao == compiled.icao
+            and _runway_signature(cached) == _runway_signature(compiled)
+        ):
+            return cached
+        return terminal.register_airport(compiled)
 
     cached = _cached_airport(icao, iata)
     if cached is not None:
@@ -96,15 +111,26 @@ def airport_for_info(info: Any | None) -> terminal.AirportGeometry | None:
 def nearest_airport(lat: float, lon: float, *, max_distance_km: float = 120.0) -> terminal.AirportGeometry | None:
     memory = _ORIGINAL_NEAREST_AIRPORT(lat, lon, max_distance_km=max_distance_km)
     reference = airport_repository.nearest(lat, lon, max_distance_km=max_distance_km)
-    global_airport = terminal.register_airport(_geometry(reference)) if reference is not None else None
+    compiled = _geometry(reference) if reference is not None else None
     if memory is None:
-        return global_airport
-    if global_airport is None:
+        return terminal.register_airport(compiled) if compiled is not None else None
+    if compiled is None:
         return memory
+
     memory_distance = traj.haversine_km(lat, lon, memory.latitude, memory.longitude)
-    global_distance = traj.haversine_km(lat, lon, global_airport.latitude, global_airport.longitude)
-    # Prefer the compiled reference on ties so an authoritative maintained
-    # override cannot lose to an older object at identical airport coordinates.
+    global_distance = traj.haversine_km(lat, lon, compiled.latitude, compiled.longitude)
+    same_airport = memory.icao == compiled.icao or (memory.iata and memory.iata == compiled.iata)
+    if (
+        same_airport
+        and abs(memory_distance - global_distance) <= 1e-6
+        and _runway_signature(memory) == _runway_signature(compiled)
+    ):
+        # Preserve the identity of an already-installed verified object. Existing
+        # v4.7 code/tests rely on this for LTFM, and equivalent compiled geometry
+        # does not justify replacing it.
+        return memory
+
+    global_airport = terminal.register_airport(compiled)
     return global_airport if global_distance <= memory_distance else memory
 
 
