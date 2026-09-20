@@ -24,6 +24,13 @@ if "pytest" not in sys.modules:
 
     install_direct_presence_guard_v44()
 
+    # v4.6 keeps the established CPA geometry authoritative while adding
+    # speed-dependent freshness, explicit uncertainty, formal confidence
+    # evidence, and linear/turn-aware shadow candidates.
+    from app.intelligence.prediction_v46 import install_prediction_v46
+
+    install_prediction_v46()
+
     # Install the destination adapters, the v2 non-blocking route resolver/read
     # cache, then the bounded route-history write queue. The v4.2 ensemble
     # qualification guard and v4.3 cancellation latch are layered afterward.
@@ -38,6 +45,12 @@ if "pytest" not in sys.modules:
     install_route_observe_guard_v44()
     install_route_guard_v42()
     install_requalification_guard_v43()
+
+    # Route clustering/decay is built only by the v2 bounded background refresh.
+    # It weakens stale/contradictory history instead of turning it into a veto.
+    from app.intelligence.route_intelligence_v46 import install_route_intelligence_v46
+
+    install_route_intelligence_v46()
 
     # Final hot-path protection: cap individual provider latency and prevent
     # stale ADS-B positions from creating brand-new approach alerts.
