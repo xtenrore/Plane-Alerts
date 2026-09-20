@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 import statistics
+import sys
 import time
+from pathlib import Path
 
-from app.intelligence import airport_terminal_v47 as v47
+# Executing a file under scripts/ puts scripts/ first on sys.path. Add the
+# repository root explicitly so this benchmark behaves identically in CI/local
+# use, matching the established v4.6 benchmark pattern.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.intelligence import airport_terminal_v47 as v47  # noqa: E402
 
 
 def percentile(values, q):
