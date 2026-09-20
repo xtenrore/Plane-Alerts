@@ -9,8 +9,11 @@ runway records that must not silently become production evidence.
 from __future__ import annotations
 
 from dataclasses import replace
+import logging
 
 from app.intelligence import airport_terminal_v47 as terminal
+
+logger = logging.getLogger(__name__)
 
 LTFM_OPERATIONAL_RUNWAY_PAIRS = frozenset({
     ("16L", "34R"),
@@ -21,26 +24,51 @@ LTFM_OPERATIONAL_RUNWAY_PAIRS = frozenset({
 })
 
 
-def install_current_runway_data_v47() -> terminal.AirportGeometry:
-    """Filter LTFM to the currently verified operational runway pairs.
+def verified_runways(
+    source: terminal.AirportGeometry,
+    expected_pairs: frozenset[tuple[str, str]],
+) -> tuple[tuple[terminal.RunwayGeometry, ...], bool]:
+    """Return only verified runway pairs and whether the set is complete.
 
-    This deliberately fails closed during startup if the underlying maintained
-    geometry is missing an expected pair, rather than continuing with silently
-    incomplete runway intelligence. Plane Alerts can still be rolled back to the
-    previous tested release in that situation.
+    Incomplete maintained geometry is treated as unavailable rather than as a
+    partially authoritative runway model. Generic terminal intelligence can
+    continue without runway-specific inference.
     """
-    source = terminal.LTFM
     selected = tuple(
         runway
         for runway in source.runways
-        if (runway.end_a.identifier, runway.end_b.identifier) in LTFM_OPERATIONAL_RUNWAY_PAIRS
+        if (runway.end_a.identifier, runway.end_b.identifier) in expected_pairs
     )
     found = {(runway.end_a.identifier, runway.end_b.identifier) for runway in selected}
-    if found != LTFM_OPERATIONAL_RUNWAY_PAIRS:
+    return selected, found == expected_pairs
+
+
+def install_current_runway_data_v47() -> terminal.AirportGeometry:
+    """Install the currently verified LTFM operational runway set.
+
+    Airport/runway intelligence is supporting evidence and must never prevent
+    core monitoring from starting. If the maintained geometry ever becomes
+    incomplete, runway-specific inference is disabled for LTFM and the service
+    continues with generic terminal context until the data layer is corrected.
+    """
+    source = terminal.LTFM
+    selected, complete = verified_runways(source, LTFM_OPERATIONAL_RUNWAY_PAIRS)
+    if not complete:
+        found = {(runway.end_a.identifier, runway.end_b.identifier) for runway in selected}
         missing = sorted(LTFM_OPERATIONAL_RUNWAY_PAIRS - found)
-        raise RuntimeError(f"LTFM maintained runway geometry missing verified pairs: {missing}")
+        logger.error(
+            "ltfm_runway_geometry_incomplete missing=%s runway_specific_inference=disabled",
+            missing,
+        )
+        selected = ()
 
     corrected = replace(source, runways=selected)
     terminal.LTFM = corrected
     terminal.register_airport(corrected)
+    logger.info(
+        "v47_ltfm_runway_data installed=%d expected=%d complete=%s",
+        len(selected),
+        len(LTFM_OPERATIONAL_RUNWAY_PAIRS),
+        complete,
+    )
     return corrected
