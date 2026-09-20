@@ -1,66 +1,56 @@
 # Plane Alerts
 
-Plane Alerts is a Telegram-based aircraft spotting alert system. It combines live ADS-B observations with deterministic trajectory, closest-point-of-approach (CPA), ETA, route-history and terminal-area logic so alerts are based on whether an aircraft is actually expected to pass the observer, not proximity alone.
+Plane Alerts is a Telegram-based aircraft spotting alert system. It combines live ADS-B observations with deterministic trajectory, closest-point-of-approach (CPA), ETA, confidence, route-history and terminal-area logic so alerts are based on whether an aircraft is actually expected to pass the observer, not proximity alone.
 
-AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, aircraft filtering, turn prediction, cancellation or notification timing.
+AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.6.0**
+**Current code version: Plane Alerts v4.7.0**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v4.6 — Prediction Intelligence & Instant Interaction
+## v4.7 — Airport, Runway & Terminal Intelligence
 
-v4.6 improves how Plane Alerts describes uncertainty without replacing the proven production CPA geometry.
+v4.7 extends the existing v4.2/v4.6 prediction stack instead of introducing a competing predictor.
 
-### Confidence and position uncertainty
+### Terminal intelligence
 
-Each prediction has an evidence-based user-facing confidence state:
+Plane Alerts now records deterministic terminal-area evidence for:
 
-- High
-- Medium
-- Low
-- Uncertain
+- sustained vector changes
+- downwind/base transitions
+- final intercept and established final
+- probable holding behavior
+- go-arounds and missed approaches
 
-The deterministic confidence layer considers observation freshness and count, update cadence, heading and groundspeed stability, turn evidence, acceleration, distance trend, prediction horizon, missing fields and estimated positional uncertainty.
+A single noisy ADS-B heading is not enough to establish a turn. Terminal evidence uses bounded observation history and the existing v4.6 sustained-turn checks.
 
-Freshness is speed-dependent and bounded. A fast jet can become too uncertain sooner than a slow aircraft because the same observation age implies a larger possible position error. Confidence diagnostics retain the reasons for degradation rather than exposing fake probability precision.
+Airport context produces an explicit uncertainty penalty for diagnostics. Fresh live geometry remains authoritative: being near an airport or having that airport as the route destination is never an automatic suppression rule.
 
-### Turn-aware shadow prediction
+### Runway geometry and inference
 
-The established production predictor still controls alerts. v4.6 also runs bounded linear and turn-aware candidates in shadow mode for outcome comparison.
+Runway geometry lives in a dedicated data layer rather than being scattered through prediction code. The initial maintained production runway set includes Istanbul Airport (LTFM/IST), while the classifier accepts generic single, parallel and crossing-runway layouts.
 
-A turn candidate requires multiple fresh observations with consistent direction and rate. One heading spike, stale history or a short noisy sequence cannot establish a turn, and candidate curvature decays rather than being extrapolated indefinitely.
+Likely runway direction is inferred from recent observed traffic only when multiple aircraft support the same direction. The inference retains supporting-aircraft count, recency and confidence; one aircraft cannot create an active-runway conclusion. Configuration changes require fresh multi-aircraft evidence.
 
-Prediction Lab can compare production and shadow CPA/ETA behavior without allowing the candidate model to qualify, cancel or time an alert.
+Recent airport movement clusters are bounded, deduplicated per aircraft and time-decayed. Historical route paths can also be associated with runway families as supporting evidence. Neither source overrides fresh motion.
 
-### Route-history evidence
+### Shadow validation and live safety
 
-Historical routes are supporting evidence, not physical truth.
+New runway/base/final/holding suppression hypotheses are **shadow-only in v4.7.0**. They are recorded in Prediction Lab with their model identifier and do not control live qualification or cancellation.
 
-v4.6 adds:
+One narrow fail-safe is authoritative: if an aircraft was being held only because a landing turn was expected, strong observed go-around or missed-approach evidence can invalidate that old expectation and return control to the fresh live trajectory. The confirmed cancellation latch is not bypassed.
 
-- age decay so older history carries less influence
-- bounded background clustering of similar paths
-- weaker authority for small samples
-- weaker authority when route clusters disagree
-- live-geometry authority when history diverges from current observations
-- conservative terminal-area uncertainty without treating destination=IST as automatic suppression
+This protects both sides of the historical IST problem: normal arrivals can be measured against runway-aware shadow expectations while genuine overhead/transit or go-around passes remain alertable.
 
-Clustering stays outside the five-second monitoring critical path.
+### Weather and contrails
 
-### ETA and cancellation safeguards
+Weather remains optional context and is not a hard runway selector. Provider failure must not block ADS-B ingestion, CPA or alerting.
 
-Plane Alerts retains the existing provider-teleport rejection, heading-spike protection, cancellation confirmation latch and v4.4 direct-presence recovery.
+Google Contrails remains separate photography/environment enrichment. It does not influence trajectory, airport classification, runway inference, CPA, ETA, qualification, cancellation or alert timing.
 
-A cancelled encounter can recover from fresh independent physical observations inside the configured radius. Stale or repeated samples cannot resurrect it. v4.6 does not hide bad ETA behavior behind aggressive smoothing.
+### Known limitations
 
-### Faster Telegram interactions
-
-Callback-based menus acknowledge Telegram callback queries before avoidable database or forecast work where safe. `/next60` no longer rebuilds forecast data before acknowledging the button press.
-
-A bounded profile-state cache avoids repeated reads of already persisted session state. Callback IDs are deduplicated so repeated delivery does not duplicate work, while distinct rapid clicks remain independent.
-
-Interaction telemetry separates Plane Alerts handler latency from Telegram/network latency and records callback acknowledgement, handler completion and message completion distributions with p50/p95/p99/worst values.
+Runway-aware suppression remains shadow-only until enough replay and production outcomes demonstrate improvement without missed genuine passes. Airports without maintained runway geometry still receive generic terminal context, but runway-specific inference remains uncertain. If maintained runway data becomes incomplete, runway-specific inference is disabled rather than blocking monitoring. Published ATC procedures and official live runway assignments are not treated as physical truth.
 
 ## Alert-critical architecture
 
@@ -69,13 +59,17 @@ ADS-B ingestion
   -> canonical fresh observation
   -> deterministic motion history
   -> production trajectory / CPA / ETA
-  -> confidence + position uncertainty
-  -> terminal / route supporting evidence
+  -> v4.6 confidence + position uncertainty
+  -> existing terminal / route guard
   -> qualification / cancellation lifecycle
   -> Telegram alert
 
-                         -> turn-aware candidate (shadow only)
-                         -> Prediction Lab outcome evaluation
+ADS-B merged snapshots
+  -> bounded v4.7 terminal history
+  -> runway evidence + recent movement clusters
+  -> base/final/holding/go-around classification
+  -> airport candidate decision (shadow)
+  -> Prediction Lab / AGY evidence
 ```
 
 Runtime AI is outside this path.
@@ -84,12 +78,7 @@ Runtime AI is outside this path.
 
 Plane Alerts can combine public ADS-B providers with an optional local readsb/dump1090-compatible receiver. Local data is preferred when it is healthy and fresh, while bounded public-provider participation preserves fallback and wider coverage.
 
-Supported local receiver families include:
-
-- readsb
-- dump1090
-- dump1090-fa
-- ultrafeeder / tar1090 aircraft JSON
+Supported local receiver families include readsb, dump1090, dump1090-fa and ultrafeeder/tar1090 aircraft JSON.
 
 Example configuration:
 
@@ -121,13 +110,13 @@ Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle ch
 
 ## Prediction Lab
 
-Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. It is used to investigate CPA error, ETA stability, false or late cancellations, qualify/cancel oscillation, route-history mistakes, terminal-arrival behavior and shadow predictor performance.
+Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v4.7 adds structured terminal diagnostics including airport, terminal state, runway candidate/confidence/support, recent movement cluster, holding/go-around state, runway-aware historical support, live CPA and the shadow decision reason.
 
 Missing ADS-B coverage is unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 
 ## Photography intelligence
 
-Plane Alerts also provides deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. Photography and weather enrichment do not control alert qualification.
+Plane Alerts also provides deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. Photography, weather and contrail enrichment do not control alert qualification.
 
 ## Telegram commands
 
@@ -151,7 +140,7 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 ## Testing and release gates
 
-Pull-request CI validates the full test suite plus focused replay/provider/interaction suites and deterministic performance benchmarks:
+Pull-request CI runs compile/static validation, the complete pytest suite, preserved Error Museum/provider/interaction regressions, v4.7 airport replays and deterministic performance benchmarks.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
@@ -159,14 +148,14 @@ pytest -q
 pytest -q tests/test_error_museum_v42.py tests/test_v44_monitor_reliability_replay.py tests/test_eta_stability_hotfix.py
 pytest -q tests/test_v45_provider_resilience.py tests/test_v45_local_provider_area_recovery.py
 pytest -q tests/test_interaction_v46.py
+pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
 python scripts/benchmark_v42.py
 python scripts/benchmark_v45_provider_resilience.py
 python scripts/benchmark_v46_prediction.py
 python scripts/benchmark_v46_interaction.py
+python scripts/benchmark_v47_terminal.py
 pip check
 ```
-
-Regression coverage preserves the v4.4/v4.5 Error Museum, cancellation recovery, terminal-arrival and provider-resilience tests while adding stable/noisy/stale-turn, speed-dependent freshness, position uncertainty, route decay/clustering and Telegram callback latency cases.
 
 ## Deployment
 

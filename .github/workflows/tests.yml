@@ -51,6 +51,9 @@ jobs:
       - name: Run Telegram interaction latency regression suite
         run: pytest -q tests/test_interaction_v46.py
 
+      - name: Run v4.7 airport, runway and Error Museum suite
+        run: pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -62,6 +65,9 @@ jobs:
 
       - name: Benchmark v4.6 Telegram callback latency
         run: python scripts/benchmark_v46_interaction.py
+
+      - name: Benchmark v4.7 terminal intelligence
+        run: python scripts/benchmark_v47_terminal.py
 
       - name: Verify dependency consistency
         run: pip check

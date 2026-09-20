@@ -54,6 +54,21 @@ if "pytest" not in sys.modules:
     install_route_guard_v42()
     install_requalification_guard_v43()
 
+    # Keep the maintained LTFM geometry aligned with the current operational
+    # runway set verified from Türkiye AIP before terminal/runway inference is
+    # installed. Secondary airport datasets may include non-operational records.
+    from app.intelligence.runway_data_v47 import install_current_runway_data_v47
+
+    install_current_runway_data_v47()
+
+    # v4.7 extends the established route guard instead of replacing its
+    # predictor. Runway/base/final/holding conclusions stay shadow-only; strong
+    # observed go-around evidence may only release an obsolete landing-turn
+    # expectation so fresh live geometry can be evaluated again.
+    from app.intelligence.route_guard_v47 import install_route_guard_v47
+
+    install_route_guard_v47()
+
     # Final hot-path protection: cap individual provider latency and prevent
     # stale ADS-B positions from creating brand-new approach alerts.
     from app.worker.critical_timing import install_critical_timing_guards
