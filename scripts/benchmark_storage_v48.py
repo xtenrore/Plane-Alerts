@@ -11,9 +11,15 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from pathlib import Path
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from app.storage_runtime_v48 import StorageRuntimeV48
 
@@ -104,12 +110,12 @@ async def scenario(delay: float, fail: bool = False) -> dict[str, object]:
     db = SlowDB(delay, fail)
     flush = asyncio.create_task(runtime.flush_once(db))
     samples: list[float] = []
-    for _ in range(5000):
+    for index in range(5000):
         started = time.perf_counter()
         runtime.active_users()
         runtime.approach_states(1, {"abc123"})
         samples.append((time.perf_counter() - started) * 1000.0)
-        if _ % 250 == 0:
+        if index % 250 == 0:
             await asyncio.sleep(0)
     try:
         await flush
