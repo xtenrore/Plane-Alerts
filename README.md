@@ -1,72 +1,89 @@
 # Plane Alerts
 
-Plane Alerts is a Telegram-based aircraft-spotting alert system. It combines live ADS-B data with deterministic trajectory, closest-point-of-approach (CPA), ETA, route-history and terminal-arrival logic so alerts are based on whether an aircraft is genuinely expected to pass the observer rather than proximity alone.
+Plane Alerts is a Telegram-based aircraft-spotting alert system. It combines live ADS-B observations with deterministic trajectory, closest-point-of-approach (CPA), ETA, route-history and terminal-arrival logic so alerts are based on whether an aircraft is actually expected to pass the observer, not proximity alone.
 
-AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, pass/no-pass, filter matches, cancellation or notification timing.
+AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, pass/no-pass, aircraft filtering, cancellation or notification timing.
 
-Current release candidate: **Plane Alerts v4.3.2**
+**Current code version: Plane Alerts v4.4.0**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v4.3.2 — Bounded Next60 outcome matching
+## v4.4 — Reliability, observation truth and release integrity
 
-v4.3.2 fixes a Prediction Lab scoring bug that could match a Next60 forecast to the wrong occurrence of the same flight number on the same UTC day.
+v4.4 is primarily a reliability release. The main goal is to protect the five-second monitoring path and reduce false or late alerts without hiding genuine close passes.
 
-Outcome resolution is now bounded to the expectation's stored time window plus the existing 15-minute outcome grace on both sides. A spatially close route point several hours before or after the forecast can no longer become the forecast's observed CPA merely because the callsign and UTC date match.
+### Alert-critical path
 
-If the bounded interval contains no observed route sample, the outcome remains unresolved and `actual_pass` stays null. Missing or ambiguous ADS-B coverage therefore remains excluded from accuracy scoring instead of being converted into a hit or miss.
+The intended priority order is:
 
-Previously resolved outcomes are validated against the same bounded interval. A legacy result that used an out-of-window same-day occurrence is quarantined: its old values are retained in `legacy_*` forensic fields, while its scored pass result and timing error are cleared. This prevents AGY from continuing to learn from multi-hour timing errors created by the old resolver.
+```text
+HIGH PRIORITY
+ADS-B -> trajectory -> CPA -> qualification -> Telegram alert
 
-This is a Prediction Lab / Next60 shadow-audit correction only. It does not alter live trajectory, CPA, ETA, pass/no-pass, cancellation or Telegram alert timing.
+LOW PRIORITY
+route-history persistence/learning -> provider learning -> photography -> weather -> Prediction Lab -> auditing
+```
 
-## v4.3.1 — AGY tooling recovery
+Historical enrichment is supporting evidence. Live alerts do not wait for optional cold route-history reads when a safe fallback exists.
 
-v4.3.1 is a reliability update for the private Prediction Lab worker. Strict headless permissions remain unchanged, but an unsupported shell-style command no longer wastes a complete audit cycle.
+### Route-history isolation
 
-When Antigravity soft-denies a command, the supervisor now recovers the conversation identifier from the streamed result and immediately resumes that exact conversation with corrective tooling guidance. The audit keeps its context and continues without the previous multi-minute permission backoff.
+Cold or expired flight-number history is served from bounded memory when available and refreshed in the background. A true cold miss temporarily falls back to no historical veto rather than blocking ADS-B processing, trajectory calculation, CPA or notification.
 
-Recovery guidance becomes stricter after repeated mistakes. File inspection is redirected to the built-in read/list/search tools, while custom multi-step analysis is redirected to `write_to_file` plus one standard-library `python3` script. After repeated failures, inspection through `run_command` is disabled for the rest of that goal. Recovery is bounded to four turns before a short retry.
+The route-history path uses bounded single-flight refreshes, cache limits, TTLs, concurrency limits and I/O timeouts. Route-history writes are also handled through a fixed worker queue with deduplication and stale-work dropping. Historical learning can recover from a dropped optional sample on a later observation.
 
-The update does **not** add `command(*)`, `--dangerously-skip-permissions`, unrestricted shell access, `bash`, pipes or command chaining. The AGY health response also exposes the current same-conversation recovery mode and recovery count for production verification.
+### Terminal-arrival and genuine-pass handling
 
-## v4.3 — Profiles and aircraft filtering
+The terminal-arrival ensemble remains designed around the recurring false-alert case where an aircraft arriving at IST briefly points toward the observer before making its normal arrival turn. Destination, airport-convergence, route-history and multiple deterministic motion hypotheses may hold or cancel a projected alert when the evidence supports it.
 
-v4.3 adds a persistent Telegram-native profile and filtering system without moving configuration into a Mini App or website.
+At the same time, fresh physical observations remain authoritative. A genuinely observed close pass is not permanently hidden by old route expectations. Direct-presence recovery requires independent fresh observations rather than one stale or repeated sample.
 
-### Profiles
+Cancellation state is latched after repeated evidence to prevent qualify/cancel/requalify oscillation. Predictive evidence alone cannot immediately resurrect a confirmed cancellation, but a fresh physical entry into the configured radius releases the latch.
 
-`/profiles` opens the profile manager. Each profile stores an independent alert configuration, including location, radius, aircraft selection and advanced filtering rules.
+### Notification correctness
 
-Profiles can be created, activated, edited, renamed, duplicated and deleted. The active profile is persisted per user. Existing users are migrated safely into an initial `Default` profile using their current settings.
+A Plane Alerts encounter normally reuses one Telegram message. v4.4 therefore records lifecycle delivery events explicitly:
 
-The active profile is materialized into the existing runtime configuration collections so the monitoring worker does not need an additional profile lookup during every five-second cycle.
+- `first_notification`
+- `message_update`
+- `cancellation_update`
+- `passed_update`
+- `retry`
+- `failed_delivery`
 
-### Aircraft selection
+`notified_at` now represents the first successful logical alert and is not refreshed by ordinary message edits. Alert counts and lead-time analysis therefore do not treat a camera-ready edit, cancellation edit or passed update as a brand-new notification.
 
-The selector is data-driven and uses canonical ICAO type designators where available. It supports category browsing, pagination and search by type code, manufacturer, model and common aliases.
+Notification telemetry and photo snapshots are persisted after Telegram delivery through bounded background work. A failed cancellation delivery leaves the encounter active so the cancellation can be retried instead of silently closing the alert.
 
-Current groups include:
+### Five-second cadence protection
 
-- Widebodies
-- Narrowbodies
-- Regional jets
-- Turboprops
-- Cargo
-- Business jets
-- Military
-- General aviation
-- Helicopters
-- Classic / rare
-- Other
+The monitoring path includes:
 
-`All Aircraft` is a logical mode rather than a frozen list. Unknown or newly introduced aircraft types can still qualify when this mode is enabled.
+- shared regional ADS-B polling instead of one provider request per user
+- provider refresh deadlines and continuity snapshots
+- batched active-user configuration reads
+- batched approach-state reads
+- compiled profile filtering from already loaded configuration
+- provider learning moved off the live path
+- route-history reads and writes moved off the live path
+- bounded optional enrichment work
+- scheduler tolerance that avoids turning normal sub-second jitter into a roughly ten-second evaluation gap
 
-Cargo is treated as a role when operator metadata provides a better signal than airframe type alone, so passenger and freighter use of the same basic aircraft family do not have to be treated identically.
+Cached ADS-B continuity preserves the real position age. Reusing a snapshot never pretends stale data is fresh.
 
-### Advanced rules
+### Release identity
 
-Rules follow this deterministic inheritance order:
+`app/version.py` is the canonical Plane Alerts version source. Health, readiness, worker status and release reporting expose the same version and deployed commit.
+
+Railway deployment is triggered only after the `main` test workflow succeeds. The deploy workflow checks out that exact tested SHA and embeds the same SHA into the uploaded build, so a CLI deployment can still identify the code that is actually running.
+
+## Profiles and aircraft filtering
+
+`/profiles` manages persistent alert profiles. Each profile can hold an independent location, radius, aircraft selection and advanced filtering rules. Profiles can be created, activated, edited, renamed, duplicated and deleted.
+
+The aircraft selector is data-driven and supports category browsing and type search. `All Aircraft` is a logical mode, so newly introduced or unknown aircraft can still qualify when the user chooses to monitor everything.
+
+Advanced rules follow deterministic inheritance:
 
 ```text
 Profile defaults
@@ -74,104 +91,37 @@ Profile defaults
   -> Aircraft-specific override
 ```
 
-The most specific configured value wins. Missing override fields inherit their parent setting instead of copying entire configuration objects.
-
-Supported rule fields include:
-
-- enabled / disabled
-- minimum altitude
-- maximum altitude
-- airline/operator allow-list
-- airline/operator block-list
-- optional radius override
-
-Category and aircraft overrides can be reset to their parent settings.
-
-Airline input is normalized locally to canonical operator identities where possible. Common names, IATA codes, ICAO codes and aliases such as `Turkish`, `TK`, `THY` and `Turkish Airlines` resolve deterministically. Unknown three-letter ICAO operator codes can still be stored without adding an AI dependency.
-
-### Runtime integration
-
-The profile filter runs before the existing prediction engine:
-
-```text
-ADS-B aircraft
-  -> aircraft/category selection
-  -> operator rule
-  -> altitude rule
-  -> profile/category/aircraft override resolution
-  -> existing trajectory / CPA / ETA / route qualification
-  -> alert lifecycle
-  -> Telegram notification
-```
-
-Selecting an aircraft only expresses user interest. It never bypasses trajectory, CPA, route-history, terminal-arrival or confidence checks.
-
-Compiled filters are cached by configuration fingerprint. Per-aircraft evaluation is local and deterministic and introduces no database, network or AI request into the alert loop.
+Supported rule fields include enabled/disabled state, altitude limits, airline/operator allow and block lists, and optional radius overrides. Selecting an aircraft only expresses user interest; it never bypasses trajectory, CPA, route, arrival or confidence checks.
 
 ## Alert qualification
 
-Plane Alerts does not alert simply because an aircraft is nearby, points toward the observer, or is assigned to a particular destination.
+Plane Alerts can consider:
 
-The live engine can consider:
-
-- current position
+- aircraft and observer position
 - heading and groundspeed
 - altitude and vertical rate
-- position age and update gaps
+- position age and observation gaps
 - recent distance trend
 - turn rate and curvature
-- projected closest point of approach
-- time to CPA
-- route history for the transmitted flight number
-- destination and airport-convergence evidence when available
-- multiple future-path hypotheses around terminal arrivals
+- projected CPA and time to CPA
+- flight-number route history
+- destination/airport convergence when available
+- multiple plausible terminal-arrival futures
+- fresh observed physical presence
 
-Terminal-arrival aircraft can briefly point toward an observer before making a normal arrival turn. Plane Alerts therefore does not treat a single straight-line projection as sufficient evidence when stronger contradictory evidence exists.
-
-Fresh physical observations remain authoritative. Historical route information is supporting evidence and cannot hide a genuinely observed close pass.
-
-## Five-second monitoring cadence
-
-The monitoring path is designed around a nominal five-second cycle for priority users.
-
-Recent cadence protections include:
-
-- batched active-user location and preference reads
-- batched approach-state reads per user/cycle
-- bounded ADS-B provider refresh time
-- continuity snapshots that preserve data age instead of pretending stale data is fresh
-- provider-learning work moved off the alert-critical path
-- bounded scheduler tolerance so normal sub-second jitter does not create an accidental ten-second gap
-
-The v4.3 profile filter is compiled from the already loaded active preference document, so it does not add a new profile query inside the monitoring cycle.
-
-## Flight-number route history
-
-Historical routing is keyed by the transmitted flight number/callsign rather than aircraft registration. A recurring flight such as `THY1017` is compared with previous `THY1017` routes even when a different airframe operates it.
-
-Route storage and persistence are bounded so historical learning cannot consume the live alert path.
+A straight-line vector is not treated as sufficient evidence around terminal arrivals when stronger contradictory evidence exists.
 
 ## Prediction Lab
 
-Prediction Lab records forecasts and later compares them with observed outcomes. It is used to investigate:
+Prediction Lab records forecasts and later compares them with observed outcomes to investigate ETA stability, CPA error, false or late cancellations, qualify/cancel oscillation, route-history mistakes, terminal-arrival behavior and Next60 quality.
 
-- ETA accuracy and stability
-- projected versus observed CPA
-- missed close passes
-- false or late cancellations
-- qualify/cancel oscillation
-- route-history mistakes
-- terminal-arrival turns
-- Next60 timing quality
-- regressions introduced by new releases
+Missing ADS-B coverage is not counted as a hit or a miss. Outcome scoring requires suitable observed evidence. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 
-Missing ADS-B coverage is marked unresolved and excluded from accuracy scoring.
-
-`/next60` and `/forecast` show expected aircraft in 0–15, 15–30 and 30–60 minute windows. Short-range live geometry remains authoritative; longer-range historical expectations remain shadow-only until enough repeatable outcomes exist.
+`/next60` and `/forecast` display expected aircraft in 0–15, 15–30 and 30–60 minute windows. Short-range live geometry remains authoritative.
 
 ## Photography intelligence
 
-Plane Alerts also includes deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. This layer remains usable when AI services are unavailable.
+Plane Alerts includes deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. Photography and weather enrichment must not delay the alert-critical path, and deterministic fallbacks remain available when optional services fail.
 
 ## Telegram commands
 
@@ -193,21 +143,9 @@ Plane Alerts also includes deterministic spotting guidance for camera settings, 
 
 The private `/agy` console is owner-only and is not part of normal user configuration.
 
-## Persistence
+## Testing and release gates
 
-Production uses MongoDB. Profiles are isolated by `user_id` and an immutable profile identifier, with the active profile identifier stored on the user document.
-
-The migration is idempotent: existing `locations` and `preferences` data is copied into a default profile without deleting the original configuration. Activating a profile materializes its location and preferences into the existing runtime collections for backward compatibility.
-
-## Aircraft catalogue maintenance
-
-The aircraft registry is separate from Telegram menu code. Aircraft entries contain canonical type code, manufacturer, model, family, categories and aliases, so adding or refreshing catalogue data does not require rewriting callback logic.
-
-The project uses local registry data at runtime. A catalogue refresh should be generated outside the live alert loop from a reliable aviation reference source and committed as application data; live aircraft checks must not depend on an external type-designator API.
-
-## Testing
-
-The pull-request CI path performs:
+Pull-request CI runs:
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
@@ -216,27 +154,23 @@ python scripts/benchmark_v42.py
 pip check
 ```
 
-v4.3.2 adds regression coverage for wrong same-day occurrence matching, bounded observation windows, no-observation unresolved behavior, legacy outcome quarantine and preservation of valid in-window outcomes.
+The v4.4 release candidate passed **287 tests** before release documentation was finalized. Coverage includes fresh-observation confirmation, repeated-observation protection, cancellation latching and recovery, failed cancellation retry, stale ADS-B behavior, IST terminal-turn suppression, genuine close-pass recovery, notification update classification, cold route-history isolation, profiles, Prediction Lab outcome handling and existing Error Museum regressions.
 
-v4.3.1 adds regression coverage for real headless denial detection, conversation-ID recovery from complete and truncated stream events, escalating safe-tool guidance, strict-permission preservation and exact-conversation resume wiring.
-
-v4.3 includes regression coverage for profile migration, persistence, activation, deletion fallback, duplication, multi-user isolation, logical All Aircraft behavior, category/type selection, rule inheritance, altitude filtering, operator aliases, allow/block lists, unknown aircraft/operator behavior, search and hot-loop filter performance.
-
-Changes are not merged when CI fails.
+The terminal-arrival benchmark is also part of CI. Changes are not deployed merely because a branch exists; production deployment is gated on a successful `main` test workflow.
 
 ## Deployment
 
-Production runs on Railway with MongoDB persistence. The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation.
+Production runs on Railway with MongoDB persistence. The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and does not control live trajectory or notification decisions.
 
-Deployment is gated by the repository CI workflow. A branch or pull request is not treated as production simply because the code exists.
+The Railway AI agent is not used for deployment.
 
 ## Running locally
 
 Plane Alerts uses Python 3.11 and MongoDB.
 
 ```bash
-git clone https://github.com/xtenrore/Gemini-Telegram-Bot-Exprience.git
-cd Gemini-Telegram-Bot-Exprience
+git clone https://github.com/xtenrore/Plane-Alerts.git
+cd Plane-Alerts
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -252,10 +186,11 @@ app/
   bot/               Telegram commands, profile flows and messages
   intelligence/      trajectory, route history and terminal-arrival logic
   photography/       deterministic camera guidance
-  worker/            shared production polling and cadence guards
+  worker/            shared polling, lifecycle and cadence guards
 scripts/             deployment, verification and audit helpers
 tests/               unit, regression and replay tests
 docs/error_museum/   preserved production failure cases
+docs/releases/       release notes
 .github/workflows/   CI and Railway workflows
 ```
 
