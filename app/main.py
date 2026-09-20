@@ -1,4 +1,4 @@
-"""Plane Alerts v4.3 aircraft spotting intelligence, profiles, Prediction Lab, bot, and web server."""
+"""Plane Alerts v4.4 reliability runtime, profiles, Prediction Lab, bot, and web server."""
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +33,8 @@ from app.bot.profile_legacy import register_profile_legacy_handlers
 from app.config import settings
 from app.version import VERSION, COMMIT
 from app.worker import timing
+from app.worker.notification_telemetry import close as close_notification_telemetry
+from app.worker.notification_telemetry import snapshot as notification_telemetry_snapshot
 from app.worker.optional_work import enrichment
 from app.database import close_db, connect_db, get_db, system_status_col, users_col
 from app.logging_security import configure_secure_logging
@@ -56,8 +58,9 @@ def webhook_secret() -> str:
 async def _monitor_loop() -> None:
     """Run the ADS-B monitor in-process to fit small container memory limits."""
     logger.info(
-        "Integrated ADS-B worker enabled: base interval=%ds, shared polling + Plane Alerts v4.3 active",
+        "Integrated ADS-B worker enabled: base interval=%ds, shared polling + Plane Alerts v%s active",
         settings.poll_interval_seconds,
+        VERSION,
     )
     first_cycle_confirmed = False
     while True:
@@ -94,7 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global telegram_app
 
     configure_secure_logging()
-    logger.info("Initializing Plane Alerts v4.3 profiles + Prediction Lab + Spotting Intelligence...")
+    logger.info("Initializing Plane Alerts v%s reliability runtime...", VERSION)
 
     db_reconnect_task: asyncio.Task | None = None
     monitor_task: asyncio.Task | None = None
@@ -137,8 +140,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # Legacy setup/location entry points are routed into profile-aware
             # flows before both the profile state router and old catch-alls.
             register_profile_legacy_handlers(telegram_app)
-            # v4.3 profile handlers use a negative group so profile callbacks
-            # and profile text/location states are handled before legacy catch-alls.
+            # Profile handlers use a negative group so profile callbacks and
+            # profile text/location states are handled before legacy catch-alls.
             register_profile_handlers(telegram_app)
             register_handlers(telegram_app)
             register_next60_handlers(telegram_app)
@@ -188,7 +191,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    logger.info("Shutting down Plane Alerts v4.3...")
+    logger.info("Shutting down Plane Alerts v%s...", VERSION)
     if telegram_app:
         try:
             if telegram_app.updater and telegram_app.updater.running:
@@ -212,6 +215,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.prediction_lab_audit import audit_work
     await audit_work.close()
+    await close_notification_telemetry()
     await enrichment.close()
     await close_http_client()
     await close_db()
@@ -219,7 +223,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="Plane Alerts",
-    description="Deterministic real-time ADS-B spotting intelligence with v4.3 profiles and inherited aircraft filters",
+    description="Deterministic real-time ADS-B spotting intelligence with profiles, reliability guards and inherited aircraft filters",
     version=VERSION,
     lifespan=lifespan,
 )
@@ -295,7 +299,7 @@ async def health_check() -> dict[str, Any]:
         else:
             bot_status = "stopped"
 
-    worker_info: dict[str, Any] = {"status": "unknown"}
+    worker_info: dict[str, Any] = {"status": "unknown", "version": VERSION, "commit": COMMIT}
     sentinel_info: dict[str, Any] = {"enabled": True, "regions": len(EUROPE_SENTINELS), "mode": "shadow-only"}
     try:
         doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=1.0)
@@ -304,7 +308,8 @@ async def health_check() -> dict[str, Any]:
             is_stale = (time.time() - last_time) > (settings.poll_interval_seconds * 4)
             worker_info = {
                 "status": "active" if not is_stale else "stale",
-                "version": VERSION,
+                "version": doc.get("plane_version") or VERSION,
+                "commit": doc.get("plane_commit") or COMMIT,
                 "total_cycles": doc.get("total_cycles", 0),
                 "last_cycle_duration_ms": doc.get("last_cycle_duration_ms", 0.0),
                 "seconds_since_last_cycle": round(time.time() - last_time, 1),
@@ -319,7 +324,12 @@ async def health_check() -> dict[str, Any]:
         else:
             stats = get_cycle_stats()
             if stats.get("total_cycles", 0) > 0:
-                worker_info = {"status": "active (in-process)", "version": VERSION, "total_cycles": stats.get("total_cycles", 0)}
+                worker_info = {
+                    "status": "active (in-process)",
+                    "version": VERSION,
+                    "commit": COMMIT,
+                    "total_cycles": stats.get("total_cycles", 0),
+                }
         sentinel_doc = await asyncio.wait_for(system_status_col().find_one({"_id": "prediction_lab_sentinels"}), timeout=1.0)
         if sentinel_doc:
             sentinel_info.update({
@@ -336,8 +346,10 @@ async def health_check() -> dict[str, Any]:
         "status": "healthy" if db_ok and bot_status != "stopped" and worker_info.get("status", "").startswith("active") and get_cycle_stats().get("total_cycles", 0) > 0 else "degraded",
         "version": VERSION,
         "commit": COMMIT,
+        "release_match": worker_info.get("version") == VERSION and worker_info.get("commit") == COMMIT,
         "timing": timing.snapshot(),
         "optional_work": {"pending": len(enrichment.pending), "dropped": enrichment.dropped, "failures": enrichment.failures},
+        "notification_telemetry": notification_telemetry_snapshot(),
         "database_connected": db_ok,
         "bot_mode": bot_status,
         "uptime_seconds": round(time.time() - _server_start_time, 1),
@@ -371,6 +383,8 @@ async def stats() -> dict[str, Any]:
         doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=1.0)
         if doc:
             worker_metrics = {
+                "version": doc.get("plane_version") or VERSION,
+                "commit": doc.get("plane_commit") or COMMIT,
                 "shared_regions_last_cycle": doc.get("shared_regions_last_cycle", 0),
                 "provider_queries_last_cycle": doc.get("provider_queries_last_cycle", 0),
                 "shared_snapshot_cache_hits_last_cycle": doc.get("shared_snapshot_cache_hits_last_cycle", 0),
@@ -383,6 +397,7 @@ async def stats() -> dict[str, Any]:
         pass
     return {
         "version": VERSION,
+        "commit": COMMIT,
         "active_users": active_users,
         "total_users": total_users,
         "poll_interval_seconds": settings.poll_interval_seconds,
