@@ -7,10 +7,16 @@ operator asks for a page of recent aircraft decisions.
 """
 from __future__ import annotations
 
+from pathlib import Path
 import statistics
+import sys
 import time
 
-from app.observability_v50 import explain_prediction
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.observability_v50 import explain_prediction  # noqa: E402
 
 SAMPLE = {
     "user_id": 1,
