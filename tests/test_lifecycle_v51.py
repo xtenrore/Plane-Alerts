@@ -75,3 +75,35 @@ def test_altitude_relevance_setting_is_configurable_and_defaults_safe_on():
     assert monitor._altitude_relevance_enabled({}) is True
     assert monitor._altitude_relevance_enabled({"proximity_3d": {"altitude_relevance": True}}) is True
     assert monitor._altitude_relevance_enabled({"proximity_3d": {"altitude_relevance": False}}) is False
+
+
+def test_missing_observer_elevation_is_queued_as_optional_work(monkeypatch):
+    calls = []
+
+    def fake_get(key, factory, *, default=None, ttl=120.0):
+        calls.append((key, factory, default, ttl))
+        return default
+
+    monkeypatch.setattr(monitor.enrichment, "get", fake_get)
+    monitor._queue_observer_elevation(42, {"latitude": 41.1234, "longitude": 29.1234})
+    assert len(calls) == 1
+    key, factory, default, ttl = calls[0]
+    assert key[:2] == ("observer_elevation_v51", 42)
+    assert callable(factory)
+    assert default is None
+    assert ttl == 900
+
+
+def test_existing_observer_elevation_skips_optional_lookup(monkeypatch):
+    called = False
+
+    def fake_get(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(monitor.enrichment, "get", fake_get)
+    monitor._queue_observer_elevation(
+        42,
+        {"latitude": 41.1234, "longitude": 29.1234, "elevation_m": 88.0},
+    )
+    assert called is False
