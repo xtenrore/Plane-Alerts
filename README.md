@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.9.0**  
+**Current code version: Plane Alerts v5.0.0**  
 **Current prediction version: `4.7.3-terminal-delivery-landing-path`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,24 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v5.0 observability and explainability
+
+v5.0 makes the existing system understandable without creating a second predictor. The read-only `planealerts diagnostics` command explains recent aircraft decisions using bounded Prediction Lab evidence: trajectory state, current distance versus projected CPA, ETA, confidence, observation freshness, active/candidate ADS-B providers, route/terminal evidence and runway candidates where available.
+
+`planealerts metrics` shows persisted provider request/error/timeout counts, latency percentiles, last success, stale-position rate, circuit state, monitor timing, storage latency, bounded queue/drop state and notification telemetry. These diagnostics are attached to the monitor's existing system-status heartbeat, so v5.0 adds no ADS-B request and no additional synchronous Mongo write to the five-second path.
+
+Operator examples:
+
+```bash
+planealerts metrics
+planealerts diagnostics --aircraft 4bab24 --limit 5
+planealerts diagnostics --callsign THY5DQ --limit 10
+```
+
+User IDs are pseudonymized in the operator output. Credentials, provider endpoints and exact observer coordinates are not returned. Prediction Lab counts are explicitly described as sampled/rate-limited rather than as a count of every five-second calculation.
+
+The AGY sidecar is also storage-resilient in v5.0. Mongo reads have short bounded timeouts and query max-time. A network failure opens a cooldown circuit; while degraded, the bridge immediately reuses the last-known-good redacted context on `/agy-state` and continues independent `CHATGPT_HANDOFF_JSON` log delivery instead of repeatedly blocking and printing Mongo traceback storms.
 
 ## v4.9 project maturity and self-hosting
 
@@ -197,14 +215,15 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_self_hosting_v49.py
+pytest -q tests/test_observability_v50.py tests/test_agy_mongo_resilience_v50.py tests/test_agy_prediction_bridge.py
+python scripts/benchmark_v50_observability.py
 python scripts/benchmark_v49_doctor.py
 docker compose config --quiet
 pip check
@@ -233,12 +252,15 @@ docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
 
+After startup, operators can inspect bounded diagnostics from the same image with `planealerts metrics` or `planealerts diagnostics --aircraft <icao24>`.
+
 For native Python and Raspberry Pi/ARM64 instructions, health checks, backups, upgrades and rollback, see [`docs/self-hosting.md`](docs/self-hosting.md).
 
 ## Known limitations
 
 - A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
 - Optional analytics can be dropped under prolonged storage pressure and are counted in diagnostics.
+- AGY may temporarily serve last-known-good redacted context while its Atlas bridge circuit is degraded; that state is labeled and is not evidence of a successful or missed prediction.
 - Mutable SQLite persistence is not implemented.
 - The worldwide airport catalogue is community-maintained; maintained Plane Alerts overrides and fresh physical observations take precedence where stronger evidence exists.
 - Broader runway/history suppression remains shadow-only pending representative outcome evidence.
