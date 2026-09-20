@@ -1,8 +1,8 @@
-"""Plane Alerts v4.3 priority-aware shared ADS-B scheduling.
+"""Plane Alerts v4.4 priority-aware shared ADS-B scheduling.
 
-v4.3 keeps the proven shared-provider polling architecture while adding alert
+v4.4 keeps the proven shared-provider polling architecture while adding alert
 profiles and inherited aircraft filtering outside provider I/O. Priority users
-are still evaluated first and their shared region stays on the 5-second hot
+are still evaluated first and their shared region stays on the five-second hot
 cadence. Delay Time remains a minimum per-user evaluation delay, so
 administrators can slow individual users without multiplying provider calls.
 """
@@ -15,6 +15,7 @@ from typing import Any
 from app.agy_state import is_agy_console_active
 from app.config import settings
 from app.database import system_status_col, users_col
+from app.version import COMMIT, VERSION
 from app.worker import monitor, v35
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ def _region_order(region: v35.SharedPollRegion) -> tuple[int, float, str]:
 
 
 def _promote_priority_region(region_key: str, now_mono: float) -> None:
-    """Keep a priority region at the hot 5-second provider cadence."""
+    """Keep a priority region at the hot five-second provider cadence."""
     snapshot = v35._shared_poller._snapshots.get(region_key)
     if snapshot is not None:
         snapshot.hot_until_mono = max(snapshot.hot_until_mono, now_mono + v35.HOT_HOLD_S)
@@ -131,7 +132,8 @@ async def _record_v36_metrics(
         await system_status_col().update_one(
             {"_id": "monitor_worker"},
             {"$set": {
-                "plane_version": "4.3.0",
+                "plane_version": VERSION,
+                "plane_commit": COMMIT,
                 "shared_regions_last_cycle": region_count,
                 "provider_queries_last_cycle": provider_queries,
                 "shared_snapshot_cache_hits_last_cycle": cache_hits,
@@ -143,7 +145,7 @@ async def _record_v36_metrics(
             upsert=True,
         )
     except Exception:
-        logger.debug("Unable to persist v4.3 polling metrics", exc_info=True)
+        logger.debug("Unable to persist v4.4 polling metrics", exc_info=True)
 
 
 async def _monitor_cycle_v36() -> None:
@@ -261,4 +263,4 @@ async def run_monitor_cycle_v36() -> None:
     try:
         await _monitor_cycle_v36()
     except Exception:
-        logger.exception("Plane Alerts v4.3 monitor cycle failed unexpectedly")
+        logger.exception("Plane Alerts v4.4 monitor cycle failed unexpectedly")
