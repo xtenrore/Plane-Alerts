@@ -118,4 +118,6 @@ def test_provider_metrics_are_sanitized_before_existing_heartbeat_write(monkeypa
 
 def test_planealerts_launcher_routes_v5_operator_commands():
     launcher = Path("scripts/planealerts").read_text(encoding="utf-8")
-    assert "app.operator_cli_v50" in launcher
+    assert '{"diagnostics", "metrics"}' in launcher
+    assert "app.observability_v50" in launcher
+    assert "app.doctor_v49" in launcher
