@@ -35,8 +35,8 @@ class ContrailEstimate:
     formation: str
     persistence: str
     confidence: str
-    formation_score: int
-    persistence_score: int
+    formation_score: int | None
+    persistence_score: int | None
     reasons: list[str] = field(default_factory=list)
 
 @dataclass(slots=True)
@@ -102,13 +102,15 @@ def interpolate_flight_level(layers: Iterable[PressureLayer],altitude_m: float)-
     if lower.wind_direction_deg is not None or upper.wind_direction_deg is not None:
         a=float(lower.wind_direction_deg if lower.wind_direction_deg is not None else upper.wind_direction_deg); b=float(upper.wind_direction_deg if upper.wind_direction_deg is not None else lower.wind_direction_deg); wd=(a+((b-a+180)%360-180)*f)%360
     rhi=relative_humidity_over_ice(temp,rh); fields=sum(x is not None for x in (temp,rh,ws)); conf="High" if fields>=3 and lower is not upper else "Medium" if fields>=2 else "Low"
+    if not z1 <= altitude_m <= z2 or any(value is None for value in (lower.temperature_c, upper.temperature_c, lower.relative_humidity_pct, upper.relative_humidity_pct)):
+        conf = "Low"
     return FlightLevelAtmosphere(pressure,temp,rh,rhi,ws,wd,conf,(lower.pressure_hpa,upper.pressure_hpa))
 
 
 def estimate_contrail(atm: FlightLevelAtmosphere,aircraft_type: str="")->ContrailEstimate:
     """Conservative Schmidt-Appleman-inspired estimate plus ice-supersaturation persistence."""
     t,rhi,rh=atm.temperature_c,atm.ice_relative_humidity_pct,atm.relative_humidity_pct; reasons=[]
-    if t is None:return ContrailEstimate("Possible","Short-lived","Low",35,25,["Upper-air temperature unavailable"])
+    if t is None or rh is None:return ContrailEstimate("Unknown","Unknown","Uncertain",None,None,["Flight-level temperature and humidity are required; atmospheric data unavailable"])
     cold=clamp((-35.0-t)/20.0,0.0,1.0); moisture=0.45 if rh is None else clamp((rh-20.0)/65.0,0.0,1.0); formation_score=int(round(100*(0.72*cold+0.28*moisture)))
     reasons.append(f"very cold flight-level air ({t:.0f}°C)" if t<=-50 else f"cold flight-level air ({t:.0f}°C)" if t<=-40 else f"marginal flight-level temperature ({t:.0f}°C)")
     if rhi is not None:
@@ -143,6 +145,9 @@ def estimate_atmosphere(*,temperature_c: float|None,surface_temperature_c: float
     if precipitation_mm is not None and precipitation_mm>0:clarity-=18*clamp(precipitation_mm/4,0,1)
     if wind_kmh is not None and wind_kmh>8:clarity+=4*clamp((wind_kmh-8)/20,0,1)
     clarity_i=int(round(clamp(clarity,0,100))); label="Excellent" if clarity_i>=85 else "Good" if clarity_i>=70 else "Fair" if clarity_i>=52 else "Poor" if clarity_i>=32 else "Very Poor"
+    if all(value is None for value in (temperature_c, humidity_pct, visibility_m, wind_kmh, pm25, aerosol_optical_depth, precipitation_mm)):
+        heat, label = "Unknown", "Unknown"
+        reasons.append("Weather and air-quality data unavailable; conditions cannot be assessed.")
     return AtmosphereScore(heat,haze_i,clarity_i,label,reasons)
 
 

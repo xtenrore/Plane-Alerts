@@ -28,6 +28,7 @@ class CancellationLatch:
     last_seen_mono: float
     suppress_count: int = 0
     latched: bool = False
+    last_observation_at: float | None = None
 
 
 _states: "OrderedDict[tuple, CancellationLatch]" = OrderedDict()
@@ -56,6 +57,7 @@ def _apply_latch(
     encounter_was_qualified: bool,
     state: CancellationLatch,
     radius_km: float,
+    observed_at: float | None = None,
 ) -> route_mod.RouteGateResult:
     """Pure state transition used by runtime and regression tests."""
     if _fresh_inside(pred, radius_km):
@@ -71,6 +73,12 @@ def _apply_latch(
             qualification_state="CANCEL_LATCHED",
         )
 
+    if observed_at is not None:
+        if state.last_observation_at is not None and observed_at <= state.last_observation_at + 0.001:
+            return result
+        state.last_observation_at = observed_at
+    if bool(getattr(pred, "stale", False)):
+        return result
     if encounter_was_qualified and bool(result.suppress_alert):
         state.suppress_count += 1
         if state.suppress_count >= CANCEL_LATCH_CONFIRMATIONS:
@@ -99,6 +107,7 @@ async def evaluate_route_v43(
     alert_radius_km: float,
     current_samples: Iterable[Any],
 ) -> route_mod.RouteGateResult:
+    current_samples = list(current_samples)
     result = await v42.evaluate_route_v42(
         self,
         ac,
@@ -128,6 +137,7 @@ async def evaluate_route_v43(
         encounter_was_qualified=encounter_was_qualified,
         state=state,
         radius_km=alert_radius_km,
+        observed_at=max((float(item.timestamp) for item in current_samples if hasattr(item, "timestamp")), default=None),
     )
     _prune(now_mono)
     return result

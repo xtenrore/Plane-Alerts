@@ -133,7 +133,10 @@ def build_context_snapshot() -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     approach = _recent("approach_states", "updated_at", 350)
     notifications = _recent("notification_history", "notified_at", 350)
-    photos = _recent("photo_alert_snapshots", "captured_at", 350)
+    photos = _recent("photo_alert_snapshots", "captured_at", 150)
+    feedback = _recent("feedback", "updated_at", 150)
+    system = _recent("system_status", "updated_at", 20)
+    profiles = _recent("alert_profiles", "updated_at", 100, {"name": 0})
     route_history = _recent(
         "flight_route_samples",
         "updated_at",
@@ -156,12 +159,13 @@ def build_context_snapshot() -> dict[str, Any]:
         "generated_at": now.isoformat(),
         "purpose": (
             "Evidence for ETA accuracy, cancelled-alert accuracy, and next-hour spotting expectation-vs-reality audits. "
-            "This is deterministic production telemetry; AI is analysis-only."
+            "Also inspect Not Helpful feedback, profile/filter patterns, camera guidance, exceptions, provider failures and measured cadence. Findings are hypotheses requiring verified evidence, never production decisions. This is deterministic production telemetry; AI is analysis-only."
         ),
         "limitations": [
             "Current ADS-B acquisition is regional. Sparse 30-60 minute samples mean insufficient coverage, not good forecast accuracy.",
             "The public Next 60 Minutes forecast is not yet trusted; treat long-horizon records as shadow evidence only.",
             "Exact user/observer coordinates and credentials are intentionally removed.",
+            "Cancellation is a lifecycle event, not proof of a miss. Only coverage-validated outcomes marked outcome_version 4.4-bounded-observed-pass are suitable for new accuracy claims.",
         ],
         "summary": {
             "approach_state_records": len(approach),
@@ -176,6 +180,9 @@ def build_context_snapshot() -> dict[str, Any]:
         "approach_states": approach,
         "notification_history": notifications,
         "photo_alert_snapshots": photos,
+        "feedback": feedback,
+        "system_health": system,
+        "profile_configuration": profiles,
         "route_history_summary": route_history,
         "prediction_audit": audit,
     }

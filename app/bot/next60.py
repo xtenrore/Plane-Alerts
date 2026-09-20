@@ -161,7 +161,7 @@ def render_next60_native(
 
     if not visible:
         lines.append(
-            "\nNo next-hour candidates right now. Longer-range entries appear only when Plane? has enough route history."
+            "\nNo next-hour candidates right now. Longer-range entries appear only when Plane Alerts has enough route history."
         )
         return "\n".join(lines), None
 
@@ -283,6 +283,7 @@ async def _live_docs(user_id: int, now: datetime) -> list[dict[str, Any]]:
             "user_id": user_id,
             "active": True,
             "time_to_cpa_s": {"$gte": 0, "$lte": 3600},
+            "prediction_at": {"$gte": now - timedelta(seconds=20)},
         },
         {
             "_id": 0,
@@ -291,6 +292,7 @@ async def _live_docs(user_id: int, now: datetime) -> list[dict[str, Any]]:
             "aircraft_type": 1,
             "projected_closest_km": 1,
             "time_to_cpa_s": 1,
+            "prediction_at": 1,
             "confidence": 1,
             "stage": 1,
         },
@@ -301,6 +303,11 @@ async def _live_docs(user_id: int, now: datetime) -> list[dict[str, Any]]:
             eta_s = float(state.get("time_to_cpa_s"))
         except (TypeError, ValueError):
             continue
+        captured = _aware(state.get("prediction_at"))
+        if captured is None or not 0 <= (now - captured).total_seconds() <= 20:
+            continue
+        cpa_at = captured + timedelta(seconds=eta_s)
+        eta_s = (cpa_at - now).total_seconds()
         if eta_s < 0 or eta_s > 3600:
             continue
         icao = str(state.get("aircraft_icao24") or "").lower().strip()
@@ -310,7 +317,7 @@ async def _live_docs(user_id: int, now: datetime) -> list[dict[str, Any]]:
             "callsign": callsign,
             "aircraft_icao24": icao,
             "aircraft_type": aircraft_type,
-            "predicted_cpa_at": now + timedelta(seconds=eta_s),
+            "predicted_cpa_at": cpa_at,
             "prediction_horizon_s": eta_s,
             "predicted_closest_km": state.get("projected_closest_km"),
             "confidence": state.get("confidence") or "Low",

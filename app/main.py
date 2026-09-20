@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import hashlib
+import hmac
+from collections import OrderedDict
 import os
 import platform
 import time
@@ -28,6 +31,9 @@ from app.bot.next60_web import NEXT60_HTML, serialize_next60, validate_telegram_
 from app.bot.profile_handlers import register_profile_handlers
 from app.bot.profile_legacy import register_profile_legacy_handlers
 from app.config import settings
+from app.version import VERSION, COMMIT
+from app.worker import timing
+from app.worker.optional_work import enrichment
 from app.database import close_db, connect_db, get_db, system_status_col, users_col
 from app.logging_security import configure_secure_logging
 from app.photography.telegram import register_photography_handlers
@@ -38,6 +44,13 @@ from app.worker.v36 import run_monitor_cycle_v36 as run_monitor_cycle
 logger = logging.getLogger(__name__)
 telegram_app: Application | None = None
 _server_start_time: float = time.time()
+_recent_updates: OrderedDict[int, float] = OrderedDict()
+
+
+def webhook_secret() -> str:
+    explicit = settings.webhook_secret.strip()
+    token = settings.telegram_bot_token.strip()
+    return explicit or (hmac.new(token.encode(), b"plane-alerts-telegram-webhook-v1", hashlib.sha256).hexdigest() if token else "")
 
 
 async def _monitor_loop() -> None:
@@ -48,7 +61,7 @@ async def _monitor_loop() -> None:
     )
     first_cycle_confirmed = False
     while True:
-        cycle_started = time.monotonic()
+        cycle_started = timing.start_cycle()
         try:
             get_db()
             await run_monitor_cycle()
@@ -68,6 +81,9 @@ async def _monitor_loop() -> None:
         except Exception:
             logger.exception("Integrated ADS-B monitor iteration failed")
 
+        timing.finish_cycle(cycle_started)
+        if get_cycle_stats().get("total_cycles", 0) % 12 == 0:
+            logger.info("monitor_timing %s", timing.snapshot())
         elapsed = time.monotonic() - cycle_started
         delay = max(0.25, float(settings.poll_interval_seconds) - elapsed)
         await asyncio.sleep(delay)
@@ -113,7 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     bot_token = settings.telegram_bot_token.strip()
     if bot_token and bot_token != "your_bot_token_from_botfather":
         try:
-            telegram_app = Application.builder().token(bot_token).build()
+            telegram_app = Application.builder().token(bot_token).update_queue(asyncio.Queue(maxsize=256)).concurrent_updates(False).build()
             # Private owner-only AGY bridge runs in an earlier handler group so
             # OAuth codes and interactive AGY input are never mistaken for
             # ordinary Plane Alerts setup text.
@@ -157,14 +173,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 logger.info("Registering Telegram webhook: %s", full_webhook_url)
                 await telegram_app.bot.set_webhook(
                     url=full_webhook_url,
-                    secret_token=settings.webhook_secret if settings.webhook_secret else None,
-                    drop_pending_updates=True,
+                    secret_token=webhook_secret(),
+                    drop_pending_updates=False,
                 )
             else:
                 logger.info("Starting Telegram long polling.")
-                await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+                await telegram_app.bot.delete_webhook(drop_pending_updates=False)
                 if telegram_app.updater:
-                    await telegram_app.updater.start_polling(drop_pending_updates=True)
+                    await telegram_app.updater.start_polling(drop_pending_updates=False)
         except Exception as exc:
             logger.exception("Failed to initialize Telegram bot: %s", exc)
     else:
@@ -194,6 +210,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             except Exception:
                 logger.exception("Background task failed during shutdown")
 
+    from app.prediction_lab_audit import audit_work
+    await audit_work.close()
+    await enrichment.close()
     await close_http_client()
     await close_db()
 
@@ -201,13 +220,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Plane Alerts",
     description="Deterministic real-time ADS-B spotting intelligence with v4.3 profiles and inherited aircraft filters",
-    version="4.3.0",
+    version=VERSION,
     lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -264,7 +283,7 @@ async def health_check() -> dict[str, Any]:
     db_ok = False
     try:
         db = get_db()
-        await db.command("ping")
+        await asyncio.wait_for(db.command("ping"), timeout=1.0)
         db_ok = True
     except Exception:
         pass
@@ -279,13 +298,13 @@ async def health_check() -> dict[str, Any]:
     worker_info: dict[str, Any] = {"status": "unknown"}
     sentinel_info: dict[str, Any] = {"enabled": True, "regions": len(EUROPE_SENTINELS), "mode": "shadow-only"}
     try:
-        doc = await system_status_col().find_one({"_id": "monitor_worker"})
+        doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=1.0)
         if doc:
             last_time = doc.get("last_cycle_time", 0.0)
             is_stale = (time.time() - last_time) > (settings.poll_interval_seconds * 4)
             worker_info = {
                 "status": "active" if not is_stale else "stale",
-                "version": doc.get("plane_version", "4.3.0"),
+                "version": VERSION,
                 "total_cycles": doc.get("total_cycles", 0),
                 "last_cycle_duration_ms": doc.get("last_cycle_duration_ms", 0.0),
                 "seconds_since_last_cycle": round(time.time() - last_time, 1),
@@ -300,8 +319,8 @@ async def health_check() -> dict[str, Any]:
         else:
             stats = get_cycle_stats()
             if stats.get("total_cycles", 0) > 0:
-                worker_info = {"status": "active (in-process)", "version": "4.3.0", "total_cycles": stats.get("total_cycles", 0)}
-        sentinel_doc = await system_status_col().find_one({"_id": "prediction_lab_sentinels"})
+                worker_info = {"status": "active (in-process)", "version": VERSION, "total_cycles": stats.get("total_cycles", 0)}
+        sentinel_doc = await asyncio.wait_for(system_status_col().find_one({"_id": "prediction_lab_sentinels"}), timeout=1.0)
         if sentinel_doc:
             sentinel_info.update({
                 "last_region": sentinel_doc.get("last_region"),
@@ -314,8 +333,11 @@ async def health_check() -> dict[str, Any]:
         pass
 
     return {
-        "status": "healthy" if db_ok else "degraded",
-        "version": "4.3.0",
+        "status": "healthy" if db_ok and bot_status != "stopped" and worker_info.get("status", "").startswith("active") and get_cycle_stats().get("total_cycles", 0) > 0 else "degraded",
+        "version": VERSION,
+        "commit": COMMIT,
+        "timing": timing.snapshot(),
+        "optional_work": {"pending": len(enrichment.pending), "dropped": enrichment.dropped, "failures": enrichment.failures},
         "database_connected": db_ok,
         "bot_mode": bot_status,
         "uptime_seconds": round(time.time() - _server_start_time, 1),
@@ -346,7 +368,7 @@ async def stats() -> dict[str, Any]:
     try:
         active_users = await users_col().count_documents({"setup_complete": True})
         total_users = await users_col().count_documents({})
-        doc = await system_status_col().find_one({"_id": "monitor_worker"})
+        doc = await asyncio.wait_for(system_status_col().find_one({"_id": "monitor_worker"}), timeout=1.0)
         if doc:
             worker_metrics = {
                 "shared_regions_last_cycle": doc.get("shared_regions_last_cycle", 0),
@@ -360,7 +382,7 @@ async def stats() -> dict[str, Any]:
     except Exception:
         pass
     return {
-        "version": "4.3.0",
+        "version": VERSION,
         "active_users": active_users,
         "total_users": total_users,
         "poll_interval_seconds": settings.poll_interval_seconds,
@@ -380,17 +402,40 @@ async def stats() -> dict[str, Any]:
 async def telegram_webhook(request: Request) -> Response:
     if not telegram_app:
         return Response(content="Bot not initialized", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-    if settings.webhook_secret:
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != settings.webhook_secret:
-            return Response(content="Unauthorized", status_code=status.HTTP_401_UNAUTHORIZED)
+    secret = webhook_secret()
+    supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not secret or not hmac.compare_digest(supplied, secret):
+        return Response(content="Unauthorized", status_code=401)
     try:
         data = await request.json()
+        if not isinstance(data, dict) or type(data.get("update_id")) is not int:
+            return Response(content="Invalid update", status_code=400)
+        update_id = data["update_id"]
+        now = time.monotonic()
+        while _recent_updates and (now - next(iter(_recent_updates.values())) > 3600 or len(_recent_updates) > 4096):
+            _recent_updates.popitem(last=False)
+        if update_id in _recent_updates:
+            return Response(status_code=200)
         update = Update.de_json(data, telegram_app.bot)
-        await telegram_app.process_update(update)
-        return Response(status_code=status.HTTP_200_OK)
-    except Exception as exc:
-        logger.exception("Error processing Telegram webhook: %s", exc)
-        return Response(content="Internal Error", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # PTB's single consumer preserves setup-state order across webhook
+        # requests; admission is bounded and Telegram retries on saturation.
+        telegram_app.update_queue.put_nowait(update)
+        _recent_updates[update_id] = now
+        return Response(status_code=200)
+    except asyncio.QueueFull:
+        logger.warning("telegram_update_queue_full")
+        return Response(content="Busy", status_code=503)
+    except (ValueError, TypeError, KeyError):
+        return Response(content="Invalid update", status_code=400)
+    except Exception:
+        logger.exception("telegram_webhook_failed")
+        return Response(content="Internal Error", status_code=500)
+
+
+@app.get("/ready")
+async def readiness() -> Response:
+    health = await health_check()
+    return JSONResponse(health, status_code=200 if health["status"] == "healthy" else 503)
 
 
 if __name__ == "__main__":

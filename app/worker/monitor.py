@@ -5,6 +5,8 @@ import asyncio
 import logging
 import time
 import uuid
+import hashlib
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -31,6 +33,11 @@ from app.photography.conditions import get_current_conditions
 from app.photography.solar import get_solar_context
 from app.worker.geo import bounding_box, haversine, km_to_nautical_miles, merge_bounding_boxes
 from app.worker.notifications import send_or_update_approach
+from app.worker.optional_work import enrichment
+from app.worker.timing import phase
+from app.photography.models import WeatherContext
+from app.version import PREDICTION_VERSION
+from app.prediction_lab_audit import enqueue_snapshot, enqueue_outcome
 
 logger = logging.getLogger(__name__)
 _provider_manager = ProviderManager()
@@ -152,7 +159,8 @@ def _watched(prefs: dict) -> set[str]:
 async def _environment(user: dict, ac, pred, spot: dict) -> dict:
     lat = float(user["location"]["latitude"])
     lon = float(user["location"]["longitude"])
-    weather = await get_current_conditions(lat, lon)
+    weather = enrichment.get(("weather", round(lat, 3), round(lon, 3)), lambda: get_current_conditions(lat, lon), ttl=120)
+    weather = weather or WeatherContext(timezone="UTC", source_errors=["Weather refresh pending or unavailable"])
     solar = get_solar_context(lat, lon, weather.timezone, subject_latitude=ac.latitude, subject_longitude=ac.longitude)
     atm = estimate_atmosphere(
         temperature_c=weather.temperature_c,
@@ -170,7 +178,9 @@ async def _environment(user: dict, ac, pred, spot: dict) -> dict:
     contrail = None
     upper_error = None
     if ac.altitude is not None:
-        layers, upper_error = await get_upper_air_profile(float(ac.latitude), float(ac.longitude), float(ac.altitude))
+        upper = enrichment.get(("upper", round(float(ac.latitude)*4)/4, round(float(ac.longitude)*4)/4),
+            lambda: get_upper_air_profile(float(ac.latitude), float(ac.longitude), float(ac.altitude)), ttl=900)
+        layers, upper_error = upper or ([], "Upper-air refresh pending or unavailable")
         fl = interpolate_flight_level(layers, float(ac.altitude))
         contrail = estimate_contrail(fl, ac.aircraft_type)
     c = celestial_positions(lat, lon)
@@ -191,7 +201,7 @@ async def _environment(user: dict, ac, pred, spot: dict) -> dict:
 
 
 async def _camera(user_id: int, ac, pred, user: dict, spot: dict, env: dict | None):
-    doc = await get_db()["camera_profiles"].find_one({"user_id": user_id})
+    doc = enrichment.get(("camera", user_id), lambda: get_db()["camera_profiles"].find_one({"user_id": user_id}), ttl=15)
     if not doc or not doc.get("camera"):
         return None
     cam = SimpleNamespace(**doc["camera"])
@@ -322,6 +332,8 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
     lon = float(loc["longitude"])
     states = get_db()["approach_states"]
     count = 0
+    config_key = hashlib.sha256(json.dumps({"location": {k: loc.get(k) for k in ("latitude", "longitude", "radius_km")},
+        "profile": prefs.get("active_profile_id"), "filter": {k: v for k, v in prefs.items() if k not in {"_id", "updated_at", "created_at"}}}, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     for ac in aircraft_list:
         if not ac.has_position:
@@ -334,7 +346,8 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             continue
         hist = _history.get(ac.icao24)
         try:
-            pred = predict_trajectory(hist, lat, lon, radius, now=time.time())
+            with phase("prediction"):
+                pred = predict_trajectory(hist, lat, lon, radius, now=time.time())
         except Exception:
             logger.exception("cpa_calculation_failed icao=%s user=%s", ac.icao24, uid)
             continue
@@ -350,6 +363,15 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             pred.confidence,
         )
         old = await states.find_one({"user_id": uid, "aircraft_icao24": ac.icao24})
+        old_time = (old or {}).get("updated_at")
+        if old_time and old_time.tzinfo is None:
+            old_time = old_time.replace(tzinfo=timezone.utc)
+        if old and ((old.get("config_key") and old["config_key"] != config_key)
+                    or (old.get("route_callsign") and ac.callsign and old["route_callsign"] != ac.callsign)
+                    or (old_time and (datetime.now(timezone.utc) - old_time).total_seconds() > 1800)):
+            old = None
+        observed_at = max((sample.timestamp for sample in hist), default=0.0)
+        fresh_observation = observed_at > float((old or {}).get("last_observation_at") or 0.0) + 0.001
 
         if old and not old.get("active") and old.get("stage") == "passed":
             passed_at = old.get("updated_at")
@@ -379,13 +401,17 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 )
                 route_suppressed = route_gate.suppress_alert
             except Exception:
+                # An unavailable gate cannot validate a new predictive alert.
+                # Preserve active messages through outages; direct observation wins.
+                route_suppressed = not active and pred.current_distance_km > radius
                 # Route enrichment must never break the deterministic live CPA loop.
                 logger.exception("route_gate_failed callsign=%s icao=%s user=%s", ac.callsign, ac.icao24, uid)
 
         qualifies = live_qualifies and not route_suppressed
-        route_state = {}
+        route_state = {"config_key": config_key, "last_observation_at": observed_at,
+                       "prediction_version": PREDICTION_VERSION, "route_callsign": ac.callsign}
         if route_gate is not None:
-            route_state = {
+            route_state.update({
                 "route_callsign": route_gate.callsign,
                 "route_destination": route_gate.destination_code,
                 "route_history_days": route_gate.history_days,
@@ -393,7 +419,15 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 "route_similarity_km": route_gate.similarity_km,
                 "route_gate_reason": route_gate.reason,
                 "route_expected_turn_pending": route_gate.expected_turn_pending,
-            }
+                **{key: getattr(route_gate, key, None) for key in ("qualification_state", "terminal_arrival_state", "ensemble_pass_score", "live_pass_score", "expected_turn_state", "airport_path_cpa_km")},
+            })
+
+        enqueue_snapshot(user_id=uid, aircraft=ac, prediction=pred, alert_radius_km=radius,
+            qualifies=qualifies, route_suppressed=route_suppressed,
+            route_reason=route_gate.reason if route_gate else "",
+            diagnostics={**route_state, "heading": ac.heading, "speed_mps": ac.velocity,
+                "turn_rate_deg_s": pred.turn_rate_deg_s, "sample_count": len(hist),
+                "sample_age_s": max(0.0, time.time() - observed_at), "fresh_observation": fresh_observation})
 
         if route_suppressed:
             logger.info(
@@ -407,17 +441,20 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             )
 
         if old and old.get("message_id") and old.get("active") and (pred.already_passed or pred.state == "Passed"):
-            await send_or_update_approach(
+            delivered = await send_or_update_approach(
                 uid, ac, pred, "passed", old.get("notification_id", "") or "", old.get("message_id"),
                 previous_cpa_km=stable_previous_cpa,
                 observed_closest_km=observed_closest,
                 prediction_changed=changed,
             )
+            if not delivered:
+                continue
             await states.update_one(
                 {"_id": old["_id"]},
                 {"$set": {
                     "active": False,
                     "stage": "passed",
+                    "message_id": delivered,
                     "updated_at": datetime.now(timezone.utc),
                     "projected_closest_km": pred.projected_closest_km,
                     "observed_closest_km": observed_closest,
@@ -425,27 +462,34 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                     **route_state,
                 }, "$unset": {"candidate_projected_closest_km": "", "candidate_state": ""}},
             )
+            enqueue_outcome(user_id=uid, aircraft=ac, outcome="passed", observed_closest_km=observed_closest, final_prediction=pred)
             logger.info("approach_passed user=%s icao=%s observed_distance=%.2f", uid, ac.icao24, observed_closest)
             continue
 
         if not qualifies:
-            candidate = bool(active and (route_suppressed or should_cancel_active_alert(pred, stable_previous_cpa, radius)))
+            candidate = bool(active and not pred.stale and (route_suppressed or should_cancel_active_alert(pred, stable_previous_cpa, radius)))
             confirmed, confirmation_count = advance_cancellation_confirmation(
                 int((old or {}).get("cancel_confirmation_count") or 0), candidate
             )
 
+            if not fresh_observation or pred.stale:
+                confirmation_count = int((old or {}).get("cancel_confirmation_count") or 0)
+                confirmed = candidate and confirmation_count >= 3
             if active and confirmed:
-                await send_or_update_approach(
+                delivered = await send_or_update_approach(
                     uid, ac, pred, "cancelled", old.get("notification_id", "") or "", old.get("message_id"),
                     previous_cpa_km=stable_previous_cpa,
                     observed_closest_km=observed_closest,
                     prediction_changed=True,
                 )
+                if not delivered:
+                    continue
                 await states.update_one(
                     {"_id": old["_id"]},
                     {"$set": {
                         "active": False,
                         "stage": "cancelled",
+                        "message_id": delivered,
                         "updated_at": datetime.now(timezone.utc),
                         "projected_closest_km": pred.projected_closest_km,
                         "observed_closest_km": observed_closest,
@@ -453,6 +497,9 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                         **route_state,
                     }, "$unset": {"candidate_projected_closest_km": "", "candidate_state": ""}},
                 )
+                enqueue_outcome(user_id=uid, aircraft=ac, outcome="cancelled", observed_closest_km=observed_closest,
+                    final_prediction=pred, previous_projected_closest_km=stable_previous_cpa, route_suppressed=route_suppressed,
+                    route_reason=route_gate.reason if route_gate else "")
                 logger.info(
                     "approach_alert_cancelled user=%s icao=%s old_cpa=%s new_cpa=%.2f confirmations=%d route_veto=%s",
                     uid,
@@ -533,6 +580,7 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 "projected_closest_km": pred.projected_closest_km,
                 "observed_closest_km": observed_closest,
                 "time_to_cpa_s": pred.time_to_cpa_s,
+                "prediction_at": datetime.now(timezone.utc),
                 "confidence": pred.confidence,
                 "cancel_confirmation_count": 0,
                 "updated_at": datetime.now(timezone.utc),

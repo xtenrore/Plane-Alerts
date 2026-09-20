@@ -80,7 +80,8 @@ def _cached_route(
         if route is not None
         else _NEGATIVE_CACHE_S
     )
-    return route, (time.monotonic() - cached[0] < ttl)
+    fresh = time.monotonic() - cached[0] < ttl
+    return (route if fresh else None), fresh
 
 
 async def _route_refresh(self: route_mod.RouteHistoryService, ac: Any) -> None:
@@ -102,6 +103,10 @@ def _schedule_route_refresh(self: route_mod.RouteHistoryService, ac: Any) -> Non
     tasks: dict[str, asyncio.Task] = getattr(self, "_route_guard_v2_tasks", {})
     existing = tasks.get(key)
     if existing is not None and not existing.done():
+        return
+
+    if len(tasks) >= 32:
+        logger.warning("route_refresh_saturated pending=%d", len(tasks))
         return
 
     task = asyncio.create_task(_route_refresh(self, ac), name=f"route-refresh:{key}")

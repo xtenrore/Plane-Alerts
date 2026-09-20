@@ -110,9 +110,10 @@ class TrajectoryHistoryStore:
     Multiple public ADS-B feeds can briefly disagree on the same ICAO24. A bad
     single point must never become the seed for a completely different CPA.
     """
-    def __init__(self, max_age_s: float = 120.0, max_samples: int = 64) -> None:
+    def __init__(self, max_age_s: float = 120.0, max_samples: int = 64, max_aircraft: int = 8192) -> None:
         self.max_age_s = max_age_s
         self.max_samples = max_samples
+        self.max_aircraft = max_aircraft
         self._data: dict[str, deque[HistorySample]] = defaultdict(lambda: deque(maxlen=max_samples))
 
     @staticmethod
@@ -129,6 +130,8 @@ class TrajectoryHistoryStore:
         key = (icao24 or "").lower().strip()
         if not key:
             return [sample]
+        if key not in self._data and len(self._data) >= self.max_aircraft:
+            self._data.pop(next(iter(self._data)))
         q = self._data[key]
         if q and not self.transition_is_plausible(q[-1], sample):
             return list(q)

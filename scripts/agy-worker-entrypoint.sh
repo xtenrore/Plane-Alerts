@@ -138,7 +138,8 @@ if enable:
     tooling_policy_version = 3
     if int(supervisor.get('tooling_policy_version', 0) or 0) != tooling_policy_version:
         supervisor['tooling_policy_version'] = tooling_policy_version
-        supervisor['next_run_at'] = 0
+        if supervisor.get('last_status') != 'quota_wait':
+            supervisor['next_run_at'] = 0
 
     if not was_enabled:
         supervisor['next_run_at'] = 0

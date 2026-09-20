@@ -50,7 +50,23 @@ async def get_upper_air_profile(latitude:float,longitude:float,altitude_m:float|
         cached=_CACHE.get(key)
         if cached and cached.expires_at>now:return list(cached.layers),cached.error
         task=_INFLIGHT.get(key)
-        if task is None:task=asyncio.create_task(_fetch(latitude,longitude)); _INFLIGHT[key]=task
-    entry=await task
-    async with _LOCK:_CACHE[key]=entry; _INFLIGHT.pop(key,None)
+        if task is None:
+            if len(_INFLIGHT) >= 8:
+                return [], "Upper-air refresh busy"
+            task=asyncio.create_task(_fetch(latitude,longitude)); _INFLIGHT[key]=task
+            def completed(done):
+                _INFLIGHT.pop(key, None)
+                if not done.cancelled() and done.exception() is None:
+                    _CACHE[key] = done.result()
+                    while len(_CACHE) > 256:
+                        _CACHE.pop(next(iter(_CACHE)))
+            task.add_done_callback(completed)
+    # A timed-out caller must not cancel the shared refresh for other users.
+    entry=await asyncio.shield(task)
+    async with _LOCK:
+        _CACHE[key]=entry
+        if _INFLIGHT.get(key) is task:
+            _INFLIGHT.pop(key,None)
+        while len(_CACHE) > 256:
+            _CACHE.pop(next(iter(_CACHE)))
     return list(entry.layers),entry.error

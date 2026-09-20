@@ -191,6 +191,9 @@ async def materialize_profile(profile: dict[str, Any]) -> None:
     config = deepcopy(profile.get("config") or {})
     prefs = dict(config.get("preferences") or {})
     loc = dict(config.get("location") or {})
+    revision = str(uuid.uuid4())
+    prefs["config_revision"] = revision
+    loc["config_revision"] = revision
     prefs["user_id"] = uid
     prefs["active_profile_id"] = profile["profile_id"]
     prefs["updated_at"] = _now()
@@ -210,12 +213,12 @@ async def activate_profile(user_id: int, profile_id: str) -> dict[str, Any]:
     profile = await get_profile(user_id, profile_id)
     if not profile:
         raise KeyError("profile not found")
+    await materialize_profile(profile)
     await users_col().update_one(
         {"user_id": int(user_id)},
         {"$set": {"active_profile_id": profile_id, "last_active": _now()}},
         upsert=True,
     )
-    await materialize_profile(profile)
     return profile
 
 

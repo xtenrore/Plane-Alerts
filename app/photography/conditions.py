@@ -178,4 +178,6 @@ async def get_current_conditions(latitude: float, longitude: float) -> WeatherCo
     ttl = settings.photography_conditions_cache_seconds if sources_ok else 15
     async with _CACHE_LOCK:
         _CACHE[key] = _CacheEntry(expires_at=time.monotonic() + ttl, value=result)
+        while len(_CACHE) > 256:
+            _CACHE.pop(next(iter(_CACHE)))
     return result.model_copy(deep=True)
