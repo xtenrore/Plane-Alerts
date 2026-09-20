@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.7.1**
+**Current code version: Plane Alerts v4.7.2**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
@@ -26,15 +26,17 @@ A single noisy ADS-B heading is not enough to establish a turn. Terminal evidenc
 
 Airport context produces an explicit uncertainty penalty for diagnostics. Fresh live geometry remains authoritative: being near an airport or having that airport as the route destination is never an automatic suppression rule.
 
+v4.7.2 adds one narrow authoritative **initial qualification hold** for the recurring terminal-arrival false-alert class. Before the first Telegram notification only, a candidate may be held when fresh observations jointly show a strong low/slow/descending airport arrival and the temporary straight-line observer CPA conflicts with that terminal evidence. Destination metadata such as `ISL` or `IST` is supporting evidence only and cannot suppress an alert by itself. The hold releases for stale/insufficient evidence, go-around or missed approach, a trajectory change that disproves the expected turn, a runway continuation that can physically enter the observer radius, or fresh physical entry into the configured radius. Once released for an encounter, the v4.7.2 initial hold cannot re-arm to cancel an already-visible alert.
+
 ### Worldwide airport and runway data
 
-v4.7.1 adds a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot. The complete airport catalogue is compiled during the production image build into `data/aviation/compiled/global_airports.sqlite3`; runtime monitoring performs local read-only SQLite lookups and does not call OurAirports or MongoDB for static airport/runway reference data.
+v4.7.1 added a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot. The complete airport catalogue is compiled during the production image build into `data/aviation/compiled/global_airports.sqlite3`; runtime monitoring performs local read-only SQLite lookups and does not call OurAirports or MongoDB for static airport/runway reference data.
 
 The global snapshot includes large, medium and small airports, heliports, seaplane bases, local-code-only facilities and closed facilities represented by the source. Closed facilities remain in the reference database but are excluded from normal nearby-airport inference. Runway rows are preserved even when the source lacks endpoint geometry; Plane Alerts only uses runway-relative prediction when the required coordinates/headings are present.
 
 Airport lookups use a bounded spatial-cell index and a small runtime cache instead of loading the worldwide catalogue into memory or scanning every airport in the five-second loop.
 
-Maintained official overrides take precedence over the global source. LTFM/IST uses the verified operational runway set maintained by Plane Alerts, so a generic upstream record cannot silently reintroduce stale or planned runway geometry.
+Maintained official overrides take precedence over the global source. LTFM/IST uses the verified operational runway set maintained by Plane Alerts, so a generic upstream record cannot silently reintroduce stale or planned runway geometry. v4.7.2 also verifies the compiled LTBA/ISL identity and active runway geometry as a release gate because Atatürk arrivals are a primary Error Museum case.
 
 ### Runway geometry and inference
 
@@ -46,11 +48,11 @@ Recent airport movement clusters are bounded, deduplicated per aircraft and time
 
 ### Shadow validation and live safety
 
-New runway/base/final/holding suppression hypotheses remain **shadow-only**. They are recorded in Prediction Lab and do not control live qualification or cancellation.
+Broad runway/base/final/holding suppression hypotheses remain **shadow-only**. They are recorded in Prediction Lab and do not directly control live qualification or cancellation.
 
-One narrow fail-safe is authoritative: if an aircraft was being held only because a landing turn was expected, strong observed go-around or missed-approach evidence can invalidate that old expectation and return control to the fresh live trajectory. The confirmed cancellation latch is not bypassed.
+The v4.7.2 initial terminal-arrival hold is deliberately narrower: it can delay only the first notification when several fresh physical arrival signals agree. It is not a destination-airport veto and it is encounter-scoped. Strong go-around/missed-approach evidence or a live trajectory that disproves the expected airport turn returns authority to current geometry. Fresh physical radius entry always wins.
 
-This protects both sides of the historical IST problem: normal arrivals can be measured against runway-aware shadow expectations while genuine overhead/transit or go-around passes remain alertable.
+This protects both sides of the historical Istanbul problem: normal arrivals can avoid premature straight-line false alerts while genuine overhead/transit, changed-trajectory or go-around passes remain alertable.
 
 ### Weather and contrails
 
@@ -60,7 +62,7 @@ Google Contrails remains separate photography/environment enrichment. It does no
 
 ### Known limitations
 
-Runway-aware suppression remains shadow-only until enough replay and production outcomes demonstrate improvement without missed genuine passes. The worldwide reference catalogue is community-maintained and is not treated as authoritative operational truth; maintained Plane Alerts overrides can replace records for airports where stronger sources are available. Some airports or runway rows do not have complete endpoint coordinates/headings, so runway-specific inference remains uncertain there. Published procedures and inferred runway configuration never override fresh physical observations.
+Only the narrow v4.7.2 initial terminal-arrival hold is authoritative; broader runway/history hypotheses remain shadow evidence until additional replay and production outcomes demonstrate improvement without missed genuine passes. The worldwide reference catalogue is community-maintained and is not treated as official operational truth; maintained Plane Alerts overrides can replace records for airports where stronger sources are available. Some airports or runway rows do not have complete endpoint coordinates/headings, so runway-specific inference remains uncertain there. Published procedures and inferred runway configuration never override fresh physical observations.
 
 ## Alert-critical architecture
 
@@ -71,6 +73,7 @@ ADS-B ingestion
   -> production trajectory / CPA / ETA
   -> v4.6 confidence + position uncertainty
   -> existing terminal / route guard
+  -> v4.7.2 initial terminal-arrival qualification hold
   -> qualification / cancellation lifecycle
   -> Telegram alert
 
@@ -80,7 +83,7 @@ Pinned OurAirports snapshot (build time only)
   -> bounded v4.7 terminal history
   -> runway evidence + recent movement clusters
   -> base/final/holding/go-around classification
-  -> airport candidate decision (shadow)
+  -> broad airport candidate decision (shadow)
   -> Prediction Lab / AGY evidence
 ```
 
@@ -122,7 +125,7 @@ Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle ch
 
 ## Prediction Lab
 
-Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v4.7 adds structured terminal diagnostics including airport, terminal state, runway candidate/confidence/support, recent movement cluster, holding/go-around state, runway-aware historical support, live CPA and the shadow decision reason.
+Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v4.7 adds structured terminal diagnostics including airport, terminal state, runway candidate/confidence/support, recent movement cluster, holding/go-around state, runway-aware historical support, live CPA and the shadow decision reason. v4.7.2 also records whether the authoritative initial hold candidate existed, whether it was effectively applied, the destination match, evidence age, airport-distance trend and heading error.
 
 Missing ADS-B coverage is unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 
@@ -164,12 +167,14 @@ pytest -q tests/test_v45_provider_resilience.py tests/test_v45_local_provider_ar
 pytest -q tests/test_interaction_v46.py
 pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
 pytest -q tests/test_global_airport_data_v471.py
+pytest -q tests/test_terminal_arrival_hold_v472.py
 python scripts/benchmark_v42.py
 python scripts/benchmark_v45_provider_resilience.py
 python scripts/benchmark_v46_prediction.py
 python scripts/benchmark_v46_interaction.py
 python scripts/benchmark_v47_terminal.py
 python scripts/benchmark_v471_airport_lookup.py
+python scripts/benchmark_v472_terminal_hold.py
 pip check
 ```
 
