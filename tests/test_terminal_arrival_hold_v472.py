@@ -82,6 +82,7 @@ def _assessment(
         go_around=go_around,
         missed_approach=missed_approach,
         runway_path_cpa_km=runway_path_cpa_km,
+        runway_landing_cpa_km=runway_path_cpa_km,
         reasons=(),
     )
 
@@ -276,8 +277,7 @@ def test_runway_aligned_path_that_can_hit_observer_is_never_suppressed():
     assert decision.code == "RELEASE_RUNWAY_PATH_CAN_PASS"
 
 
-def test_initial_hold_releases_once_and_cannot_rearm_to_cancel_visible_alert():
-    key = ("abc123", 41.0, 29.0, 10.0)
+def test_initial_hold_releases_for_go_around_and_cannot_cancel_delivered_alert():
     base = v42.RouteGateResultV42(
         suppress_alert=False,
         callsign="THY123",
@@ -291,35 +291,29 @@ def test_initial_hold_releases_once_and_cannot_rearm_to_cancel_visible_alert():
         False, "RELEASE_GO_AROUND", "go-around"
     )
 
-    held, effective = v47._apply_initial_hold_state(
-        key=key,
+    held, effective = v47._apply_initial_hold(
         decision=hold_decision,
         base=base,
-        was_prequalified=False,
-        now_mono=1.0,
+        notification_sent=False,
     )
     assert effective is True
     assert held.suppress_alert is True
     assert held.qualification_state == "TERMINAL_ARRIVAL_INITIAL_HOLD"
 
-    released, effective = v47._apply_initial_hold_state(
-        key=key,
+    released, effective = v47._apply_initial_hold(
         decision=release_decision,
         base=base,
-        was_prequalified=False,
-        now_mono=2.0,
+        notification_sent=False,
     )
     assert effective is False
     assert released.suppress_alert is False
 
     # Even if terminal evidence later resembles an arrival again, this specific
-    # v4.7.2 initial gate is permanently released for the encounter.
-    later, effective = v47._apply_initial_hold_state(
-        key=key,
+    # initial gate ends only because a message was actually delivered.
+    later, effective = v47._apply_initial_hold(
         decision=hold_decision,
         base=base,
-        was_prequalified=True,
-        now_mono=3.0,
+        notification_sent=True,
     )
     assert effective is False
     assert later.suppress_alert is False

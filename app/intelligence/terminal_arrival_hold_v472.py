@@ -7,7 +7,7 @@ is supporting evidence only and can never suppress an alert by itself.
 
 The hold is fail-open. It releases immediately for stale/insufficient evidence,
 a go-around or climb, a trajectory change away from the airport approach, a
-runway continuation that can genuinely pass the observer, or fresh physical
+landing path through the runway that can genuinely pass the observer, or fresh physical
 entry into the user's configured radius.
 """
 from __future__ import annotations
@@ -198,13 +198,13 @@ def evaluate_initial_terminal_hold(
     margin = radius + max(2.0, radius * 0.15)
     if (
         runway_state
-        and assessment.runway_path_cpa_km is not None
-        and float(assessment.runway_path_cpa_km) <= margin
+        and assessment.runway_landing_cpa_km is not None
+        and float(assessment.runway_landing_cpa_km) <= margin
     ):
         return TerminalArrivalHoldDecision(
             False,
             "RELEASE_RUNWAY_PATH_CAN_PASS",
-            "runway-aligned continuation can still physically enter the observer radius",
+            "landing path through the runway can still physically enter the observer radius",
             fresh_age_s=age,
             airport_trend_km_s=trend,
             heading_error_deg=heading_error,
@@ -266,7 +266,7 @@ def evaluate_initial_terminal_hold(
                 airport_trend_km_s=trend,
                 heading_error_deg=heading_error,
             )
-        if assessment.runway_path_cpa_km is None:
+        if assessment.runway_landing_cpa_km is None:
             return TerminalArrivalHoldDecision(
                 False,
                 "RUNWAY_CPA_UNKNOWN",
@@ -276,11 +276,11 @@ def evaluate_initial_terminal_hold(
                 airport_trend_km_s=trend,
                 heading_error_deg=heading_error,
             )
-        if float(assessment.runway_path_cpa_km) <= margin:
+        if float(assessment.runway_landing_cpa_km) <= margin:
             return TerminalArrivalHoldDecision(
                 False,
                 "RELEASE_RUNWAY_PATH_CAN_PASS",
-                "runway-aligned continuation can still physically enter the observer radius",
+                "landing path through the runway can still physically enter the observer radius",
                 destination_match=destination_match,
                 fresh_age_s=age,
                 airport_trend_km_s=trend,
