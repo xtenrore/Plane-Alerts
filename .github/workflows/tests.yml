@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "chatgpt/**"
+      - "fix/**"
   pull_request:
 
 permissions:
@@ -33,6 +34,12 @@ jobs:
       - name: Compile application and Vercel runtime
         run: python -m compileall -q app vercel_runtime worker.py
 
+      - name: Build pinned global airport database
+        run: python scripts/build_airport_database.py
+
+      - name: Verify global airport database coverage and overrides
+        run: python scripts/verify_airport_database.py
+
       - name: Run full test suite
         env:
           TELEGRAM_BOT_TOKEN: ""
@@ -54,6 +61,9 @@ jobs:
       - name: Run v4.7 airport, runway and Error Museum suite
         run: pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
 
+      - name: Run v4.7.1 global airport data suite
+        run: pytest -q tests/test_global_airport_data_v471.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -68,6 +78,9 @@ jobs:
 
       - name: Benchmark v4.7 terminal intelligence
         run: python scripts/benchmark_v47_terminal.py
+
+      - name: Benchmark v4.7.1 global airport lookup
+        run: python scripts/benchmark_v471_airport_lookup.py
 
       - name: Verify dependency consistency
         run: pip check
