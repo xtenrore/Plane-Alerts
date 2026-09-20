@@ -21,7 +21,14 @@ _INSTALLED = False
 
 
 async def _get_active_users_cached() -> list[dict[str, Any]]:
-    """Return one immutable-ish last-known-good snapshot without database I/O."""
+    """Return last-known-good config; only the first cold cycle may warm Mongo."""
+    if not storage_runtime.config_loaded:
+        try:
+            await storage_runtime.warm()
+        except Exception as exc:
+            logger.warning("storage_v48_cold_warm_failed error=%s", type(exc).__name__)
+            return []
+    storage_runtime.start()
     return storage_runtime.active_users()
 
 
