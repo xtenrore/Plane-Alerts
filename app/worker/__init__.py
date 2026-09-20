@@ -54,6 +54,14 @@ if "pytest" not in sys.modules:
     install_route_guard_v42()
     install_requalification_guard_v43()
 
+    # v4.7 extends the established route guard instead of replacing its
+    # predictor. Runway/base/final/holding conclusions stay shadow-only; strong
+    # observed go-around evidence may only release an obsolete landing-turn
+    # expectation so fresh live geometry can be evaluated again.
+    from app.intelligence.route_guard_v47 import install_route_guard_v47
+
+    install_route_guard_v47()
+
     # Final hot-path protection: cap individual provider latency and prevent
     # stale ADS-B positions from creating brand-new approach alerts.
     from app.worker.critical_timing import install_critical_timing_guards
