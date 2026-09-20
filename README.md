@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.1.0**  
+**Current code version: Plane Alerts v5.1.1**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -39,6 +39,8 @@ Observer terrain elevation is optional. If it is not already stored, Plane Alert
 Altitude relevance can be disabled per preferences through `proximity_3d.altitude_relevance`. Horizontal CPA remains available regardless of this setting.
 
 v5.1 also tightens pass-versus-cancellation semantics. A close projected CPA is not ground truth: an active encounter is finalized as passed only after Plane Alerts has actually observed the aircraft inside the configured radius and a later fresh observation shows it receding from the observed closest point. Missing or stale ADS-B never counts as a completed pass.
+
+v5.1.1 is a release-infrastructure-only patch. It keeps the same physical predictor and moves the exact-main Railway deployment gate out of the Railway CLI container so the trusted post-CI deploy can verify the tested SHA without depending on tools missing from that container.
 
 ## v5.0 observability and explainability
 
@@ -247,6 +249,8 @@ All prior release regression and benchmark commands remain enforced in GitHub Ac
 ## Deployment
 
 Production runs on Railway. Deployment occurs only after the exact `main` commit passes CI and final engineering review. The deployed build reports its exact commit through runtime metadata; deployment SHAs are not hard-coded in source.
+
+The trusted post-CI deployment gate first verifies on a standard GitHub-hosted runner that the successful workflow came from this repository's `main` push and that the tested SHA is still the current `main` head. Only then does the separate Railway CLI container receive and deploy that exact SHA.
 
 The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and may suggest hypotheses, but it does not control trajectory or notification decisions. Railway AI is not used.
 
