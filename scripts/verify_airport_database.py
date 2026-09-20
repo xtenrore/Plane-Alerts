@@ -27,7 +27,7 @@ def main() -> int:
         if source_commit != EXPECTED_SOURCE_COMMIT:
             raise SystemExit(f"unexpected source commit: {source_commit}")
 
-        required_codes = ("LTFM", "EGLL", "KJFK", "RJTT", "OMDB", "YSSY", "SBGR", "FAOR")
+        required_codes = ("LTFM", "LTBA", "EGLL", "KJFK", "RJTT", "OMDB", "YSSY", "SBGR", "FAOR")
         missing = [
             code for code in required_codes
             if conn.execute(
@@ -47,11 +47,62 @@ def main() -> int:
         if ltfm_pairs != expected_ltfm:
             raise SystemExit(f"LTFM override mismatch: {sorted(ltfm_pairs)}")
 
+        # Ataturk is a primary v4.7.2 Error Museum airport. Verify the exact
+        # identity used by route providers and the runway geometry that the
+        # terminal classifier will consume. ICAO LTBA and IATA ISL must resolve
+        # to the same active airport record; destination='ISL' is never treated
+        # as a magic suppression code by itself.
+        ltba = conn.execute(
+            """
+            SELECT ident, gps_code, iata_code, name, latitude_deg, longitude_deg, closed
+            FROM airports
+            WHERE ident='LTBA' OR gps_code='LTBA' OR iata_code='ISL'
+            ORDER BY CASE WHEN ident='LTBA' THEN 0 WHEN gps_code='LTBA' THEN 1 ELSE 2 END
+            LIMIT 1
+            """
+        ).fetchone()
+        if ltba is None:
+            raise SystemExit("LTBA/ISL airport identity missing from compiled database")
+        if str(ltba["ident"]) != "LTBA" or str(ltba["iata_code"] or "") != "ISL" or bool(ltba["closed"]):
+            raise SystemExit(
+                "LTBA/ISL identity mismatch: "
+                f"ident={ltba['ident']} gps={ltba['gps_code']} iata={ltba['iata_code']} closed={ltba['closed']}"
+            )
+        if not (40.0 <= float(ltba["latitude_deg"]) <= 42.0 and 27.0 <= float(ltba["longitude_deg"]) <= 30.0):
+            raise SystemExit("LTBA coordinates are outside the expected Istanbul region")
+
+        ltba_active = conn.execute(
+            """
+            SELECT le_ident, he_ident,
+                   le_latitude_deg, le_longitude_deg, le_heading_deg,
+                   he_latitude_deg, he_longitude_deg, he_heading_deg
+            FROM runways
+            WHERE airport_ident='LTBA' AND closed=0
+            ORDER BY le_ident
+            """
+        ).fetchall()
+        if not ltba_active:
+            raise SystemExit("LTBA has no active runway geometry")
+        ltba_pairs = {(str(row["le_ident"]), str(row["he_ident"])) for row in ltba_active}
+        if ("05", "23") not in ltba_pairs:
+            raise SystemExit(f"LTBA active 05/23 runway geometry missing: {sorted(ltba_pairs)}")
+        for row in ltba_active:
+            geometry = (
+                row["le_latitude_deg"], row["le_longitude_deg"], row["le_heading_deg"],
+                row["he_latitude_deg"], row["he_longitude_deg"], row["he_heading_deg"],
+            )
+            if any(value is None for value in geometry):
+                raise SystemExit(
+                    f"LTBA active runway {row['le_ident']}/{row['he_ident']} has incomplete endpoint geometry"
+                )
+
         print("GLOBAL_AIRPORT_DB_JSON=" + json.dumps({
             "airports": airport_count,
             "runways": runway_count,
             "source_commit": source_commit,
             "ltfm_runways": len(ltfm_pairs),
+            "ltba_iata": str(ltba["iata_code"] or ""),
+            "ltba_active_runways": sorted([f"{left}/{right}" for left, right in ltba_pairs]),
         }, sort_keys=True, separators=(",", ":")))
     finally:
         conn.close()
