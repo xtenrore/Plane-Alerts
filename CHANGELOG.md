@@ -10,6 +10,7 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - amd64/ARM64 Docker validation, including the Raspberry Pi self-hosting path.
 - `planealerts doctor` configuration/dependency diagnostics with secret-safe output.
 - Fresh-install, Compose, doctor and architecture gates added to CI.
+- Trusted post-CI GitHub release publishing creates an immutable `v4.9.0` tag/release from the exact tested `main` commit and canonical release notes.
 - Installation, migration and rollback documentation.
 - Physical prediction version remains `4.7.3-terminal-delivery-landing-path`.
 
