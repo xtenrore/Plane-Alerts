@@ -7,14 +7,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
-from statistics import median
+from pathlib import Path
 from types import SimpleNamespace
 
-from telegram.ext import ApplicationHandlerStop
+# Executing a file under scripts/ puts scripts/ first on sys.path. Add the
+# repository root explicitly so this benchmark behaves the same in CI/local use.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from app.bot import interaction_v46 as interaction
-from app.bot import next60
+from telegram.ext import ApplicationHandlerStop  # noqa: E402
+
+from app.bot import interaction_v46 as interaction  # noqa: E402
+from app.bot import next60  # noqa: E402
 
 DB_DELAY_S = 0.04
 ITERATIONS = 20
