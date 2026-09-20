@@ -1,8 +1,19 @@
-"""One release identifier for the bot, worker, health endpoints and audit data."""
-from pathlib import Path
+"""Canonical release identifiers for Plane Alerts runtime and reporting."""
+from __future__ import annotations
+
 import os
 
 VERSION = "4.4.0"
-_build_file = Path(__file__).with_name("build_commit.txt")
-COMMIT = (_build_file.read_text().strip() if _build_file.exists() else os.getenv("RAILWAY_GIT_COMMIT_SHA", "unknown"))
 PREDICTION_VERSION = "4.4-observation-confirmations"
+
+
+def _runtime_commit() -> str:
+    """Return the commit injected by the deployment/runtime environment."""
+    for name in ("RAILWAY_GIT_COMMIT_SHA", "GITHUB_SHA", "SOURCE_COMMIT"):
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return "unknown"
+
+
+COMMIT = _runtime_commit()
