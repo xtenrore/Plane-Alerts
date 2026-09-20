@@ -69,6 +69,26 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.TimeoutError, NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout))
 
 
+async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
+    """Run v4.8 migrations once for a real Mongo-style database handle.
+
+    Some legacy unit tests intentionally inject opaque sentinel objects to verify
+    connection/index caching. Those objects are not database implementations and
+    cannot support schema operations, so they must not be mistaken for Mongo.
+    Production Motor database objects always implement collection access.
+    """
+    global _schema_ready_for
+    if _schema_ready_for == key:
+        return
+    if not callable(getattr(db, "__getitem__", None)):
+        logger.debug("Skipping schema migration for non-database test double")
+        return
+    from app.storage_migrations_v48 import run_migrations
+
+    await run_migrations(db)
+    _schema_ready_for = key
+
+
 async def connect_db(
     max_retries: int = 5,
     retry_delay: float = 2.0,
@@ -76,17 +96,14 @@ async def connect_db(
     *,
     ensure_indexes: bool = True,
 ) -> AsyncIOMotorDatabase:
-    global _client, _db, _indexes_ready_for, _schema_ready_for
+    global _client, _db, _indexes_ready_for
     key = _index_cache_key()
     if _client is not None and _db is not None:
         if ensure_indexes and _indexes_ready_for != key:
             await _ensure_indexes(_db)
             _indexes_ready_for = key
-        if ensure_indexes and _schema_ready_for != key:
-            from app.storage_migrations_v48 import run_migrations
-
-            await run_migrations(_db)
-            _schema_ready_for = key
+        if ensure_indexes:
+            await _ensure_schema(_db, key)
         return _db
 
     target = _mongo_target_label(settings.mongo_uri)
@@ -117,11 +134,8 @@ async def connect_db(
             if ensure_indexes and _indexes_ready_for != key:
                 await _ensure_indexes(_db)
                 _indexes_ready_for = key
-            if ensure_indexes and _schema_ready_for != key:
-                from app.storage_migrations_v48 import run_migrations
-
-                await run_migrations(_db)
-                _schema_ready_for = key
+            if ensure_indexes:
+                await _ensure_schema(_db, key)
             return _db
         except Exception as exc:
             had_failure = True
