@@ -8,6 +8,7 @@ genuine physical passes.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import logging
 import math
@@ -26,6 +27,17 @@ from app.intelligence import terminal_arrival_hold_v472 as hold_v472
 logger = logging.getLogger(__name__)
 _INSTALLED = False
 _ORIGINAL_QUERY_PROVIDERS = ProviderManager.query_providers
+_INITIAL_HOLD_TTL_S = 1800.0
+_INITIAL_HOLD_MAX = 2048
+
+
+@dataclass(slots=True)
+class InitialHoldState:
+    last_seen_mono: float
+    status: str  # holding | released
+
+
+_initial_hold_states: "OrderedDict[tuple, InitialHoldState]" = OrderedDict()
 
 
 @dataclass(slots=True, frozen=True)
@@ -140,6 +152,59 @@ def _choose_airport(ac: Any, destination: Any | None) -> airport_v47.AirportGeom
         return None
 
 
+def _prune_initial_hold_states(now_mono: float) -> None:
+    for key in list(_initial_hold_states):
+        if now_mono - _initial_hold_states[key].last_seen_mono > _INITIAL_HOLD_TTL_S:
+            _initial_hold_states.pop(key, None)
+    while len(_initial_hold_states) > _INITIAL_HOLD_MAX:
+        _initial_hold_states.popitem(last=False)
+
+
+def _apply_initial_hold_state(
+    *,
+    key: tuple,
+    decision: hold_v472.TerminalArrivalHoldDecision,
+    base: route_mod.RouteGateResult,
+    was_prequalified: bool,
+    now_mono: float,
+) -> tuple[route_mod.RouteGateResult, bool]:
+    state = _initial_hold_states.get(key)
+    if state is not None:
+        state.last_seen_mono = now_mono
+        _initial_hold_states.move_to_end(key)
+
+    # Do not introduce the v4.7.2 initial gate in the middle of an encounter
+    # that had already crossed the older qualification boundary before this
+    # evaluation. Once released, the gate never re-arms for that encounter.
+    if state is None and was_prequalified:
+        _initial_hold_states[key] = InitialHoldState(now_mono, "released")
+        return base, False
+    if state is not None and state.status == "released":
+        return base, False
+
+    if decision.hold:
+        if state is None:
+            _initial_hold_states[key] = InitialHoldState(now_mono, "holding")
+        else:
+            state.status = "holding"
+        return replace(
+            base,
+            suppress_alert=True,
+            reason=f"v4.7.2 TERMINAL_ARRIVAL_INITIAL_HOLD: {decision.reason}",
+            qualification_state="TERMINAL_ARRIVAL_INITIAL_HOLD",
+        ), True
+
+    if state is not None and state.status == "holding":
+        state.status = "released"
+        return base, False
+
+    # If the legacy gate has now qualified the encounter without a v4.7.2 hold,
+    # record release so later terminal evidence cannot cancel an active alert.
+    if not bool(base.suppress_alert):
+        _initial_hold_states[key] = InitialHoldState(now_mono, "released")
+    return base, False
+
+
 def _can_release_expected_landing_hold(
     result: route_mod.RouteGateResult,
     assessment: airport_v47.TerminalAssessment,
@@ -178,6 +243,10 @@ async def evaluate_route_v47(
     current_samples: Iterable[Any],
 ) -> route_mod.RouteGateResult:
     current_samples = list(current_samples)
+    encounter_key = v42._encounter_key(ac, user_lat, user_lon, alert_radius_km)
+    previous_encounter = v42._encounters.get(encounter_key)
+    was_prequalified = bool(previous_encounter and previous_encounter.qualified)
+
     base = await v43.evaluate_route_v43(
         self,
         ac,
@@ -193,6 +262,7 @@ async def evaluate_route_v47(
     airport = _choose_airport(ac, destination)
 
     now = time.time()
+    now_mono = time.monotonic()
     extended = airport_v47.history_for(str(getattr(ac, "icao24", "") or ""))
     fallback = _fallback_samples(ac, current_samples, now=now)
     if fallback:
@@ -257,6 +327,15 @@ async def evaluate_route_v47(
             reason=reason,
         )
 
+    updated_base, effective_initial_hold = _apply_initial_hold_state(
+        key=encounter_key,
+        decision=terminal_hold,
+        base=updated_base,
+        was_prequalified=was_prequalified,
+        now_mono=now_mono,
+    )
+    _prune_initial_hold_states(now_mono)
+
     payload = airport_v47.diagnostic_payload(
         assessment,
         inference,
@@ -271,7 +350,8 @@ async def evaluate_route_v47(
         "recent_movement_cluster": str(movement_cluster.get("label") or ""),
         "recent_movement_support": float(movement_cluster.get("decayed_support") or 0.0),
         "recent_movement_sample_count": int(movement_cluster.get("sample_count") or 0),
-        "authoritative_initial_hold": terminal_hold.hold,
+        "authoritative_initial_hold": effective_initial_hold,
+        "authoritative_initial_hold_candidate": terminal_hold.hold,
         "authoritative_initial_hold_code": terminal_hold.code,
         "authoritative_initial_hold_reason": terminal_hold.reason,
         "authoritative_initial_hold_score": round(terminal_hold.score, 4),
@@ -289,7 +369,7 @@ async def evaluate_route_v47(
         "live_cpa_km": round(float(getattr(pred, "projected_closest_km", math.inf)), 3),
         "live_current_km": round(float(getattr(pred, "current_distance_km", math.inf)), 3),
         "baseline_suppress": bool(base.suppress_alert),
-        "effective_base_suppress": bool(updated_base.suppress_alert),
+        "effective_suppress": bool(updated_base.suppress_alert),
     }, sort_keys=True, separators=(",", ":")))
 
     return RouteGateResultV47(
@@ -316,7 +396,7 @@ async def evaluate_route_v47(
         airport_shadow_hold_v47=shadow_hold,
         airport_shadow_reason_v47=shadow_reason,
         authoritative_override_v47=authoritative_override,
-        authoritative_initial_hold_v472=terminal_hold.hold,
+        authoritative_initial_hold_v472=effective_initial_hold,
         authoritative_initial_hold_code_v472=terminal_hold.code,
         authoritative_initial_hold_reason_v472=terminal_hold.reason,
         authoritative_initial_hold_score_v472=terminal_hold.score,
@@ -325,6 +405,10 @@ async def evaluate_route_v47(
         terminal_heading_error_deg_v472=terminal_hold.heading_error_deg,
         terminal_evidence_age_s_v472=terminal_hold.fresh_age_s,
     )
+
+
+def reset_v472_initial_hold_state_for_tests() -> None:
+    _initial_hold_states.clear()
 
 
 def install_route_guard_v47() -> None:
