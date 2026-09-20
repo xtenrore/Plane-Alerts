@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "4.8.0"
+VERSION = "4.8.1"
 # v4.8 changes storage/persistence behavior only. Physical prediction remains
 # the verified v4.7.3 model and must not be relabeled as a new predictor.
 PREDICTION_VERSION = "4.7.3-terminal-delivery-landing-path"

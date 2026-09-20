@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.8.0**  
+**Current code version: Plane Alerts v4.8.1**  
 **Current prediction version: `4.7.3-terminal-delivery-landing-path`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,10 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v4.8.1 production verification patch
+
+Production verification exposed a Motor/PyMongo compatibility edge: database objects intentionally reject boolean truth testing. v4.8.1 selects explicit database handles with `is None` checks, so a healthy Mongo connection no longer enters the degraded reconnect path for that reason. Prediction behavior is unchanged.
 
 ## Storage resilience
 

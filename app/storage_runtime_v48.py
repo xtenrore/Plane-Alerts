@@ -154,7 +154,7 @@ class StorageRuntimeV48:
 
     async def warm(self, db: Any | None = None) -> None:
         """Load the minimum state needed for safe live monitoring and restart dedupe."""
-        db = db or self._db()
+        db = self._db() if db is None else db
         users, states = await asyncio.wait_for(
             asyncio.gather(self._load_active_users(db), self._load_restart_states(db)),
             timeout=max(2.5, _CONFIG_REFRESH_TIMEOUT_S * 2.0),
@@ -175,7 +175,7 @@ class StorageRuntimeV48:
     async def refresh_config_once(self, db: Any | None = None) -> bool:
         """Replace the user snapshot only after a complete successful read."""
         try:
-            db = db or self._db()
+            db = self._db() if db is None else db
             users = await asyncio.wait_for(
                 self._load_active_users(db), timeout=_CONFIG_REFRESH_TIMEOUT_S
             )
@@ -427,7 +427,7 @@ class StorageRuntimeV48:
         if now_mono < self._next_flush_attempt_mono:
             return 0
         try:
-            db = db or self._db()
+            db = self._db() if db is None else db
         except Exception:
             storage_metrics.set_state("degraded")
             self._flush_failures += 1
