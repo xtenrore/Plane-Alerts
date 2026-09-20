@@ -55,14 +55,17 @@ class StorageMetrics:
                 self._reads.append(duration)
             if success:
                 self.last_success_epoch = time.time()
-                if self.database_state in {"starting", "recovering"}:
+                # One successful command proves the driver has recovered enough
+                # for this operation. A later failure will move the state back to
+                # degraded; do not leave the health surface stuck after recovery.
+                if self.database_state not in {"closed"}:
                     self.database_state = "healthy"
             else:
                 self.failures += 1
                 self._last_failure_epoch = time.time()
                 if timeout:
                     self.timeouts += 1
-                if self.database_state == "healthy":
+                if self.database_state != "closed":
                     self.database_state = "degraded"
 
     def record_retry(self) -> None:
