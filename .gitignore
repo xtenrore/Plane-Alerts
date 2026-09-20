@@ -23,6 +23,9 @@ build/
 eggs/
 *.egg
 
+# Deployment metadata generated from the exact tested SHA before Railway upload
+app/build_commit.txt
+
 # Virtual environment
 venv/
 .venv/
