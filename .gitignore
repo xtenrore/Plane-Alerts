@@ -26,6 +26,11 @@ eggs/
 # Deployment metadata generated from the exact tested SHA before Railway upload
 app/build_commit.txt
 
+# Generated worldwide aviation reference database. The pinned source manifest
+# and maintained overrides are versioned; the SQLite binary is rebuilt by CI/image builds.
+data/aviation/compiled/*.sqlite3
+data/aviation/compiled/*.sqlite3.tmp
+
 # Virtual environment
 venv/
 .venv/
