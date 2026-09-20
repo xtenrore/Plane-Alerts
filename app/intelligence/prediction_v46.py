@@ -127,6 +127,18 @@ def _interval_stats(samples: list[t.HistorySample]) -> tuple[float | None, float
     return median(intervals), pstdev(intervals) if len(intervals) >= 2 else 0.0
 
 
+def _irregular_observation_timing(samples: list[t.HistorySample]) -> bool:
+    """Recognize cadence gaps without allowing those gaps into the turn model."""
+    gaps = [
+        float(b.timestamp) - float(a.timestamp)
+        for a, b in zip(samples, samples[1:])
+        if 0.5 <= float(b.timestamp) - float(a.timestamp) <= 60.0
+    ]
+    if len(gaps) < 2:
+        return False
+    return max(gaps) > 22.0 or pstdev(gaps) > 5.0
+
+
 def position_uncertainty_km(samples: Iterable[t.HistorySample], *, now: float) -> float:
     ordered = sorted(list(samples), key=lambda item: item.timestamp)
     if not ordered:
@@ -281,13 +293,16 @@ def _confidence_evidence(
     prediction: t.TrajectoryPrediction,
     *,
     now: float,
+    raw_samples: list[t.HistorySample] | None = None,
 ) -> ConfidenceEvidence:
     latest = samples[-1]
+    timing_samples = (raw_samples or samples)[-10:]
     age = _sample_age(latest, now)
     speed = _usable_speed_kts(samples)
     freshness = freshness_limit_s(speed)
-    uncertainty = position_uncertainty_km(samples, now=now)
-    interval_median, interval_spread = _interval_stats(samples[-10:])
+    uncertainty = position_uncertainty_km(timing_samples, now=now)
+    interval_median, interval_spread = _interval_stats(timing_samples)
+    irregular_timing = _irregular_observation_timing(timing_samples)
     heading_spread = prediction.heading_stability_deg
     speed_spread = prediction.speed_stability_kts
     turn = turn_evidence(samples, now=now)
@@ -306,6 +321,8 @@ def _confidence_evidence(
     freshness_component = 1.0 - _clamp(age / max(freshness, 1.0), 0.0, 1.0)
     observation_component = _clamp((len(samples) - 1) / 7.0, 0.0, 1.0)
     timing_component = 0.55 if interval_median is None else 1.0 - _clamp(float(interval_spread or 0.0) / 7.0, 0.0, 0.8)
+    if irregular_timing:
+        timing_component = min(timing_component, 0.30)
     heading_component = 0.45 if heading_spread is None else 1.0 - _clamp(float(heading_spread) / 25.0, 0.0, 1.0)
     speed_component = 0.55 if speed_spread is None else 1.0 - _clamp(float(speed_spread) / 45.0, 0.0, 1.0)
     turn_component = 0.85 if abs(float(prediction.turn_rate_deg_s or 0.0)) < 0.06 else (1.0 if turn.stable else 0.35)
@@ -336,7 +353,7 @@ def _confidence_evidence(
         reasons.append("speed-dependent freshness limit exceeded")
     if len(samples) < 3:
         reasons.append("short observation history")
-    if interval_spread is not None and interval_spread > 5.0:
+    if irregular_timing or (interval_spread is not None and interval_spread > 5.0):
         reasons.append("irregular observation timing")
     if heading_spread is not None and heading_spread > 15.0:
         reasons.append("heading instability")
@@ -441,7 +458,7 @@ def predict_trajectory_v46(
         return prediction
 
     contiguous = t._contiguous_recent(ordered)  # type: ignore[attr-defined]
-    evidence = _confidence_evidence(contiguous, prediction, now=effective_now)
+    evidence = _confidence_evidence(contiguous, prediction, now=effective_now, raw_samples=ordered)
     turn = turn_evidence(contiguous, now=effective_now)
     linear = _shadow_simulation(
         contiguous, user_lat, user_lon, alert_radius_km,
