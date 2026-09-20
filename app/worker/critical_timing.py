@@ -100,7 +100,19 @@ async def _bounded_safe_query(self: ProviderManager, provider: Any, latitude: fl
 
 def _critical_predict_trajectory(samples, user_lat, user_lon, alert_radius_km, **kwargs):
     sample_list = list(samples)
-    prediction = _ORIGINAL_PREDICT_TRAJECTORY(sample_list, user_lat, user_lon, alert_radius_km, **kwargs)
+    call_kwargs = dict(kwargs)
+    try:
+        prediction = _ORIGINAL_PREDICT_TRAJECTORY(sample_list, user_lat, user_lon, alert_radius_km, **call_kwargs)
+    except TypeError as exc:
+        # v5.1 added altitude_relevance to the base trajectory API, while the
+        # installed v4.6 confidence wrapper can still expose the older keyword
+        # surface. Keep the live predictor running with its safe default rather
+        # than dropping every aircraft from CPA processing. Do not swallow any
+        # unrelated TypeError: those remain visible as real predictor failures.
+        if "altitude_relevance" not in call_kwargs or "unexpected keyword argument 'altitude_relevance'" not in str(exc):
+            raise
+        call_kwargs.pop("altitude_relevance")
+        prediction = _ORIGINAL_PREDICT_TRAJECTORY(sample_list, user_lat, user_lon, alert_radius_km, **call_kwargs)
     return _harden_prediction_freshness(prediction, sample_list, now=kwargs.get("now"))
 
 
