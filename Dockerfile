@@ -16,7 +16,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN chmod +x /app/scripts/railway-entrypoint.sh
+
+# Build a commit-pinned worldwide airport/runway reference database into the
+# image. Runtime monitoring performs local read-only SQLite lookups only; it
+# never depends on OurAirports or another network/API being available.
+RUN python /app/scripts/build_airport_database.py \
+    && chmod 0444 /app/data/aviation/compiled/global_airports.sqlite3 \
+    && chmod +x /app/scripts/railway-entrypoint.sh
 
 EXPOSE 8000
 
