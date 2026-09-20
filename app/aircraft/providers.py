@@ -235,7 +235,6 @@ class LocalADSBProvider(AircraftDataProvider):
         return [f"{configured}/data/aircraft.json", f"{configured}/tar1090/data/aircraft.json", f"{configured}/aircraft.json"]
 
     async def get_aircraft_in_area(self, latitude: float, longitude: float, radius_nm: int = 250) -> list[NormalizedAircraft]:
-        del latitude, longitude, radius_nm
         if not self.configured:
             return []
         client = await get_http_client()
@@ -259,7 +258,14 @@ class LocalADSBProvider(AircraftDataProvider):
             if not isinstance(data, dict):
                 raise MalformedProviderResponse("local receiver JSON root is not an object")
             self._resolved_url = url
-            return parse_local_receiver_response(data, source=self.name)
+            observations = parse_local_receiver_response(data, source=self.name)
+            radius_km = max(0.0, float(radius_nm)) * 1.852
+            return [
+                ac
+                for ac in observations
+                if ac.has_position
+                and _haversine_km(latitude, longitude, float(ac.latitude), float(ac.longitude)) <= radius_km
+            ]
         if last_status == 404:
             request = httpx.Request("GET", str(settings.local_adsb_url))
             raise httpx.HTTPStatusError("local receiver aircraft JSON not found", request=request, response=httpx.Response(404, request=request))
