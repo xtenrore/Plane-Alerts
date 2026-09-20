@@ -1,87 +1,109 @@
 # Plane Alerts
 
-Plane Alerts is a Telegram-based aircraft-spotting alert system. It combines live ADS-B observations with deterministic trajectory, closest-point-of-approach (CPA), ETA, route-history and terminal-arrival logic so alerts are based on whether an aircraft is actually expected to pass the observer, not proximity alone.
+Plane Alerts is a Telegram-based aircraft spotting alert system. It combines live ADS-B observations with deterministic trajectory, closest-point-of-approach (CPA), ETA, route-history and terminal-arrival logic so alerts are based on whether an aircraft is actually expected to pass the observer, not proximity alone.
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, pass/no-pass, aircraft filtering, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.4.0**
+**Current code version: Plane Alerts v4.5.0**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v4.4 — Reliability, observation truth and release integrity
+## v4.5 — Local ADS-B and provider resilience
 
-v4.4 is primarily a reliability release. The main goal is to protect the five-second monitoring path and reduce false or late alerts without hiding genuine close passes.
+v4.5 keeps the v4.4 prediction behavior and moves aircraft ingestion toward a local-first, multi-provider architecture. A local receiver is optional: a Railway deployment with no local receiver configured continues to use the existing public ADS-B feeds.
 
-### Alert-critical path
-
-The intended priority order is:
+### Provider architecture
 
 ```text
-HIGH PRIORITY
-ADS-B -> trajectory -> CPA -> qualification -> Telegram alert
-
-LOW PRIORITY
-route-history persistence/learning -> provider learning -> photography -> weather -> Prediction Lab -> auditing
+Optional local receiver       Public ADS-B providers
+readsb / dump1090             adsb.lol / adsb.fi
+ dump1090-fa / ultrafeeder    airplanes.live / adsb.one / OpenSky
+          \                         /
+           -> canonical observations
+           -> freshness + provenance
+           -> deterministic ICAO merge
+           -> existing trajectory / CPA / qualification / alerts
 ```
 
-Historical enrichment is supporting evidence. Live alerts do not wait for optional cold route-history reads when a safe fallback exists.
+A configured, healthy and fresh local receiver is preferred for position data. One rotating public source still participates in the bounded shared-region refresh so Plane Alerts retains fallback, outside-local-coverage data and safe metadata enrichment. A failed local receiver cannot block the five-second monitoring path.
 
-### Route-history isolation
+Provider switching does not change aircraft identity: the live prediction state continues to use ICAO24 as the aircraft key. Multiple providers reporting the same ICAO24 are merged deterministically instead of allowing the last completed HTTP request to overwrite earlier data.
 
-Cold or expired flight-number history is served from bounded memory when available and refreshed in the background. A true cold miss temporarily falls back to no historical veto rather than blocking ADS-B processing, trajectory calculation, CPA or notification.
+### Canonical observations and provenance
 
-The route-history path uses bounded single-flight refreshes, cache limits, TTLs, concurrency limits and I/O timeouts. Route-history writes are also handled through a fixed worker queue with deduplication and stale-work dropping. Historical learning can recover from a dropped optional sample on a later observation.
+Normalized observations can retain:
 
-### Terminal-arrival and genuine-pass handling
+- ICAO24 and callsign
+- observed and received timestamps
+- provider/source identity
+- latitude and longitude
+- altitude, groundspeed, track and vertical rate
+- position age/source freshness
+- aircraft type where supplied
+- field-level provenance after a safe multi-provider merge
 
-The terminal-arrival ensemble remains designed around the recurring false-alert case where an aircraft arriving at IST briefly points toward the observer before making its normal arrival turn. Destination, airport-convergence, route-history and multiple deterministic motion hypotheses may hold or cancel a projected alert when the evidence supports it.
+Missing values stay missing. Plane Alerts does not invent an aircraft observation timestamp when a provider does not supply a usable position time or position age. Motion data from sources separated too far in time is not combined into a synthetic state.
 
-At the same time, fresh physical observations remain authoritative. A genuinely observed close pass is not permanently hidden by old route expectations. Direct-presence recovery requires independent fresh observations rather than one stale or repeated sample.
+### Provider health and failover
 
-Cancellation state is latched after repeated evidence to prevent qualify/cancel/requalify oscillation. Predictive evidence alone cannot immediately resurrect a confirmed cancellation, but a fresh physical entry into the configured radius releases the latch.
+Each provider tracks concrete evidence rather than one opaque score, including recent successes/failures, latency, timeouts, malformed responses, stale-position rate, rate-limit events, aircraft count, consecutive failures, circuit state and cooldown time.
 
-### Notification correctness
+Repeated failures open a bounded circuit breaker. During cooldown Plane Alerts skips that source rather than continuously hammering it. When cooldown expires, the provider enters a recovery probe state; a successful request closes the circuit automatically. HTTP 429 responses also enter bounded cooldown and honor a usable `Retry-After` value.
 
-A Plane Alerts encounter normally reuses one Telegram message. v4.4 therefore records lifecycle delivery events explicitly:
+The existing critical-path provider deadline remains in place. Timeouts now feed the provider circuit state, so repeated OpenSky or other provider stalls are isolated instead of retried indefinitely every cycle.
 
-- `first_notification`
-- `message_update`
-- `cancellation_update`
-- `passed_update`
-- `retry`
-- `failed_delivery`
+### OpenSky geography
 
-`notified_at` now represents the first successful logical alert and is not refreshed by ordinary message edits. Alert counts and lead-time analysis therefore do not treat a camera-ready edit, cancellation edit or passed update as a brand-new notification.
+OpenSky bounding boxes use latitude-aware longitude scaling. Regions that cross the ±180° date line are split into legal requests, and near-pole searches use bounded global-longitude coverage rather than generating invalid coordinates.
 
-Notification telemetry and photo snapshots are persisted after Telegram delivery through bounded background work. A failed cancellation delivery leaves the encounter active so the cancellation can be retried instead of silently closing the alert.
+Regression coverage includes the equator, mid-latitudes, Istanbul latitude, high latitudes, both sides of the date line and near-pole behavior.
 
-### Five-second cadence protection
+## Optional local ADS-B configuration
 
-The monitoring path includes:
+Plane Alerts supports the commonly exposed aircraft JSON output from:
 
-- shared regional ADS-B polling instead of one provider request per user
-- provider refresh deadlines and continuity snapshots
-- batched active-user configuration reads
-- batched approach-state reads
-- compiled profile filtering from already loaded configuration
-- provider learning moved off the live path
-- route-history reads and writes moved off the live path
-- bounded optional enrichment work
-- scheduler tolerance that avoids turning normal sub-second jitter into a roughly ten-second evaluation gap
+- readsb
+- dump1090
+- dump1090-fa
+- ultrafeeder / tar1090 deployments
 
-Cached ADS-B continuity preserves the real position age. Reusing a snapshot never pretends stale data is fresh.
+Set either the receiver base URL or the full `aircraft.json` URL:
 
-### Release identity
+```env
+LOCAL_ADSB_URL=http://receiver.local
+LOCAL_ADSB_RECEIVER_TYPE=auto
+LOCAL_ADSB_TIMEOUT_SECONDS=0.8
+LOCAL_ADSB_MAX_POSITION_AGE_SECONDS=12
+LOCAL_ADSB_AUTH_HEADER=
+```
 
-`app/version.py` is the canonical Plane Alerts version source. Health, readiness, worker status and release reporting expose the same version and deployed commit.
+`LOCAL_ADSB_RECEIVER_TYPE` may be `auto`, `readsb`, `dump1090`, `dump1090-fa` or `ultrafeeder`. If the configured URL is a base URL, Plane Alerts checks the common `data/aircraft.json`, `tar1090/data/aircraft.json` and `aircraft.json` locations within the same bounded request path.
 
-Railway deployment is triggered only after the `main` test workflow succeeds. The deploy workflow checks out that exact tested SHA and embeds the same SHA into the uploaded build, so a CLI deployment can still identify the code that is actually running.
+Do not place credentials in `LOCAL_ADSB_URL`. If a private gateway requires authentication, `LOCAL_ADSB_AUTH_HEADER` can contain the complete Authorization header value. Provider diagnostics never emit that secret or the configured local URL.
+
+Leave `LOCAL_ADSB_URL` blank for public-only operation. No local ADS-B hardware is required to run Plane Alerts.
+
+### Diagnostics
+
+Structured provider logs show which providers participated in a refresh and which source supplied merged aircraft positions. Provider status includes circuit/cooldown state, latency, recent failures, stale-position rate and rate-limit state. Merge rejection logs identify stale or conflicting source positions without exposing local receiver credentials or URLs.
+
+The v4.5 local receiver integration is covered by realistic readsb/dump1090-style fixtures and simulated disconnect, malformed-data, recovery and disagreement tests. Physical SDR hardware validation is still environment-specific and is not claimed by the automated test suite.
+
+## Reliability foundations retained from v4.4
+
+The alert-critical path remains:
+
+```text
+ADS-B ingestion -> freshness validation -> trajectory -> CPA -> qualification -> alert
+```
+
+Route-history persistence, provider learning, photography, weather, Prediction Lab and auditing remain lower-priority optional work. Shared regional polling, continuity snapshots, bounded histories, notification deduplication, cancellation/requalification guards and the IST terminal-arrival regression suite are preserved.
+
+The prediction model identifier remains `4.4-observation-confirmations`; v4.5 changes ingestion/provider resilience rather than redesigning prediction behavior.
 
 ## Profiles and aircraft filtering
 
 `/profiles` manages persistent alert profiles. Each profile can hold an independent location, radius, aircraft selection and advanced filtering rules. Profiles can be created, activated, edited, renamed, duplicated and deleted.
-
-The aircraft selector is data-driven and supports category browsing and type search. `All Aircraft` is a logical mode, so newly introduced or unknown aircraft can still qualify when the user chooses to monitor everything.
 
 Advanced rules follow deterministic inheritance:
 
@@ -91,37 +113,17 @@ Profile defaults
   -> Aircraft-specific override
 ```
 
-Supported rule fields include enabled/disabled state, altitude limits, airline/operator allow and block lists, and optional radius overrides. Selecting an aircraft only expresses user interest; it never bypasses trajectory, CPA, route, arrival or confidence checks.
-
-## Alert qualification
-
-Plane Alerts can consider:
-
-- aircraft and observer position
-- heading and groundspeed
-- altitude and vertical rate
-- position age and observation gaps
-- recent distance trend
-- turn rate and curvature
-- projected CPA and time to CPA
-- flight-number route history
-- destination/airport convergence when available
-- multiple plausible terminal-arrival futures
-- fresh observed physical presence
-
-A straight-line vector is not treated as sufficient evidence around terminal arrivals when stronger contradictory evidence exists.
+Selecting an aircraft only expresses user interest; it never bypasses trajectory, CPA, route, arrival or confidence checks.
 
 ## Prediction Lab
 
 Prediction Lab records forecasts and later compares them with observed outcomes to investigate ETA stability, CPA error, false or late cancellations, qualify/cancel oscillation, route-history mistakes, terminal-arrival behavior and Next60 quality.
 
-Missing ADS-B coverage is not counted as a hit or a miss. Outcome scoring requires suitable observed evidence. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
-
-`/next60` and `/forecast` display expected aircraft in 0–15, 15–30 and 30–60 minute windows. Short-range live geometry remains authoritative.
+Missing ADS-B coverage is not counted as a hit or a miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 
 ## Photography intelligence
 
-Plane Alerts includes deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. Photography and weather enrichment must not delay the alert-critical path, and deterministic fallbacks remain available when optional services fail.
+Plane Alerts includes deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing. Photography and weather enrichment do not control live alert qualification.
 
 ## Telegram commands
 
@@ -151,18 +153,17 @@ Pull-request CI runs:
 python -m compileall -q app vercel_runtime worker.py
 pytest -q
 python scripts/benchmark_v42.py
+python scripts/benchmark_v45_provider_resilience.py
 pip check
 ```
 
-The final v4.4 reliability branch passed **291 tests**. Coverage includes fresh-observation confirmation, repeated-observation protection, production guard composition in a fresh interpreter, cancellation latching and recovery, failed cancellation retry, stale ADS-B behavior, IST terminal-turn suppression, genuine close-pass recovery, notification update classification, cold route-history isolation, profiles, Prediction Lab outcome handling and existing Error Museum regressions.
-
-The final terminal-arrival benchmark evaluated 2,250 observer/path combinations for 250 users at about **1,800 evaluations per second**, with shared bounded motion-path reuse. Changes are not deployed merely because a branch exists; production deployment is gated on a successful `main` test workflow.
+v4.5 adds regression coverage for canonical timestamps, local receiver parsing/disable/failure/recovery, provider timeout and circuit recovery, rate-limit cooldown, deterministic merge order, stale/fresh disagreement, malformed coordinates, date-line and high-latitude OpenSky geography, stable ICAO identity across source switching and bounded concurrent provider work. Existing v4.4 replay/Error Museum and IST/genuine-pass tests remain part of the full suite.
 
 ## Deployment
 
-Production runs on Railway with MongoDB persistence. The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and does not control live trajectory or notification decisions.
+Production runs on Railway with MongoDB persistence. Railway deployment is triggered only after the `main` test workflow succeeds. The deploy workflow checks out that exact tested SHA and embeds the same SHA into the uploaded build, so health/release reporting can identify the running commit.
 
-The Railway AI agent is not used for deployment.
+The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and does not control live trajectory or notification decisions. The Railway AI agent is not used.
 
 ## Running locally
 
@@ -182,13 +183,13 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```text
 app/
-  aircraft/          ADS-B providers, aircraft registry and deterministic filters
+  aircraft/          ADS-B providers, canonical observations and filters
   bot/               Telegram commands, profile flows and messages
   intelligence/      trajectory, route history and terminal-arrival logic
   photography/       deterministic camera guidance
   worker/            shared polling, lifecycle and cadence guards
-scripts/             deployment, verification and audit helpers
-tests/               unit, regression and replay tests
+scripts/             deployment, verification and benchmarks
+tests/               unit, regression, replay and receiver fixtures
 docs/error_museum/   preserved production failure cases
 docs/releases/       release notes
 .github/workflows/   CI and Railway workflows

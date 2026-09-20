@@ -1,42 +1,38 @@
 """Application configuration loaded from environment variables / .env file."""
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """All bot configuration, loaded from environment variables or a .env file."""
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
-    # Telegram
     telegram_bot_token: str = ""
     webhook_url: str = ""
     webhook_secret: str = ""
-
-    # MongoDB
     mongo_uri: str = "mongodb://localhost:27017"
     database_name: str = "aircraft_bot"
 
-    # Aircraft data providers
     adsb_lol_base_url: str = "https://api.adsb.lol/v2"
     adsb_fi_base_url: str = "https://opendata.adsb.fi/api/v2"
     opensky_base_url: str = "https://opensky-network.org/api"
     airplanes_live_base_url: str = "https://api.airplanes.live/v2"
     adsb_one_base_url: str = "https://api.adsb.one/v2"
-    opensky_token_url: str = (
-        "https://auth.opensky-network.org/auth/realms/"
-        "opensky-network/protocol/openid-connect/token"
-    )
-    # Preferred hosted format: one OpenSky credential pair per secret slot.
-    # Each OPENSKY_N may be JSON {"clientId":"...","clientSecret":"..."}
-    # or the compact form clientId:clientSecret. The legacy aggregate JSON
-    # variable remains supported for backwards compatibility.
+    opensky_token_url: str = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+
+    # Optional readsb/dump1090/dump1090-fa/ultrafeeder source. Blank preserves
+    # public-only behavior. The URL may be a receiver base URL or aircraft.json.
+    local_adsb_url: str = ""
+    local_adsb_receiver_type: str = "auto"
+    local_adsb_timeout_seconds: float = 0.8
+    local_adsb_max_position_age_seconds: float = 12.0
+    local_adsb_auth_header: str = ""
+
     opensky_1: str = ""
     opensky_2: str = ""
     opensky_3: str = ""
@@ -45,28 +41,21 @@ class Settings(BaseSettings):
     opensky_credentials_json: str = ""
     api_keys_dir: str = "api"
 
-    # Flight-number route intelligence. The bulk route endpoint is preferred;
-    # the single-route endpoint is an official fallback that also calculates
-    # whether the route is plausible for the aircraft's live position.
     route_lookup_url: str = "https://api.adsb.lol/api/0/routeset"
     route_lookup_single_url: str = "https://api.adsb.lol/api/0/route"
     route_lookup_cache_seconds: int = 1200
     route_history_days: int = 3
     route_sample_interval_seconds: int = 30
 
-    # AI providers
     gemini_api_key: str = ""
     gemini_api_key_2: str = ""
     gemini_model_primary: str = "gemini-3.5-flash-lite"
     gemini_model_secondary: str = "gemini-3.5-flash"
-    # User-facing preferred names are GROQ_KEY / GROQ_KEY_2. GROQ_API_KEY is
-    # retained so existing deployments do not break.
     groq_key: str = ""
     groq_key_2: str = ""
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 
-    # v3.2 Gemini photography intelligence
     gemini_photo_model: str = "gemini-3.8-flash"
     gemini_photo_fallback_model: str = "gemini-3.5-flash-lite"
     gemini_photo_timeout_seconds: float = 30.0
@@ -75,31 +64,58 @@ class Settings(BaseSettings):
     photography_http_timeout_seconds: float = 12.0
     photography_conditions_cache_seconds: int = 120
 
-    # Trajectory prediction
     predictor_service_url: str = ""
     early_warning_buffer_km: float = 15.0
-
-    # Monitoring
     poll_interval_seconds: int = 5
     default_radius_km: float = 15.0
     cooldown_minutes: int = 30
-
-    # Learning
     learning_plane_threshold: int = 100
     relearn_plane_count: int = 25
-
-    # Admin
     admin_telegram_id: int | None = None
     admin_password: str = ""
-
-    # Private Antigravity prediction-lab worker
     agy_worker_url: str = ""
     agy_worker_token: str = ""
-
-    # Server
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
+
+    @field_validator("local_adsb_receiver_type")
+    @classmethod
+    def _validate_local_receiver_type(cls, value: str) -> str:
+        normalised = str(value or "auto").strip().lower()
+        allowed = {"auto", "readsb", "dump1090", "dump1090-fa", "ultrafeeder"}
+        if normalised not in allowed:
+            raise ValueError("LOCAL_ADSB_RECEIVER_TYPE must be auto, readsb, dump1090, dump1090-fa, or ultrafeeder")
+        return normalised
+
+    @field_validator("local_adsb_url")
+    @classmethod
+    def _validate_local_adsb_url(cls, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        parsed = urlsplit(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("LOCAL_ADSB_URL must be a valid http:// or https:// URL")
+        if parsed.username or parsed.password:
+            raise ValueError("Do not embed local ADS-B credentials in LOCAL_ADSB_URL; use LOCAL_ADSB_AUTH_HEADER instead")
+        return raw.rstrip("/")
+
+    @field_validator("local_adsb_timeout_seconds")
+    @classmethod
+    def _validate_local_timeout(cls, value: float) -> float:
+        timeout = float(value)
+        if not 0.2 <= timeout <= 1.5:
+            raise ValueError("LOCAL_ADSB_TIMEOUT_SECONDS must be between 0.2 and 1.5")
+        return timeout
+
+    @field_validator("local_adsb_max_position_age_seconds")
+    @classmethod
+    def _validate_local_freshness(cls, value: float) -> float:
+        freshness = float(value)
+        if not 1.0 <= freshness <= 30.0:
+            raise ValueError("LOCAL_ADSB_MAX_POSITION_AGE_SECONDS must be between 1 and 30")
+        return freshness
 
 
 settings = Settings()

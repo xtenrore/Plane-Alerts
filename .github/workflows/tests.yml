@@ -39,10 +39,14 @@ jobs:
           GEMINI_API_KEY: ""
           GROQ_API_KEY: ""
           OPENSKY_CREDENTIALS_JSON: ""
+          LOCAL_ADSB_URL: ""
         run: pytest -q
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
+
+      - name: Benchmark v4.5 provider critical path
+        run: python scripts/benchmark_v45_provider_resilience.py
 
       - name: Verify dependency consistency
         run: pip check
