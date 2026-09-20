@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v4.8.1**  
+**Current code version: Plane Alerts v4.9.0**  
 **Current prediction version: `4.7.3-terminal-delivery-landing-path`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -28,9 +28,13 @@ v4.8 keeps non-critical persistence outside that path. Once a process has loaded
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
 
-## v4.8.1 production verification patch
+## v4.9 project maturity and self-hosting
 
-Production verification exposed a Motor/PyMongo compatibility edge: database objects intentionally reject boolean truth testing. v4.8.1 selects explicit database handles with `is None` checks, so a healthy Mongo connection no longer enters the degraded reconnect path for that reason. Prediction behavior is unchanged.
+v4.9 makes Plane Alerts reproducible outside Railway without creating a second prediction implementation. Runtime Python dependencies are exactly pinned, Docker builds support amd64 and ARM64, and `docker-compose.yml` provides a health-checked MongoDB with a persistent volume and restart policies.
+
+The read-only `planealerts doctor` command validates important configuration and dependency health without printing secrets or exact observer coordinates. It checks version/Python compatibility, Telegram, MongoDB, ADS-B provider reachability, optional local ADS-B, stored coordinate ranges, radius/cadence settings and contradictory configuration.
+
+Self-hosting, Raspberry Pi/ARM64, upgrade and rollback instructions are maintained in [`docs/self-hosting.md`](docs/self-hosting.md). Release changes are summarized in [`CHANGELOG.md`](CHANGELOG.md). Problems can be reported through the repository issue templates.
 
 ## Storage resilience
 
@@ -103,21 +107,21 @@ Queries, document bodies, credentials and precise user coordinates are not inclu
 
 ## Schema migrations and backup/export
 
-v4.8 introduces explicit, versioned Mongo schema migrations. Migrations have a unique version and ID, are restart-safe/idempotent where practical, verify after application, and refuse a version whose recorded migration ID does not match the expected migration.
+Plane Alerts uses explicit, versioned Mongo schema migrations. Migrations have a unique version and ID, are restart-safe/idempotent where practical, verify after application, and refuse a version whose recorded migration ID does not match the expected migration.
 
-The v4.8 storage export/import utility is allow-listed rather than a raw database dump. Exact location documents are excluded by default and require explicit opt-in. Secret-like fields are removed. Import validates the export format/schema, rejects unsupported collections and malformed records, uses natural identities to avoid duplicates, and does not overwrite a record that is demonstrably newer.
+The storage export/import utility is allow-listed rather than a raw database dump. Exact location documents are excluded by default and require explicit opt-in. Secret-like fields are removed. Import validates the export format/schema, rejects unsupported collections and malformed records, uses natural identities to avoid duplicates, and does not overwrite a record that is demonstrably newer.
 
-Error Museum evidence is not expired or downsampled by v4.8.
+Error Museum evidence is not expired or downsampled.
 
 ## SQLite status
 
-SQLite persistence for self-hosted user/configuration state was evaluated for v4.8 but is **not enabled**. The existing persistence model is Mongo-centric and a second mutable backend would require a broader repository abstraction with meaningful divergence and restart-risk. v4.8 therefore keeps Mongo as the only mutable production backend rather than introducing an under-tested partial implementation.
+SQLite persistence for self-hosted user/configuration state remains intentionally disabled. The mutable persistence model is Mongo-centric and a second partial backend would introduce feature divergence and restart-safety risk.
 
-Plane Alerts already uses a separate read-only SQLite database for the compiled worldwide airport/runway reference catalogue. That static database is unrelated to user/alert persistence.
+Plane Alerts does use a separate read-only SQLite database for the compiled worldwide airport/runway reference catalogue. That static database is unrelated to user/alert persistence.
 
 ## Airport, runway and terminal intelligence
 
-The v4.7 family remains intact in v4.8. Plane Alerts uses a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot and maintained overrides. Runtime monitoring does not call OurAirports or MongoDB for static airport/runway geometry.
+The v4.7 family remains intact. Plane Alerts uses a local worldwide aviation-reference database built from a commit-pinned OurAirports snapshot and maintained overrides. Runtime monitoring does not call OurAirports or MongoDB for static airport/runway geometry.
 
 Terminal evidence includes sustained vector changes, downwind/base transitions, final intercept, holding-like behavior, go-arounds and missed approaches. Broad runway/base/final/holding suppression hypotheses remain shadow-only.
 
@@ -191,17 +195,18 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 ## Testing and release gates
 
-CI runs compile validation, builds/verifies the pinned airport database, runs the full pytest suite, preserves all v4.4-v4.7 Error Museum/provider/Telegram/terminal regressions, and executes deterministic performance gates.
+CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.8 adds explicit outage/restart/migration/export/import tests and a storage-isolation benchmark that injects 100 ms, 500 ms, 1 second and failed persistence while measuring the memory-only live path.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_storage_v48.py tests/test_database_atlas.py
-python scripts/benchmark_storage_v48.py
+pytest -q tests/test_self_hosting_v49.py
+python scripts/benchmark_v49_doctor.py
+docker compose config --quiet
 pip check
 ```
 
@@ -217,23 +222,24 @@ The existing AGY persistent volume and unrelated staged Railway configuration ch
 
 ## Running locally
 
-Plane Alerts uses Python 3.11 and MongoDB. Build the pinned airport reference database once before starting the application:
+The supported self-hosting path is Docker Compose:
 
 ```bash
 git clone https://github.com/xtenrore/Plane-Alerts.git
 cd Plane-Alerts
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python scripts/build_airport_database.py
 cp .env.example .env
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+docker compose build plane-alerts
+docker compose run --rm plane-alerts planealerts doctor --offline
+docker compose up -d
 ```
+
+For native Python and Raspberry Pi/ARM64 instructions, health checks, backups, upgrades and rollback, see [`docs/self-hosting.md`](docs/self-hosting.md).
 
 ## Known limitations
 
 - A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
 - Optional analytics can be dropped under prolonged storage pressure and are counted in diagnostics.
-- Mutable SQLite persistence is not implemented in v4.8.
+- Mutable SQLite persistence is not implemented.
 - The worldwide airport catalogue is community-maintained; maintained Plane Alerts overrides and fresh physical observations take precedence where stronger evidence exists.
 - Broader runway/history suppression remains shadow-only pending representative outcome evidence.
+- Raspberry Pi validation is automated ARM64 Docker build validation; it is not a claim of testing every physical Pi model, receiver or storage device.

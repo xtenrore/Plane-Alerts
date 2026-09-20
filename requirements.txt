@@ -1,18 +1,2 @@
-# Plane Alerts v4.0 runtime dependencies
-
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-python-telegram-bot[webhooks,job-queue]>=21.5
-motor>=3.3.0
-pymongo[srv]>=4.9.0
-httpx>=0.27.0
-pydantic>=2.9.0
-pydantic-settings>=2.5.0
-python-dotenv>=1.0.0
-geohash2>=1.1
-astral>=3.2
-apscheduler>=3.10.4
-psutil>=5.9.0
-structlog>=24.4.0
-honcho>=1.1.0
-Pillow>=11.0.0
+# Plane Alerts production dependencies are fully pinned for reproducible installs.
+-r requirements.lock

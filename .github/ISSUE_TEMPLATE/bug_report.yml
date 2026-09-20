@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible Plane Alerts problem
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Plane Alerts. Do not paste Telegram tokens, API keys, MongoDB credentials, local receiver authentication headers, or exact private observer coordinates.
+  - type: input
+    id: version
+    attributes:
+      label: Plane Alerts version
+      description: From /health, README, or `planealerts doctor --json`.
+      placeholder: v4.9.0
+    validations:
+      required: true
+  - type: input
+    id: prediction
+    attributes:
+      label: Prediction version
+      placeholder: 4.7.3-terminal-delivery-landing-path
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation
+      options:
+        - Railway
+        - Docker Compose
+        - Raspberry Pi / ARM64
+        - Native Python
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include timestamps and aircraft identifiers when relevant, but redact private data.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction or evidence
+      description: Add reproducible steps, replay evidence, or redacted logs. Missing ADS-B coverage is unresolved evidence, not automatically a success or miss.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: `planealerts doctor --json` output
+      description: Review the output before posting and remove any environment-specific details you do not want public.
