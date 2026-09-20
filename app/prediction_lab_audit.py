@@ -10,11 +10,11 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from types import SimpleNamespace
 
 from app.database import get_db
 from app.version import PREDICTION_VERSION
 from app.worker.optional_work import OptionalCache
-from types import SimpleNamespace
 
 audit_work = OptionalCache(max_entries=4096, max_pending=64, concurrency=2, timeout=3.0)
 
@@ -52,6 +52,43 @@ def _horizon_bucket(seconds: float | None) -> str:
     if seconds <= 3600:
         return "30-60m"
     return ">60m"
+
+
+def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | None) -> dict:
+    """Attach v4.6 shadow/provenance evidence without retaining user location."""
+    merged = dict(diagnostics or {})
+    try:
+        from app.intelligence.prediction_v46 import diagnostics_for
+
+        v46 = diagnostics_for(prediction)
+        if v46:
+            merged["v46"] = v46
+    except Exception:
+        logger.debug("v46_prediction_diagnostics_unavailable", exc_info=True)
+
+    candidates = getattr(aircraft, "source_candidates", ()) or ()
+    if isinstance(candidates, dict):
+        candidates = list(candidates)
+    elif not isinstance(candidates, (list, tuple, set)):
+        candidates = [str(candidates)] if candidates else []
+
+    provenance = getattr(aircraft, "field_provenance", None)
+    if not isinstance(provenance, dict):
+        provenance = {}
+
+    merge_notes = getattr(aircraft, "merge_notes", ()) or ()
+    if not isinstance(merge_notes, (list, tuple, set)):
+        merge_notes = [str(merge_notes)] if merge_notes else []
+
+    merged["observation"] = {
+        "source": str(getattr(aircraft, "source", "") or ""),
+        "source_candidates": [str(item) for item in candidates][:8],
+        "source_freshness": str(getattr(aircraft, "source_freshness", "") or ""),
+        "data_quality": str(getattr(aircraft, "data_quality", "") or ""),
+        "field_provenance": {str(key): str(value) for key, value in list(provenance.items())[:16]},
+        "merge_notes": [str(item)[:160] for item in list(merge_notes)[:8]],
+    }
+    return merged
 
 
 async def record_prediction_snapshot(
@@ -163,15 +200,17 @@ async def record_prediction_outcome(
 
 
 def enqueue_snapshot(*, user_id, aircraft, prediction, alert_radius_km, qualifies, route_suppressed, route_reason="", diagnostics=None):
-    # Copy only scalar fields; queued work never retains a projected path or
-    # an entire provider response. The two-worker queue is bounded at admission.
+    # Capture diagnostics before replacing the live prediction object with a
+    # scalar-only copy. This keeps v4.6 shadow evidence bounded and joinable to
+    # the existing Prediction Lab record without retaining projected paths.
+    merged_diagnostics = _snapshot_diagnostics(aircraft, prediction, diagnostics)
     pred = SimpleNamespace(**{name: getattr(prediction, name, None) for name in (
         "time_to_cpa_s", "current_distance_km", "projected_closest_km", "state", "confidence", "confidence_score", "enters_alert_radius")})
     ac = SimpleNamespace(icao24=aircraft.icao24, callsign=aircraft.callsign, aircraft_type=aircraft.aircraft_type)
     audit_work.get(("prediction", user_id, ac.icao24), lambda: record_prediction_snapshot(
         user_id=user_id, aircraft=ac, prediction=pred, alert_radius_km=alert_radius_km,
         qualifies=qualifies, route_suppressed=route_suppressed, route_reason=route_reason,
-        diagnostics=diagnostics), ttl=60)
+        diagnostics=merged_diagnostics), ttl=60)
 
 
 def enqueue_outcome(**kwargs):
