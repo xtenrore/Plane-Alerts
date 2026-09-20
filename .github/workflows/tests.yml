@@ -71,6 +71,9 @@ jobs:
       - name: Run v4.7.3 arrival delivery and landing-path regressions
         run: pytest -q tests/test_terminal_lifecycle_v473.py
 
+      - name: Run v4.8 storage outage, restart, migration and backup suite
+        run: pytest -q tests/test_storage_v48.py tests/test_database_atlas.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -91,6 +94,9 @@ jobs:
 
       - name: Benchmark v4.7.2 terminal-arrival initial hold
         run: python scripts/benchmark_v472_terminal_hold.py
+
+      - name: Benchmark v4.8 slow/unavailable storage isolation
+        run: python scripts/benchmark_storage_v48.py
 
       - name: Verify dependency consistency
         run: pip check
