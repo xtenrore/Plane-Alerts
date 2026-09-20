@@ -2,6 +2,16 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.0.0 — Observability, Explainability & Operator Insight
+
+- Added `planealerts diagnostics` with bounded per-aircraft why/why-not explanations from Prediction Lab evidence.
+- Added `planealerts metrics` for persisted provider, timing, storage, queue and notification diagnostics.
+- Persisted provider request/error/timeout counts, latency percentiles, last success, stale rate and circuit state through the existing monitor heartbeat.
+- Added deterministic diagnostics-overhead benchmark and v5.0 regression gates.
+- Fixed AGY Atlas read-timeout storms with bounded reads, a cooldown circuit and last-known-good redacted context fallback.
+- Preserved independent `CHATGPT_HANDOFF_JSON` delivery when Mongo is degraded.
+- Physical prediction version remains `4.7.3-terminal-delivery-landing-path`.
+
 ## v4.9.0 — Project Maturity & Self-Hosting
 
 - Fully pinned Python runtime dependency lock.
