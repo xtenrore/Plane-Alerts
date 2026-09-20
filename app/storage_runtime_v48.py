@@ -25,7 +25,7 @@ _FLUSH_IDLE_S = 0.25
 _FLUSH_FAILURE_BACKOFF_S = 3.0
 _WRITE_TIMEOUT_S = 1.25
 _APPROACH_CACHE_MAX = 4096
-_APPROACH_DIRTY_MAX = 2048
+_APPROACH_DIRTY_MAX = 4096
 _STATUS_PENDING_MAX = 32
 _OPTIONAL_PENDING_MAX = 512
 
@@ -83,6 +83,8 @@ class StorageRuntimeV48:
         self._refresh_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
         self._closed = False
+        self._flush_failures = 0
+        self._next_flush_attempt_mono = 0.0
 
     @property
     def config_loaded(self) -> bool:
@@ -188,6 +190,7 @@ class StorageRuntimeV48:
         self._config_loaded = True
         self._config_invalidated = False
         self._last_config_refresh_mono = time.monotonic()
+        storage_metrics.set_state("healthy")
         return True
 
     def invalidate_user_config(self, user_id: int | None = None) -> None:
@@ -286,23 +289,37 @@ class StorageRuntimeV48:
             if not row.get("active") and expires is not None and expires <= now and key not in self._dirty:
                 self._approach.pop(key, None)
                 self._approach_versions.pop(key, None)
+
         while len(self._approach) > _APPROACH_CACHE_MAX:
             removable = next(
                 (key for key, row in self._approach.items() if not row.get("active") and key not in self._dirty),
                 None,
             )
             if removable is None:
+                removable = next(
+                    (key for key, row in self._approach.items() if not row.get("active")),
+                    None,
+                )
+            if removable is None:
                 removable = next(iter(self._approach))
                 storage_metrics.record_drop(optional=False)
-                logger.error("storage_v48_approach_cache_pressure limit=%d", _APPROACH_CACHE_MAX)
+                logger.error("storage_v48_active_state_pressure limit=%d", _APPROACH_CACHE_MAX)
+            elif removable in self._dirty:
+                storage_metrics.record_drop(optional=False)
+                logger.error("storage_v48_inactive_dirty_state_dropped key=%s", removable)
             self._approach.pop(removable, None)
             self._approach_versions.pop(removable, None)
             self._dirty.pop(removable, None)
 
         while len(self._dirty) > _APPROACH_DIRTY_MAX:
-            # Coalescing already limits each encounter to one pending write. If
-            # this guard ever fires, retain the newest work and make the loss visible.
-            dropped, _ = self._dirty.popitem(last=False)
+            # Prefer inactive lifecycle records under pathological outage pressure.
+            dropped = next(
+                (key for key in self._dirty if not (self._approach.get(key) or {}).get("active")),
+                None,
+            )
+            if dropped is None:
+                dropped = next(iter(self._dirty))
+            self._dirty.pop(dropped, None)
             storage_metrics.record_drop(optional=False)
             logger.error("storage_v48_critical_queue_full dropped=%s limit=%d", dropped, _APPROACH_DIRTY_MAX)
 
@@ -406,10 +423,18 @@ class StorageRuntimeV48:
         """Persist bounded pending work in priority order; return completed count."""
         if not self._dirty and not self._status_pending and not self._optional_pending:
             return 0
+        now_mono = time.monotonic()
+        if now_mono < self._next_flush_attempt_mono:
+            return 0
         try:
             db = db or self._db()
         except Exception:
             storage_metrics.set_state("degraded")
+            self._flush_failures += 1
+            storage_metrics.record_retry()
+            self._next_flush_attempt_mono = now_mono + min(
+                30.0, _FLUSH_FAILURE_BACKOFF_S * (2 ** min(self._flush_failures - 1, 3))
+            )
             return 0
 
         completed = 0
@@ -433,9 +458,23 @@ class StorageRuntimeV48:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._flush_failures += 1
+            storage_metrics.record_retry()
+            self._next_flush_attempt_mono = time.monotonic() + min(
+                30.0, _FLUSH_FAILURE_BACKOFF_S * (2 ** min(self._flush_failures - 1, 3))
+            )
             storage_metrics.set_state("degraded")
-            logger.warning("storage_v48_flush_failed error=%s", type(exc).__name__)
+            logger.warning(
+                "storage_v48_flush_failed error=%s retry_in_s=%.1f",
+                type(exc).__name__,
+                max(0.0, self._next_flush_attempt_mono - time.monotonic()),
+            )
             return completed
+
+        self._flush_failures = 0
+        self._next_flush_attempt_mono = 0.0
+        if completed:
+            storage_metrics.set_state("healthy")
         return completed
 
     async def _refresh_loop(self) -> None:
@@ -455,7 +494,11 @@ class StorageRuntimeV48:
         while True:
             try:
                 completed = await self.flush_once()
-                await asyncio.sleep(_FLUSH_IDLE_S if completed else 0.5)
+                if self._next_flush_attempt_mono:
+                    delay = max(0.25, min(1.0, self._next_flush_attempt_mono - time.monotonic()))
+                else:
+                    delay = _FLUSH_IDLE_S if completed else 0.5
+                await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -486,6 +529,7 @@ class StorageRuntimeV48:
             if self._last_config_refresh_mono
             else None
         )
+        retry_in = max(0.0, self._next_flush_attempt_mono - time.monotonic()) if self._next_flush_attempt_mono else 0.0
         return {
             "config_loaded": self._config_loaded,
             "monitoring_safe": self.monitoring_safe,
@@ -495,6 +539,8 @@ class StorageRuntimeV48:
             "critical_write_queue_depth": len(self._dirty),
             "status_write_queue_depth": len(self._status_pending),
             "optional_write_queue_depth": len(self._optional_pending),
+            "flush_failures": self._flush_failures,
+            "flush_retry_in_s": round(retry_in, 1),
         }
 
 
