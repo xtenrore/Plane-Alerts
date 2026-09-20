@@ -50,11 +50,11 @@ python3.11 -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 python scripts/build_airport_database.py
-TELEGRAM_BOT_TOKEN='your-token' MONGO_URI='mongodb://127.0.0.1:27017' planealerts doctor
+TELEGRAM_BOT_TOKEN='your-token' MONGO_URI='mongodb://127.0.0.1:27017' python scripts/planealerts doctor
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-For a source checkout where `planealerts` has not been installed into `PATH`, use `python -m app.doctor_v49 doctor` or `python scripts/planealerts doctor`.
+The bare `planealerts` executable is installed inside the project Docker image. From a native source checkout use `python scripts/planealerts doctor` or `python -m app.doctor_v49 doctor`; optionally place your own symlink to `scripts/planealerts` on `PATH`.
 
 ## Configuration validation
 
