@@ -105,8 +105,6 @@ class TrajectoryPrediction:
     speed_stability_kts: float | None
     reason: str
     path: list[ProjectedPoint] = field(default_factory=list)
-    # v5.1 fields are additive so older callers that construct/read the legacy
-    # prediction object remain compatible.
     current_vertical_separation_m: float | None = None
     projected_closest_3d_km: float | None = None
     projected_closest_3d_lower_bound_km: float | None = None
@@ -255,11 +253,11 @@ def _acceleration(samples: list[HistorySample]) -> float:
 
 
 def _speed_spread(samples: list[HistorySample]) -> float | None:
-    v = [float(s.speed_kts) for s in samples if s.speed_kts is not None]
-    if len(v) < 2:
+    values = [float(s.speed_kts) for s in samples if s.speed_kts is not None]
+    if len(values) < 2:
         return None
-    m = sum(v) / len(v)
-    return math.sqrt(sum((x - m) ** 2 for x in v) / len(v))
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
 
 
 def _distance_trend(samples: list[HistorySample], user_lat: float, user_lon: float) -> float | None:
@@ -276,6 +274,24 @@ def _distance_trend(samples: list[HistorySample], user_lat: float, user_lon: flo
             if abs(rate) <= 0.8:
                 pairs.append(rate)
     return median(pairs) if pairs else None
+
+
+def _observed_passed(
+    samples: list[HistorySample],
+    user_lat: float,
+    user_lon: float,
+    alert_radius_km: float,
+    trend: float | None,
+) -> bool:
+    """Require an actual radius observation before declaring a completed pass."""
+    if len(samples) < 2 or trend is None or trend <= 0.002:
+        return False
+    distances = [haversine_km(s.latitude, s.longitude, user_lat, user_lon) for s in samples]
+    closest = min(distances)
+    if closest > float(alert_radius_km):
+        return False
+    current = distances[-1]
+    return current - closest >= max(0.15, float(alert_radius_km) * 0.01)
 
 
 def _motion_heading(samples: list[HistorySample]) -> float | None:
@@ -339,9 +355,6 @@ def predict_trajectory(
     stale = age > 30.0
     current = haversine_km(latest.latitude, latest.longitude, user_lat, user_lon)
 
-    # Preserve the legacy slant fields for compatibility. When observer
-    # elevation is unavailable they remain a sea-level-reference estimate;
-    # v5.1's explicit 3D fields carry the uncertainty-safe semantics.
     nominal_observer_altitude_m = float(user_altitude_m) if user_altitude_m is not None else 0.0
     cur_slant = (
         math.hypot(current, abs(float(latest.altitude_m) - nominal_observer_altitude_m) / 1000.0)
@@ -404,7 +417,7 @@ def predict_trajectory(
             cpa_t = max(0.0, path[idx].seconds + offset * step_s)
 
     increasing = trend is not None and trend > 0.002
-    already_passed = cpa_t <= step_s and increasing
+    already_passed = _observed_passed(samples, user_lat, user_lon, alert_radius_km, trend)
     horizon_edge = cpa_t >= horizon - step_s
     horizontal_enters = closest_h <= alert_radius_km and cpa_t > 0 and not stale and not (horizon_edge and closest_h > alert_radius_km * 0.85)
     turning_away = abs(turn) >= 0.15 and increasing and closest_h >= min(current, alert_radius_km * 1.1)
@@ -435,10 +448,10 @@ def predict_trajectory(
 
     if stale:
         state, reason = "Prediction uncertain", "ADS-B position is stale"
+    elif already_passed:
+        state, reason = "Passed", "the aircraft was observed inside the configured radius and is now receding from its observed closest point"
     elif turning_away:
         state, reason = "Turning away", "sustained recent turn and distance trend move the aircraft away from the observer"
-    elif already_passed:
-        state, reason = "Passed", "closest approach is behind the current position and distance is increasing"
     elif altitude_suppressed:
         state, reason = "Will not approach", proximity3d.reason
     elif enters and cpa_t <= 30:
