@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.0.0"
-# v5.0 adds observability, explainability and operator diagnostics only. Physical
-# prediction remains the verified v4.7.3 model and must not be relabeled.
-PREDICTION_VERSION = "4.7.3-terminal-delivery-landing-path"
+VERSION = "5.1.0"
+# v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
+# retaining horizontal CPA as the mandatory safe fallback for uncertain data.
+PREDICTION_VERSION = "5.1-3d-proximity"
 
 
 def _runtime_commit() -> str:
