@@ -52,7 +52,7 @@ jobs:
         run: pytest -q tests/test_interaction_v46.py
 
       - name: Run v4.7 airport, runway and Error Museum suite
-        run: pytest -q tests/test_airport_terminal_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
+        run: pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
