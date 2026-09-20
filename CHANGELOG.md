@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.1.2 — Predictor-wrapper production compatibility hotfix
+
+- Fixed the production `TypeError` that prevented v5.1 3D predictions from running through the installed v4.6 confidence and critical-timing wrapper chain.
+- The v4.6 predictor wrapper now accepts and forwards `altitude_relevance` and preserves unknown observer elevation instead of coercing it to sea level.
+- Added a regression that recreates the production wrapper chain and verifies both enabled and disabled altitude relevance reach the v5.1 predictor correctly.
+- Physical prediction version remains `5.1-3d-proximity`; the hotfix restores intended v5.1 behavior rather than introducing a new model.
+
 ## v5.1.1 — Railway deploy-gate compatibility patch
 
 - Fixed the trusted post-CI Railway deployment workflow after v5.1.0 exposed that the Railway CLI container does not include `git`.
