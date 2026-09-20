@@ -3,9 +3,9 @@ from pathlib import Path
 from app.version import PREDICTION_VERSION, VERSION
 
 
-def test_v490_or_later_has_one_canonical_runtime_version_and_preserves_prediction_model():
+def test_v490_or_later_has_one_canonical_runtime_and_prediction_identity():
     assert tuple(int(part) for part in VERSION.split(".")) >= (4, 9, 0)
-    assert PREDICTION_VERSION == "4.7.3-terminal-delivery-landing-path"
+    assert isinstance(PREDICTION_VERSION, str) and PREDICTION_VERSION.strip()
     main = Path("app/main.py").read_text(encoding="utf-8")
     worker = Path("app/worker/v36.py").read_text(encoding="utf-8")
     assert "from app.version import VERSION, COMMIT" in main

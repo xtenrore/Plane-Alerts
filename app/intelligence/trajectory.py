@@ -1,8 +1,9 @@
-"""Plane? deterministic trajectory / CPA intelligence.
+"""Plane Alerts deterministic trajectory / CPA intelligence.
 
 The predictor deliberately favours stable observed motion over single-feed spikes.
 Destination/airport data is never used to decide whether an aircraft approaches
-an observer.
+an observer. v5.1 retains horizontal CPA as an explicit fallback while adding
+uncertainty-aware 3D relevance through deterministic altitude evidence.
 """
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from statistics import median
 from typing import Iterable
+
+from app.intelligence.proximity3d_v51 import assess_proximity_3d
 
 EARTH_RADIUS_KM = 6371.0088
 KNOTS_TO_KM_S = 0.0005144444444444444
@@ -102,6 +105,18 @@ class TrajectoryPrediction:
     speed_stability_kts: float | None
     reason: str
     path: list[ProjectedPoint] = field(default_factory=list)
+    current_vertical_separation_m: float | None = None
+    projected_closest_3d_km: float | None = None
+    projected_closest_3d_lower_bound_km: float | None = None
+    time_to_3d_cpa_s: float | None = None
+    horizontal_at_3d_cpa_km: float | None = None
+    vertical_at_3d_cpa_m: float | None = None
+    three_d_available: bool = False
+    observer_altitude_known: bool = False
+    altitude_confidence: str = "Unavailable"
+    altitude_uncertainty_m: float | None = None
+    altitude_relevance_applied: bool = False
+    altitude_relevance_reason: str = ""
 
 
 class TrajectoryHistoryStore:
@@ -238,11 +253,11 @@ def _acceleration(samples: list[HistorySample]) -> float:
 
 
 def _speed_spread(samples: list[HistorySample]) -> float | None:
-    v = [float(s.speed_kts) for s in samples if s.speed_kts is not None]
-    if len(v) < 2:
+    values = [float(s.speed_kts) for s in samples if s.speed_kts is not None]
+    if len(values) < 2:
         return None
-    m = sum(v) / len(v)
-    return math.sqrt(sum((x - m) ** 2 for x in v) / len(v))
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
 
 
 def _distance_trend(samples: list[HistorySample], user_lat: float, user_lon: float) -> float | None:
@@ -259,6 +274,24 @@ def _distance_trend(samples: list[HistorySample], user_lat: float, user_lon: flo
             if abs(rate) <= 0.8:
                 pairs.append(rate)
     return median(pairs) if pairs else None
+
+
+def _observed_passed(
+    samples: list[HistorySample],
+    user_lat: float,
+    user_lon: float,
+    alert_radius_km: float,
+    trend: float | None,
+) -> bool:
+    """Require an actual radius observation before declaring a completed pass."""
+    if len(samples) < 2 or trend is None or trend <= 0.002:
+        return False
+    distances = [haversine_km(s.latitude, s.longitude, user_lat, user_lon) for s in samples]
+    closest = min(distances)
+    if closest > float(alert_radius_km):
+        return False
+    current = distances[-1]
+    return current - closest >= max(0.15, float(alert_radius_km) * 0.01)
 
 
 def _motion_heading(samples: list[HistorySample]) -> float | None:
@@ -300,7 +333,18 @@ def _estimate_speed_heading(samples: list[HistorySample]) -> tuple[float | None,
     return speed, heading
 
 
-def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_lon: float, alert_radius_km: float, *, now: float | None = None, user_altitude_m: float = 0.0, max_horizon_s: int = 900, step_s: int = 3) -> TrajectoryPrediction:
+def predict_trajectory(
+    samples: Iterable[HistorySample],
+    user_lat: float,
+    user_lon: float,
+    alert_radius_km: float,
+    *,
+    now: float | None = None,
+    user_altitude_m: float | None = None,
+    max_horizon_s: int = 900,
+    step_s: int = 3,
+    altitude_relevance: bool = True,
+) -> TrajectoryPrediction:
     raw_samples = sorted(list(samples), key=lambda s: s.timestamp)
     if not raw_samples:
         raise ValueError("at least one trajectory sample is required")
@@ -310,7 +354,13 @@ def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_l
     age = max(float(latest.position_age_s or 0.0), now - latest.timestamp)
     stale = age > 30.0
     current = haversine_km(latest.latitude, latest.longitude, user_lat, user_lon)
-    cur_slant = math.hypot(current, max(0.0, latest.altitude_m - user_altitude_m) / 1000.0) if latest.altitude_m is not None else None
+
+    nominal_observer_altitude_m = float(user_altitude_m) if user_altitude_m is not None else 0.0
+    cur_slant = (
+        math.hypot(current, abs(float(latest.altitude_m) - nominal_observer_altitude_m) / 1000.0)
+        if latest.altitude_m is not None
+        else None
+    )
     speed, heading = _estimate_speed_heading(samples)
     trend = _distance_trend(samples, user_lat, user_lon)
     headings = _series_heading(samples[-12:])
@@ -321,7 +371,11 @@ def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_l
 
     if stale or speed is None or heading is None or speed < 20:
         reason = "ADS-B position is stale" if stale else "insufficient speed/heading data"
-        return TrajectoryPrediction("Prediction uncertain", "Uncertain", 0.15, current, cur_slant, trend, current, cur_slant, None, None, False, False, False, stale, turn, accel, h_spread, s_spread, reason, [])
+        return TrajectoryPrediction(
+            "Prediction uncertain", "Uncertain", 0.15, current, cur_slant, trend,
+            current, cur_slant, None, None, False, False, False, stale, turn,
+            accel, h_spread, s_spread, reason, [],
+        )
 
     speed_km_s = speed * KNOTS_TO_KM_S
     dynamic = int(current / max(speed_km_s, 1e-6) * 1.30 + 45)
@@ -343,7 +397,11 @@ def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_l
             if altitude is not None:
                 altitude = max(0.0, altitude + vr * step_s)
         horizontal = haversine_km(curr_lat, curr_lon, user_lat, user_lon)
-        slant = math.hypot(horizontal, max(0.0, altitude - user_altitude_m) / 1000.0) if altitude is not None else horizontal
+        slant = (
+            math.hypot(horizontal, abs(float(altitude) - nominal_observer_altitude_m) / 1000.0)
+            if altitude is not None
+            else horizontal
+        )
         path.append(ProjectedPoint(float(t), curr_lat, curr_lon, horizontal, slant, altitude, curr_heading))
         if horizontal < closest_h:
             closest_h, closest_slant, cpa_t = horizontal, slant, float(t)
@@ -359,10 +417,21 @@ def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_l
             cpa_t = max(0.0, path[idx].seconds + offset * step_s)
 
     increasing = trend is not None and trend > 0.002
-    already_passed = cpa_t <= step_s and increasing
+    already_passed = _observed_passed(samples, user_lat, user_lon, alert_radius_km, trend)
     horizon_edge = cpa_t >= horizon - step_s
-    enters = closest_h <= alert_radius_km and cpa_t > 0 and not stale and not (horizon_edge and closest_h > alert_radius_km * 0.85)
+    horizontal_enters = closest_h <= alert_radius_km and cpa_t > 0 and not stale and not (horizon_edge and closest_h > alert_radius_km * 0.85)
     turning_away = abs(turn) >= 0.15 and increasing and closest_h >= min(current, alert_radius_km * 1.1)
+
+    proximity3d = assess_proximity_3d(
+        path=path,
+        samples=samples,
+        alert_radius_km=alert_radius_km,
+        age_s=age,
+        observer_altitude_m=user_altitude_m,
+        step_s=float(step_s),
+    )
+    altitude_suppressed = bool(altitude_relevance and horizontal_enters and proximity3d.suppress_horizontal_entry)
+    enters = horizontal_enters and not altitude_suppressed
 
     score = 0.30 + min(0.22, max(0, len(samples) - 1) * 0.035) + 0.16 * (1.0 - _clamp(age / 20.0, 0.0, 1.0))
     if h_spread is not None:
@@ -379,10 +448,12 @@ def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_l
 
     if stale:
         state, reason = "Prediction uncertain", "ADS-B position is stale"
+    elif already_passed:
+        state, reason = "Passed", "the aircraft was observed inside the configured radius and is now receding from its observed closest point"
     elif turning_away:
         state, reason = "Turning away", "sustained recent turn and distance trend move the aircraft away from the observer"
-    elif already_passed:
-        state, reason = "Passed", "closest approach is behind the current position and distance is increasing"
+    elif altitude_suppressed:
+        state, reason = "Will not approach", proximity3d.reason
     elif enters and cpa_t <= 30:
         state, reason = "Passing nearby", "robust projected path enters the configured radius and CPA is imminent"
     elif enters:
@@ -392,4 +463,21 @@ def predict_trajectory(samples: Iterable[HistorySample], user_lat: float, user_l
     else:
         state, reason = "Will not approach", f"projected closest pass remains outside {alert_radius_km:.1f} km"
 
-    return TrajectoryPrediction(state, confidence, score, current, cur_slant, trend, closest_h, closest_slant, cpa_t, entry_t, enters, already_passed, turning_away, stale, turn, accel, h_spread, s_spread, reason, path)
+    prediction = TrajectoryPrediction(
+        state, confidence, score, current, cur_slant, trend, closest_h,
+        closest_slant, cpa_t, entry_t, enters, already_passed, turning_away,
+        stale, turn, accel, h_spread, s_spread, reason, path,
+    )
+    prediction.current_vertical_separation_m = proximity3d.current_vertical_separation_m
+    prediction.projected_closest_3d_km = proximity3d.projected_closest_3d_km
+    prediction.projected_closest_3d_lower_bound_km = proximity3d.projected_closest_3d_lower_bound_km
+    prediction.time_to_3d_cpa_s = proximity3d.time_to_3d_cpa_s
+    prediction.horizontal_at_3d_cpa_km = proximity3d.horizontal_at_3d_cpa_km
+    prediction.vertical_at_3d_cpa_m = proximity3d.vertical_at_3d_cpa_m
+    prediction.three_d_available = proximity3d.available
+    prediction.observer_altitude_known = proximity3d.observer_altitude_known
+    prediction.altitude_confidence = proximity3d.altitude_confidence
+    prediction.altitude_uncertainty_m = proximity3d.altitude_uncertainty_m
+    prediction.altitude_relevance_applied = altitude_suppressed
+    prediction.altitude_relevance_reason = proximity3d.reason
+    return prediction

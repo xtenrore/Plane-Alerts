@@ -80,6 +80,9 @@ jobs:
       - name: Run v5.0 observability and AGY Mongo resilience suite
         run: pytest -q tests/test_observability_v50.py tests/test_agy_mongo_resilience_v50.py tests/test_agy_prediction_bridge.py
 
+      - name: Run v5.1 3D proximity and observed-pass lifecycle suite
+        run: pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -110,6 +113,9 @@ jobs:
       - name: Benchmark v5.0 diagnostics formatting overhead
         run: python scripts/benchmark_v50_observability.py
 
+      - name: Benchmark v5.1 deterministic 3D geometry
+        run: python scripts/benchmark_v51_geometry.py
+
       - name: Verify dependency consistency
         run: pip check
 
@@ -132,17 +138,17 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build fresh amd64 image
-        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v50 .
+        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v51 .
 
       - name: Run doctor in fresh image
         run: |
           docker run --rm --entrypoint planealerts \
             -e TELEGRAM_BOT_TOKEN=123456:test-token \
             -e MONGO_URI=mongodb://mongo:27017 \
-            plane-alerts:v50 doctor --offline
+            plane-alerts:v51 doctor --offline
 
       - name: Verify v5 operator CLI is installed in fresh image
-        run: docker run --rm --entrypoint planealerts plane-alerts:v50 diagnostics --help
+        run: docker run --rm --entrypoint planealerts plane-alerts:v51 diagnostics --help
 
       - name: Build ARM64 image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .

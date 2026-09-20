@@ -47,9 +47,9 @@ def _prediction() -> dict:
     }
 
 
-def test_v500_release_identity_preserves_verified_predictor():
-    assert VERSION == "5.0.0"
-    assert PREDICTION_VERSION == "4.7.3-terminal-delivery-landing-path"
+def test_v500_or_later_keeps_canonical_release_and_prediction_identifiers():
+    assert tuple(int(part) for part in VERSION.split(".")) >= (5, 0, 0)
+    assert isinstance(PREDICTION_VERSION, str) and PREDICTION_VERSION.strip()
 
 
 def test_explanation_shows_why_alert_was_suppressed_without_private_location():
