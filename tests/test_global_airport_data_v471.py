@@ -122,6 +122,27 @@ def test_global_layer_supplies_full_non_ltfm_runway_geometry(monkeypatch: pytest
     assert airport.runways[0].end_a.identifier == "09L"
 
 
+def test_compiled_reference_replaces_stale_cached_geometry_on_first_code_lookup(monkeypatch: pytest.MonkeyPatch, airport_db: Path):
+    repo = AirportRepository(airport_db)
+    monkeypatch.setattr(global_airports, "airport_repository", repo)
+    stale = terminal.AirportGeometry(
+        "EGLL", "LHR", "stale", 51.4700, -0.4543, 25.0,
+        (
+            terminal.RunwayGeometry(
+                "EGLL",
+                terminal.RunwayEnd("00", 51.47, -0.46, 0.0),
+                terminal.RunwayEnd("18", 51.47, -0.44, 180.0),
+            ),
+        ),
+    )
+    monkeypatch.setitem(terminal._airports, "EGLL", stale)
+    info = SimpleNamespace(icao="EGLL", iata="LHR", latitude=51.47, longitude=-0.454, name="Heathrow")
+    airport = global_airports.airport_for_info(info)
+    assert airport is not None
+    assert airport.name == "London Heathrow Airport"
+    assert {(r.end_a.identifier, r.end_b.identifier) for r in airport.runways} == {("09L", "27R")}
+
+
 def test_global_layer_can_resolve_nearest_airport_without_destination_metadata(monkeypatch: pytest.MonkeyPatch, airport_db: Path):
     repo = AirportRepository(airport_db)
     monkeypatch.setattr(global_airports, "airport_repository", repo)
