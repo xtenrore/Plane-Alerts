@@ -31,26 +31,28 @@ if "pytest" not in sys.modules:
 
     install_prediction_v46()
 
-    # Install the destination adapters, the v2 non-blocking route resolver/read
-    # cache, then the bounded route-history write queue. The v4.2 ensemble
-    # qualification guard and v4.3 cancellation latch are layered afterward.
+    # Install the route resolver/read cache first. v4.6 then repoints v2's
+    # original persistence target BEFORE the v4.4 bounded writer module is
+    # imported, so that queue captures the 35-day-retention writer rather than
+    # the legacy 8-day writer. Clustering still runs only during background
+    # history refresh, never in the five-second alert path.
     from app.intelligence.route_guard import install_route_guard
     from app.intelligence.route_guard_v2 import install_route_guard_v2
+
+    install_route_guard()
+    install_route_guard_v2()
+
+    from app.intelligence.route_intelligence_v46 import install_route_intelligence_v46
+
+    install_route_intelligence_v46()
+
     from app.intelligence.route_observe_guard_v44 import install_route_observe_guard_v44
     from app.intelligence.route_guard_v42 import install_route_guard_v42
     from app.intelligence.requalification_guard_v43 import install_requalification_guard_v43
 
-    install_route_guard()
-    install_route_guard_v2()
     install_route_observe_guard_v44()
     install_route_guard_v42()
     install_requalification_guard_v43()
-
-    # Route clustering/decay is built only by the v2 bounded background refresh.
-    # It weakens stale/contradictory history instead of turning it into a veto.
-    from app.intelligence.route_intelligence_v46 import install_route_intelligence_v46
-
-    install_route_intelligence_v46()
 
     # Final hot-path protection: cap individual provider latency and prevent
     # stale ADS-B positions from creating brand-new approach alerts.
