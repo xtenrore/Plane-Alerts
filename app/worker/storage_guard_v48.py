@@ -18,6 +18,7 @@ from app.worker import monitor, v36
 
 logger = logging.getLogger(__name__)
 _INSTALLED = False
+_ORIGINAL_MATERIALIZE_PROFILE = None
 
 
 async def _get_active_users_cached() -> list[dict[str, Any]]:
@@ -110,8 +111,18 @@ async def _record_v36_metrics_cached(
     )
 
 
+async def _materialize_profile_invalidating(profile: dict[str, Any]) -> None:
+    """Invalidate the cached config only after the persisted write succeeded."""
+    assert _ORIGINAL_MATERIALIZE_PROFILE is not None
+    await _ORIGINAL_MATERIALIZE_PROFILE(profile)
+    try:
+        storage_runtime.invalidate_user_config(int(profile["user_id"]))
+    except (KeyError, TypeError, ValueError):
+        storage_runtime.invalidate_user_config()
+
+
 def install_storage_guard_v48() -> None:
-    global _INSTALLED
+    global _INSTALLED, _ORIGINAL_MATERIALIZE_PROFILE
     if _INSTALLED:
         return
 
@@ -126,6 +137,16 @@ def install_storage_guard_v48() -> None:
     # Heartbeats/diagnostics are useful but must never stretch the alert cycle.
     monitor._record_worker_heartbeat = _record_worker_heartbeat_cached
     v36._record_v36_metrics = _record_v36_metrics_cached
+
+    # Active profile materialization remains an acknowledged Mongo write. Only
+    # after it succeeds do we invalidate the LKG cache and accelerate refresh.
+    try:
+        from app import alert_profiles
+
+        _ORIGINAL_MATERIALIZE_PROFILE = alert_profiles.materialize_profile
+        alert_profiles.materialize_profile = _materialize_profile_invalidating
+    except Exception:
+        logger.exception("storage_v48_profile_invalidation_install_failed")
 
     _INSTALLED = True
     logger.info(
