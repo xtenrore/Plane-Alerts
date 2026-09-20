@@ -30,6 +30,7 @@ from app.bot.next60 import build_next60_docs, register_next60_handlers
 from app.bot.next60_web import NEXT60_HTML, serialize_next60, validate_telegram_init_data
 from app.bot.profile_handlers import register_profile_handlers
 from app.bot.profile_legacy import register_profile_legacy_handlers
+from app.bot.storage_failure_v48 import register_storage_failure_handler
 from app.config import settings
 from app.version import VERSION, COMMIT
 from app.worker import timing
@@ -145,6 +146,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if bot_token and bot_token != "your_bot_token_from_botfather":
         try:
             telegram_app = Application.builder().token(bot_token).update_queue(asyncio.Queue(maxsize=256)).concurrent_updates(False).build()
+            register_storage_failure_handler(telegram_app)
             register_agy_console_handlers(telegram_app)
             register_profile_legacy_handlers(telegram_app)
             register_profile_handlers(telegram_app)
