@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.intelligence.lifecycle import should_finalize_observed_pass
 from app.intelligence.trajectory import HistorySample, predict_trajectory
 from app.version import PREDICTION_VERSION, VERSION
@@ -37,10 +39,37 @@ def test_observed_radius_entry_that_is_now_receding_finishes_as_passed():
     assert should_finalize_observed_pass(pred, observed_closest_km=6.37, alert_radius_km=15.0)
 
 
+@pytest.mark.parametrize(
+    ("icao24", "observed_closest_km", "later_distance_km"),
+    [
+        # AGY seq94 / production evidence. 5001dc already completed correctly in
+        # v5.0; 06a37c and 3ccf0f were cancelled after genuine in-radius entry.
+        ("5001dc", 7.53, 10.84),
+        ("06a37c", 8.04, 10.57),
+        ("3ccf0f", 11.30, 19.30),
+    ],
+)
+def test_error_museum_agy_seq94_observed_entries_finish_as_passed(
+    icao24: str,
+    observed_closest_km: float,
+    later_distance_km: float,
+):
+    pred = _prediction(
+        current_distance_km=later_distance_km,
+        distance_trend_km_s=0.02,
+        state="Moving away",
+    )
+    assert should_finalize_observed_pass(
+        pred,
+        observed_closest_km=observed_closest_km,
+        alert_radius_km=12.0,
+    ), icao24
+
+
 def test_projected_close_cpa_is_not_enough_to_claim_an_observed_pass():
     pred = _prediction(current_distance_km=19.0, distance_trend_km_s=0.04, already_passed=True)
-    # Mirrors the AGY failure mode: a ~6 km projected CPA must not be confused
-    # with ground truth if the closest actually observed position stayed outside.
+    # Mirrors the separate AGY failure mode: a ~6 km projected CPA must not be
+    # confused with ground truth if the closest actual observation stayed outside.
     assert not should_finalize_observed_pass(pred, observed_closest_km=18.8, alert_radius_km=15.0)
 
 
