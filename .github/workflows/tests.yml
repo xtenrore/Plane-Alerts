@@ -64,6 +64,9 @@ jobs:
       - name: Run v4.7.1 global airport data suite
         run: pytest -q tests/test_global_airport_data_v471.py
 
+      - name: Run v4.7.2 LTBA/ISL terminal-arrival hold suite
+        run: pytest -q tests/test_terminal_arrival_hold_v472.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -81,6 +84,9 @@ jobs:
 
       - name: Benchmark v4.7.1 global airport lookup
         run: python scripts/benchmark_v471_airport_lookup.py
+
+      - name: Benchmark v4.7.2 terminal-arrival initial hold
+        run: python scripts/benchmark_v472_terminal_hold.py
 
       - name: Verify dependency consistency
         run: pip check
