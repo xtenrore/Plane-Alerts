@@ -4,9 +4,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "4.9.0"
-# v4.9 improves project maturity and self-hosting only. Physical prediction
-# remains the verified v4.7.3 model and must not be relabeled as a new predictor.
+VERSION = "5.0.0"
+# v5.0 adds observability, explainability and operator diagnostics only. Physical
+# prediction remains the verified v4.7.3 model and must not be relabeled.
 PREDICTION_VERSION = "4.7.3-terminal-delivery-landing-path"
 
 
