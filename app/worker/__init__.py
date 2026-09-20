@@ -81,3 +81,11 @@ if "pytest" not in sys.modules:
     # runs through its own bounded post-delivery queue. Do not install a second
     # wrapper around the sender: edits, retries and lifecycle updates must be
     # recorded once against the same logical alert.
+
+    # app.main imports the Telegram modules before app.worker. Install the
+    # interaction layer only in that runtime shape to avoid pulling bot/UI code
+    # into standalone worker processes.
+    if "app.bot.profile_handlers" in sys.modules:
+        from app.bot.interaction_v46 import install_interaction_v46
+
+        install_interaction_v46()
