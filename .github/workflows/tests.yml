@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - main
-      - "chatgpt/**"
       - "fix/**"
       - "release/**"
+      - "hotfix/**"
   pull_request:
 
 permissions:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -74,6 +74,9 @@ jobs:
       - name: Run v4.8 storage outage, restart, migration, backup, lifecycle-ID and Telegram failure suite
         run: pytest -q tests/test_storage_v48.py tests/test_storage_guard_v48.py tests/test_storage_failure_v48.py tests/test_database_atlas.py
 
+      - name: Run v4.9 self-hosting and doctor suite
+        run: pytest -q tests/test_self_hosting_v49.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -98,5 +101,39 @@ jobs:
       - name: Benchmark v4.8 slow/unavailable storage isolation
         run: python scripts/benchmark_storage_v48.py
 
+      - name: Benchmark v4.9 doctor static diagnostics
+        run: python scripts/benchmark_v49_doctor.py
+
       - name: Verify dependency consistency
         run: pip check
+
+  self-hosting:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build fresh amd64 image
+        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v49 .
+
+      - name: Run doctor in fresh image
+        run: |
+          docker run --rm --entrypoint planealerts \
+            -e TELEGRAM_BOT_TOKEN=123456:test-token \
+            -e MONGO_URI=mongodb://mongo:27017 \
+            plane-alerts:v49 doctor --offline
+
+      - name: Build ARM64 image
+        run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .

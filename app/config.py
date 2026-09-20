@@ -25,8 +25,6 @@ class Settings(BaseSettings):
     adsb_one_base_url: str = "https://api.adsb.one/v2"
     opensky_token_url: str = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 
-    # Optional readsb/dump1090/dump1090-fa/ultrafeeder source. Blank preserves
-    # public-only behavior. The URL may be a receiver base URL or aircraft.json.
     local_adsb_url: str = ""
     local_adsb_receiver_type: str = "auto"
     local_adsb_timeout_seconds: float = 0.8
@@ -116,6 +114,30 @@ class Settings(BaseSettings):
         if not 1.0 <= freshness <= 30.0:
             raise ValueError("LOCAL_ADSB_MAX_POSITION_AGE_SECONDS must be between 1 and 30")
         return freshness
+
+    @field_validator("poll_interval_seconds")
+    @classmethod
+    def _validate_poll_interval(cls, value: int) -> int:
+        interval = int(value)
+        if not 1 <= interval <= 30:
+            raise ValueError("POLL_INTERVAL_SECONDS must be between 1 and 30")
+        return interval
+
+    @field_validator("default_radius_km")
+    @classmethod
+    def _validate_default_radius(cls, value: float) -> float:
+        radius = float(value)
+        if not 0.5 <= radius <= 250.0:
+            raise ValueError("DEFAULT_RADIUS_KM must be between 0.5 and 250")
+        return radius
+
+    @field_validator("port")
+    @classmethod
+    def _validate_port(cls, value: int) -> int:
+        port = int(value)
+        if not 1 <= port <= 65535:
+            raise ValueError("PORT must be between 1 and 65535")
+        return port
 
 
 settings = Settings()
