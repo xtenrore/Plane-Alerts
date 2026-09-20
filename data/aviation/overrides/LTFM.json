@@ -1,0 +1,63 @@
+{
+  "ident": "LTFM",
+  "iata": "IST",
+  "name": "Istanbul Airport",
+  "latitude_deg": 41.274874,
+  "longitude_deg": 28.732136,
+  "elevation_m": 99.0,
+  "source": "Türkiye AIP operational runway set reviewed for Plane Alerts v4.7",
+  "verified_utc": "2026-09-20",
+  "replace_runways": true,
+  "runways": [
+    {
+      "le_ident": "16L",
+      "le_latitude_deg": 41.29860,
+      "le_longitude_deg": 28.70920,
+      "le_heading_deg": 174.0,
+      "he_ident": "34R",
+      "he_latitude_deg": 41.26490,
+      "he_longitude_deg": 28.70990,
+      "he_heading_deg": 354.0
+    },
+    {
+      "le_ident": "16R",
+      "le_latitude_deg": 41.29860,
+      "le_longitude_deg": 28.70680,
+      "le_heading_deg": 174.0,
+      "he_ident": "34L",
+      "he_latitude_deg": 41.26484,
+      "he_longitude_deg": 28.70741,
+      "he_heading_deg": 354.0
+    },
+    {
+      "le_ident": "17L",
+      "le_latitude_deg": 41.29880,
+      "le_longitude_deg": 28.72700,
+      "le_heading_deg": 174.0,
+      "he_ident": "35R",
+      "he_latitude_deg": 41.26190,
+      "he_longitude_deg": 28.72780,
+      "he_heading_deg": 354.0
+    },
+    {
+      "le_ident": "17R",
+      "le_latitude_deg": 41.29880,
+      "le_longitude_deg": 28.72450,
+      "le_heading_deg": 174.0,
+      "he_ident": "35L",
+      "he_latitude_deg": 41.26190,
+      "he_longitude_deg": 28.72530,
+      "he_heading_deg": 354.0
+    },
+    {
+      "le_ident": "18",
+      "le_latitude_deg": 41.28980,
+      "le_longitude_deg": 28.75620,
+      "le_heading_deg": 179.0,
+      "he_ident": "36",
+      "he_latitude_deg": 41.26220,
+      "he_longitude_deg": 28.75670,
+      "he_heading_deg": 354.0
+    }
+  ]
+}
