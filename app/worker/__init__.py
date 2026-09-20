@@ -24,20 +24,17 @@ if "pytest" not in sys.modules:
 
     install_direct_presence_guard_v44()
 
-    # Install the destination adapters first, then the non-blocking v2 route
-    # resolver. Cold historical Mongo reads are backgrounded before the bounded
-    # route-history write queue is layered on top. Then install the v4.2 ensemble
-    # qualification guard and v4.3 cancellation latch.
+    # Install the destination adapters, the v2 non-blocking route resolver/read
+    # cache, then the bounded route-history write queue. The v4.2 ensemble
+    # qualification guard and v4.3 cancellation latch are layered afterward.
     from app.intelligence.route_guard import install_route_guard
     from app.intelligence.route_guard_v2 import install_route_guard_v2
-    from app.intelligence.route_history_read_guard_v44 import install_route_history_read_guard_v44
     from app.intelligence.route_observe_guard_v44 import install_route_observe_guard_v44
     from app.intelligence.route_guard_v42 import install_route_guard_v42
     from app.intelligence.requalification_guard_v43 import install_requalification_guard_v43
 
     install_route_guard()
     install_route_guard_v2()
-    install_route_history_read_guard_v44()
     install_route_observe_guard_v44()
     install_route_guard_v42()
     install_requalification_guard_v43()
@@ -67,9 +64,7 @@ if "pytest" not in sys.modules:
 
     install_cadence_due_guard_v424()
 
-    # The lifecycle reuses one Telegram message. Persist first-delivery timing
-    # once, classify later edits/cancellations/passed updates explicitly, and
-    # keep telemetry writes off the alert-critical path.
-    from app.worker.notification_telemetry_v44 import install_notification_telemetry_v44
-
-    install_notification_telemetry_v44()
+    # Notification telemetry is integrated directly in notifications.py and
+    # runs through its own bounded post-delivery queue. Do not install a second
+    # wrapper around the sender: edits, retries and lifecycle updates must be
+    # recorded once against the same logical alert.
