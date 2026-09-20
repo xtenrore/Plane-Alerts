@@ -37,6 +37,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Embed tested commit metadata
+        shell: sh
+        run: |
+          set -eu
+          printf '%s\n' "$DEPLOY_SHA" > app/build_commit.txt
+
       - name: Resolve Railway authentication
         shell: sh
         run: |
@@ -71,7 +77,7 @@ jobs:
             --service "$MAIN_SERVICE_ID" \
             --environment "$ENVIRONMENT_ID" \
             --ci \
-            --message "Plane Alerts v4.2.2 main ${DEPLOY_SHA}"
+            --message "Plane Alerts main ${DEPLOY_SHA}"
 
       - name: Deploy tested commit to AGY service
         shell: sh
@@ -82,4 +88,4 @@ jobs:
             --service "$AGY_SERVICE_ID" \
             --environment "$ENVIRONMENT_ID" \
             --ci \
-            --message "Plane Alerts v4.2.2 AGY ${DEPLOY_SHA}"
+            --message "Plane Alerts AGY ${DEPLOY_SHA}"
