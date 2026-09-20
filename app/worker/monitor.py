@@ -398,6 +398,7 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                     user_lon=lon,
                     alert_radius_km=radius,
                     current_samples=hist,
+                    notification_sent=bool((old or {}).get("message_id")),
                 )
                 route_suppressed = route_gate.suppress_alert
             except Exception:

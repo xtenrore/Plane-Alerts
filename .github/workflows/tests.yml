@@ -67,6 +67,9 @@ jobs:
       - name: Run v4.7.2 LTBA/ISL terminal-arrival hold suite
         run: pytest -q tests/test_terminal_arrival_hold_v472.py
 
+      - name: Run v4.7.3 arrival delivery and landing-path regressions
+        run: pytest -q tests/test_terminal_lifecycle_v473.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 

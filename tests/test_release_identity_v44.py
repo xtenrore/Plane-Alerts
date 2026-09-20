@@ -4,8 +4,8 @@ from app.version import PREDICTION_VERSION, VERSION
 
 
 def test_v47_has_one_canonical_runtime_version_and_prediction_model():
-    assert VERSION == "4.7.2"
-    assert PREDICTION_VERSION == "4.7.2-terminal-arrival-initial-hold"
+    assert VERSION == "4.7.3"
+    assert PREDICTION_VERSION == "4.7.3-terminal-delivery-landing-path"
     main = Path("app/main.py").read_text(encoding="utf-8")
     worker = Path("app/worker/v36.py").read_text(encoding="utf-8")
     assert "from app.version import VERSION, COMMIT" in main

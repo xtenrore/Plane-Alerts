@@ -106,6 +106,7 @@ async def evaluate_route_v43(
     user_lon: float,
     alert_radius_km: float,
     current_samples: Iterable[Any],
+    notification_sent: bool | None = None,
 ) -> route_mod.RouteGateResult:
     current_samples = list(current_samples)
     result = await v42.evaluate_route_v42(
@@ -121,7 +122,9 @@ async def evaluate_route_v43(
     now_mono = time.monotonic()
     key = v42._encounter_key(ac, user_lat, user_lon, alert_radius_km)
     encounter = v42._encounters.get(key)
-    encounter_was_qualified = bool(encounter and encounter.qualified)
+    encounter_was_qualified = (
+        bool(encounter and encounter.qualified) if notification_sent is None else notification_sent
+    )
 
     state = _states.get(key)
     if state is None:
