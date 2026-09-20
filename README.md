@@ -50,7 +50,7 @@ Google Contrails remains separate photography/environment enrichment. It does no
 
 ### Known limitations
 
-Runway-aware suppression remains shadow-only until enough replay and production outcomes demonstrate improvement without missed genuine passes. Airports without maintained runway geometry still receive generic terminal context, but runway-specific inference remains uncertain. Published ATC procedures and official live runway assignments are not treated as physical truth.
+Runway-aware suppression remains shadow-only until enough replay and production outcomes demonstrate improvement without missed genuine passes. Airports without maintained runway geometry still receive generic terminal context, but runway-specific inference remains uncertain. If maintained runway data becomes incomplete, runway-specific inference is disabled rather than blocking monitoring. Published ATC procedures and official live runway assignments are not treated as physical truth.
 
 ## Alert-critical architecture
 
@@ -148,7 +148,7 @@ pytest -q
 pytest -q tests/test_error_museum_v42.py tests/test_v44_monitor_reliability_replay.py tests/test_eta_stability_hotfix.py
 pytest -q tests/test_v45_provider_resilience.py tests/test_v45_local_provider_area_recovery.py
 pytest -q tests/test_interaction_v46.py
-pytest -q tests/test_airport_terminal_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
+pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
 python scripts/benchmark_v42.py
 python scripts/benchmark_v45_provider_resilience.py
 python scripts/benchmark_v46_prediction.py
