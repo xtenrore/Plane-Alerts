@@ -8,18 +8,25 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 import time
-from statistics import median
+from pathlib import Path
 
-from app.intelligence import trajectory as trajectory
-from app.intelligence.prediction_v46 import (
+# Executing a file under scripts/ puts scripts/ first on sys.path. Add the
+# repository root explicitly so this benchmark behaves the same in CI/local use.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.intelligence import trajectory as trajectory  # noqa: E402
+from app.intelligence.prediction_v46 import (  # noqa: E402
     diagnostics_for,
     position_uncertainty_km,
     predict_trajectory_v46,
     turn_evidence,
 )
-from app.intelligence.route_history import RoutePoint
-from app.intelligence.route_intelligence_v46 import (
+from app.intelligence.route_history import RoutePoint  # noqa: E402
+from app.intelligence.route_intelligence_v46 import (  # noqa: E402
     RouteHistoryBundle,
     _cluster_paths,
     history_features_v46,
