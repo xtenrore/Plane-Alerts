@@ -1,4 +1,4 @@
-"""Telegram notifications for Plane? spotting alerts."""
+"""Telegram notifications for Plane Alerts spotting alerts."""
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +16,7 @@ from app.aircraft.models import NormalizedAircraft
 from app.config import settings
 from app.database import get_db, locations_col, users_col
 from app.photography.keyboards import notification_actions_keyboard
+from app.worker.notification_telemetry import enqueue_auxiliary, enqueue_notification_event
 
 logger = logging.getLogger(__name__)
 _send_semaphore = asyncio.Semaphore(20)
@@ -244,6 +245,37 @@ async def _record_photo_snapshot(
     )
 
 
+def _notification_payload(
+    *,
+    user_id: int,
+    aircraft: NormalizedAircraft,
+    prediction,
+    stage: str,
+    notification_id: str,
+    input_message_id: int | None,
+    output_message_id: int | None,
+    delivered: bool,
+    delivery_detail: str,
+    observed_closest_km: float | None,
+) -> dict:
+    return {
+        "notification_id": notification_id,
+        "user_id": user_id,
+        "aircraft_icao24": aircraft.icao24,
+        "aircraft_type": aircraft.aircraft_type,
+        "distance_km": prediction.current_distance_km,
+        "projected_closest_km": prediction.projected_closest_km,
+        "observed_closest_km": observed_closest_km,
+        "trajectory_state": prediction.state,
+        "prediction_confidence": prediction.confidence,
+        "stage": stage,
+        "input_message_id": input_message_id,
+        "output_message_id": output_message_id,
+        "delivered": delivered,
+        "delivery_detail": delivery_detail,
+    }
+
+
 async def send_or_update_approach(
     user_id: int,
     aircraft,
@@ -275,36 +307,9 @@ async def send_or_update_approach(
         else None
     )
 
-    if notification_id:
-        try:
-            await _record_photo_snapshot(
-                user_id,
-                aircraft,
-                prediction.current_distance_km,
-                notification_id,
-                prediction.time_to_cpa_s,
-            )
-            now = datetime.now(timezone.utc)
-            await get_db()["notification_history"].update_one(
-                {"_id": notification_id},
-                {
-                    "$set": {
-                        "user_id": user_id,
-                        "aircraft_icao24": aircraft.icao24,
-                        "aircraft_type": aircraft.aircraft_type,
-                        "distance_km": prediction.current_distance_km,
-                        "projected_closest_km": prediction.projected_closest_km,
-                        "observed_closest_km": observed_closest_km,
-                        "trajectory_state": prediction.state,
-                        "prediction_confidence": prediction.confidence,
-                        "notified_at": now,
-                        "cooldown_until": now + timedelta(minutes=settings.cooldown_minutes),
-                    }
-                },
-                upsert=True,
-            )
-        except Exception:
-            logger.exception("approach_snapshot_failed user=%s icao=%s", user_id, aircraft.icao24)
+    delivered = False
+    result_message_id: int | None = None
+    delivery_detail = ""
 
     async with _send_semaphore:
         try:
@@ -319,51 +324,89 @@ async def send_or_update_approach(
                         disable_web_page_preview=True,
                         reply_markup=markup,
                     )
-                    return int(message_id)
+                    delivered = True
+                    result_message_id = int(message_id)
+                    delivery_detail = "edited"
                 except BadRequest as exc:
                     if "message is not modified" in str(exc).lower():
-                        return int(message_id)
-                    logger.info(
-                        "live_edit_failed user=%s message=%s error=%s",
-                        user_id,
-                        message_id,
-                        type(exc).__name__,
-                    )
-                    # A message created while the old satellite-map feature was
-                    # enabled is media-only and cannot be converted back to text.
-                    # Replace it once, then remove the old map message.
-                    sent = await bot.send_message(
-                        chat_id=user_id,
-                        text=text,
-                        parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True,
-                        reply_markup=markup,
-                    )
-                    try:
-                        await bot.delete_message(chat_id=user_id, message_id=int(message_id))
-                    except Exception:
-                        pass
-                    await asyncio.sleep(_MIN_SEND_INTERVAL)
-                    return int(sent.message_id)
-
-            sent = await bot.send_message(
-                chat_id=user_id,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=markup,
-            )
-            await asyncio.sleep(_MIN_SEND_INTERVAL)
-            return int(sent.message_id)
+                        delivered = True
+                        result_message_id = int(message_id)
+                        delivery_detail = "not_modified"
+                    else:
+                        logger.info(
+                            "live_edit_failed user=%s message=%s error=%s",
+                            user_id,
+                            message_id,
+                            type(exc).__name__,
+                        )
+                        # A message created while the old satellite-map feature was
+                        # enabled is media-only and cannot be converted back to text.
+                        # Replace it once, then remove the old map message. This is
+                        # still an update to the same logical alert, never a new alert.
+                        sent = await bot.send_message(
+                            chat_id=user_id,
+                            text=text,
+                            parse_mode=ParseMode.HTML,
+                            disable_web_page_preview=True,
+                            reply_markup=markup,
+                        )
+                        try:
+                            await bot.delete_message(chat_id=user_id, message_id=int(message_id))
+                        except Exception:
+                            pass
+                        await asyncio.sleep(_MIN_SEND_INTERVAL)
+                        delivered = True
+                        result_message_id = int(sent.message_id)
+                        delivery_detail = "replaced_after_edit_failure"
+            else:
+                sent = await bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                    reply_markup=markup,
+                )
+                await asyncio.sleep(_MIN_SEND_INTERVAL)
+                delivered = True
+                result_message_id = int(sent.message_id)
+                delivery_detail = "sent"
         except Forbidden:
+            delivery_detail = "forbidden"
             await users_col().update_one({"user_id": user_id}, {"$set": {"setup_complete": False}})
-            return None
         except TelegramError as exc:
+            delivery_detail = f"telegram_error:{type(exc).__name__}"
             logger.error("approach_message_failed user=%s error=%s", user_id, type(exc).__name__)
-            return None
-        except Exception:
+        except Exception as exc:
+            delivery_detail = f"unexpected:{type(exc).__name__}"
             logger.exception("approach_message_unexpected user=%s", user_id)
-            return None
+
+    if notification_id:
+        async def _photo_snapshot() -> None:
+            await _record_photo_snapshot(
+                user_id,
+                aircraft,
+                prediction.current_distance_km,
+                notification_id,
+                prediction.time_to_cpa_s,
+            )
+
+        enqueue_notification_event(
+            _notification_payload(
+                user_id=user_id,
+                aircraft=aircraft,
+                prediction=prediction,
+                stage=stage,
+                notification_id=notification_id,
+                input_message_id=message_id,
+                output_message_id=result_message_id,
+                delivered=delivered,
+                delivery_detail=delivery_detail,
+                observed_closest_km=observed_closest_km,
+            ),
+            auxiliary=_photo_snapshot if delivered else None,
+        )
+
+    return result_message_id
 
 
 async def send_aircraft_notification(
@@ -374,17 +417,17 @@ async def send_aircraft_notification(
     eta_seconds: float | None = None,
 ) -> bool:
     msg = _basic_alert_text(aircraft, distance_km, eta_seconds, notification_id)
-    if notification_id:
-        try:
-            await _record_photo_snapshot(user_id, aircraft, distance_km, notification_id, eta_seconds)
-        except Exception:
-            logger.exception("Could not persist photo snapshot %s", notification_id)
-
-    return await _send_message(
+    sent = await _send_message(
         user_id,
         msg,
         notification_actions_keyboard(notification_id, aircraft.icao24) if notification_id else None,
     )
+    if sent and notification_id:
+        async def _photo_snapshot() -> None:
+            await _record_photo_snapshot(user_id, aircraft, distance_km, notification_id, eta_seconds)
+
+        enqueue_auxiliary(_photo_snapshot, label="basic_photo_snapshot")
+    return sent
 
 
 async def _send_message(
