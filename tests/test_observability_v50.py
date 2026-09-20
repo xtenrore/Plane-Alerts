@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from app.observability_v50 import _provider_status_safe, explain_prediction
+from app.version import PREDICTION_VERSION, VERSION
 
 
 def _prediction() -> dict:
@@ -43,6 +44,11 @@ def _prediction() -> dict:
             },
         },
     }
+
+
+def test_v500_release_identity_preserves_verified_predictor():
+    assert VERSION == "5.0.0"
+    assert PREDICTION_VERSION == "4.7.3-terminal-delivery-landing-path"
 
 
 def test_explanation_shows_why_alert_was_suppressed_without_private_location():
