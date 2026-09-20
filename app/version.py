@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "4.7.1"
-PREDICTION_VERSION = "4.7.1-airport-terminal-global-data"
+VERSION = "4.7.2"
+PREDICTION_VERSION = "4.7.2-terminal-arrival-initial-hold"
 
 
 def _runtime_commit() -> str:
