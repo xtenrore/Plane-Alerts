@@ -127,7 +127,9 @@ async def _match_user_aircraft_batched(
 ) -> int:
     """Replace N sequential Mongo state reads with one query per user/cycle."""
     user_id = int(user["user_id"])
-    cache = await _prefetch_approach_states(user_id, aircraft_list)
+    from app.worker.timing import phase
+    with phase("state_batch_read"):
+        cache = await _prefetch_approach_states(user_id, aircraft_list)
     token = _APPROACH_STATE_CONTEXT.set((user_id, cache))
     try:
         return await _ORIGINAL_MATCH(user, aircraft_list, results_by_provider)
@@ -158,6 +160,7 @@ async def _get_active_users_batched() -> list[dict[str, Any]]:
         }
         for user_id in ids
         if user_id in locations and user_id in preferences
+        and locations[user_id].get("config_revision") == preferences[user_id].get("config_revision")
     ]
 
 

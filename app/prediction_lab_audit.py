@@ -12,6 +12,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.database import get_db
+from app.version import PREDICTION_VERSION
+from app.worker.optional_work import OptionalCache
+from types import SimpleNamespace
+
+audit_work = OptionalCache(max_entries=4096, max_pending=64, concurrency=2, timeout=3.0)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,7 @@ async def record_prediction_snapshot(
     qualifies: bool,
     route_suppressed: bool,
     route_reason: str = "",
+    diagnostics: dict | None = None,
 ) -> None:
     """Persist a pre-outcome prediction, rate-limited and TTL bounded."""
     now_mono = time.monotonic()
@@ -80,6 +86,8 @@ async def record_prediction_snapshot(
 
     doc = {
         "kind": "prediction",
+        "prediction_version": PREDICTION_VERSION,
+        "diagnostics": diagnostics or {},
         "captured_at": now,
         "expires_at": now + timedelta(days=4),
         "user_id": int(user_id),
@@ -128,6 +136,9 @@ async def record_prediction_outcome(
         previous_cpa = None
     doc = {
         "kind": "outcome",
+        "prediction_version": PREDICTION_VERSION,
+        "outcome_basis": "lifecycle_transition_only",
+        "scoreable": False,
         "captured_at": now,
         "expires_at": now + timedelta(days=8),
         "user_id": int(user_id),
@@ -149,3 +160,21 @@ async def record_prediction_outcome(
         await get_db()["prediction_lab_audit"].insert_one(doc)
     except Exception:
         logger.exception("prediction_lab_outcome_failed user=%s icao=%s", user_id, icao)
+
+
+def enqueue_snapshot(*, user_id, aircraft, prediction, alert_radius_km, qualifies, route_suppressed, route_reason="", diagnostics=None):
+    # Copy only scalar fields; queued work never retains a projected path or
+    # an entire provider response. The two-worker queue is bounded at admission.
+    pred = SimpleNamespace(**{name: getattr(prediction, name, None) for name in (
+        "time_to_cpa_s", "current_distance_km", "projected_closest_km", "state", "confidence", "confidence_score", "enters_alert_radius")})
+    ac = SimpleNamespace(icao24=aircraft.icao24, callsign=aircraft.callsign, aircraft_type=aircraft.aircraft_type)
+    audit_work.get(("prediction", user_id, ac.icao24), lambda: record_prediction_snapshot(
+        user_id=user_id, aircraft=ac, prediction=pred, alert_radius_km=alert_radius_km,
+        qualifies=qualifies, route_suppressed=route_suppressed, route_reason=route_reason,
+        diagnostics=diagnostics), ttl=60)
+
+
+def enqueue_outcome(**kwargs):
+    aircraft = kwargs["aircraft"]
+    audit_work.get(("outcome", kwargs["user_id"], aircraft.icao24, kwargs["outcome"]),
+                   lambda: record_prediction_outcome(**kwargs), ttl=30)

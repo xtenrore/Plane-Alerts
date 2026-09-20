@@ -8,6 +8,7 @@ import math
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -85,10 +86,11 @@ async def _show(update: Update, text: str, keyboard: InlineKeyboardMarkup | None
         try:
             await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
             return
-        except Exception:
-            # Old messages, unchanged content, or non-editable messages should
-            # not break the flow; fall back to one clean replacement message.
-            pass
+        except BadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return
+            if not any(reason in str(exc).lower() for reason in ("message to edit not found", "message can't be edited", "there is no text")):
+                raise
     if update.message:
         await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
     elif query and query.message:
@@ -110,7 +112,7 @@ async def _profiles_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(_esc(profile_summary(profile)))
         lines.append("")
         rows.append([_button(f"{marker}{profile.get('name')}", f"pf:o:{profile['profile_id']}")])
-    rows.append([_button("Create New Profile", "pf:new")])
+    rows.append([_button("New Profile", "pf:new"), _button("Close", "pf:close")])
     return "\n".join(lines).rstrip(), InlineKeyboardMarkup(rows)
 
 
@@ -668,9 +670,14 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if data == "pf:home":
             await _clear_state(uid)
             await _render_profiles(update, uid)
+        elif data == "pf:close":
+            await _clear_state(uid)
+            await _show(update, "Profiles closed. Use /profiles to return.")
         elif data == "pf:new":
             await _start_create(update, uid)
         elif action == "o" and len(parts) == 3:
+            if await get_profile(uid, parts[2]):
+                await _clear_state(uid)
             await _render_profile_detail(update, uid, parts[2])
         elif action == "a" and len(parts) == 3:
             profile = await activate_profile(uid, parts[2])
@@ -843,7 +850,7 @@ async def profile_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _render_edit_menu(update, user.id)
     else:
         await _set_state(user.id, "profile:radius", temp)
-        await message.reply_text("<b>Alert Radius</b>\n\nSend a radius from 1 to 150 km.", parse_mode=ParseMode.HTML)
+        await message.reply_text("<b>Alert Radius</b>\n\nSend a radius from 1 to 150 km.", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([[_button("Cancel", "pf:home")]]))
     raise ApplicationHandlerStop
 
 

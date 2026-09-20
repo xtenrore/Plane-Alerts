@@ -129,6 +129,8 @@ class EncounterState:
     previous_distance_km: float | None = None
     expected_turn_started: bool = False
     expected_turn_confirmed: bool = False
+    expected_turn_deadline: float | None = None
+    last_observation_at: float | None = None
 
 
 def _prune(now_mono: float) -> None:
@@ -325,7 +327,8 @@ def _motion_paths(*, ac: Any, pred: Any, destination: route_mod.AirportInfo | No
     turn_rate = float(getattr(pred, "turn_rate_deg_s", 0.0) or 0.0)
     dest_key = (round(float(destination.latitude), 3), round(float(destination.longitude), 3)) if destination and destination.latitude is not None and destination.longitude is not None else None
     cache_key = (
-        str(getattr(ac, "icao24", "")).lower(), round(lat, 4), round(lon, 4),
+        str(getattr(ac, "icao24", "")).lower(),
+        route_mod.normalize_flight_key(getattr(ac, "callsign", "")), round(lat, 4), round(lon, 4),
         round(heading, 1), round(speed, 0), round(turn_rate, 2), dest_key, terminal_state,
     )
     now_mono = time.monotonic()
@@ -441,10 +444,12 @@ def assess_candidate(
         turn_rate = float(getattr(pred, "turn_rate_deg_s", 0.0) or 0.0)
         deadline = None
         if encounter is not None:
-            deadline = encounter.first_seen_mono + min(
-                EXPECTED_TURN_MAX_S,
-                max(EXPECTED_TURN_MIN_S, float(getattr(pred, "time_to_cpa_s", EXPECTED_TURN_MAX_S) or EXPECTED_TURN_MAX_S) * 0.35),
-            )
+            if encounter.expected_turn_deadline is None and abs(required) >= 12.0:
+                encounter.expected_turn_deadline = now_mono + min(
+                    EXPECTED_TURN_MAX_S,
+                    max(EXPECTED_TURN_MIN_S, float(getattr(pred, "time_to_cpa_s", EXPECTED_TURN_MAX_S) or EXPECTED_TURN_MAX_S) * 0.35),
+                )
+            deadline = encounter.expected_turn_deadline
 
         if encounter is not None and encounter.expected_turn_confirmed:
             expected_state = "TURN_CONFIRMED"
@@ -478,7 +483,8 @@ def assess_candidate(
 
 def _encounter_key(ac: Any, user_lat: float, user_lon: float, radius_km: float) -> tuple:
     return (
-        str(getattr(ac, "icao24", "")).lower(), round(float(user_lat), 4),
+        str(getattr(ac, "icao24", "")).lower(),
+        route_mod.normalize_flight_key(getattr(ac, "callsign", "")), round(float(user_lat), 4),
         round(float(user_lon), 4), round(float(radius_km), 1),
     )
 
@@ -496,8 +502,15 @@ def _neutralize_unsafe_history_veto(result: route_mod.RouteGateResult) -> route_
 def _apply_qualification(
     *, base: route_mod.RouteGateResult, assessment: ArrivalAssessment,
     encounter: EncounterState, pred: Any, current_distance_km: float,
-    radius_km: float, active: bool, now_mono: float,
+    radius_km: float, active: bool, now_mono: float, observed_at: float | None = None,
 ) -> tuple[bool, str, int]:
+    observation = now_mono if observed_at is None else observed_at
+    fresh_observation = encounter.last_observation_at is None or observation > encounter.last_observation_at + 0.001
+    previous_observation = encounter.last_observation_at
+    if fresh_observation:
+        encounter.last_observation_at = observation
+    if previous_observation is not None and observation - previous_observation > FRESH_CONFIRMATION_GAP_S:
+        encounter.positive_count = 0
     previous_seen = encounter.last_seen_mono
     if not encounter.qualified and now_mono - previous_seen > FRESH_CONFIRMATION_GAP_S:
         encounter.positive_count = 0
@@ -521,6 +534,7 @@ def _apply_qualification(
             encounter.observed_min_km = current_distance_km
             encounter.expected_turn_started = False
             encounter.expected_turn_confirmed = False
+            encounter.expected_turn_deadline = None
         else:
             encounter.previous_distance_km = current_distance_km
             return True, "PASSED_LOCKED", encounter.positive_count
@@ -571,7 +585,8 @@ def _apply_qualification(
         encounter.positive_count = 0
         return True, assessment.expected_turn_state, encounter.positive_count
 
-    encounter.positive_count = encounter.positive_count + 1 if strong_live_pass else 0
+    if fresh_observation:
+        encounter.positive_count = encounter.positive_count + 1 if strong_live_pass else 0
     if encounter.positive_count < required:
         return True, "TRAJECTORY_CONFIRMING", encounter.positive_count
     encounter.qualified = True
@@ -582,6 +597,7 @@ async def evaluate_route_v42(
     self: route_mod.RouteHistoryService, ac: Any, pred: Any, *, user_lat: float,
     user_lon: float, alert_radius_km: float, current_samples: Iterable[Any],
 ) -> route_mod.RouteGateResult:
+    current_samples = list(current_samples)
     base = await v2.evaluate_route_nonblocking(
         self, ac, pred, user_lat=user_lat, user_lon=user_lon,
         alert_radius_km=alert_radius_km, current_samples=current_samples,
@@ -610,6 +626,7 @@ async def evaluate_route_v42(
         base=base, assessment=assessment, encounter=encounter, pred=pred,
         current_distance_km=float(getattr(pred, "current_distance_km", math.inf)),
         radius_km=alert_radius_km, active=encounter.qualified, now_mono=now_mono,
+        observed_at=max((float(item.timestamp) for item in current_samples if hasattr(item, "timestamp")), default=None),
     )
 
     directly_inside = (

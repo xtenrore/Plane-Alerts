@@ -152,11 +152,12 @@ class OpenSkyProvider(AircraftDataProvider):
             if elapsed < self._min_interval:
                 await asyncio.sleep(self._min_interval - elapsed)
         degree_offset = radius_nm / 60.0
+        longitude_offset = min(180.0, degree_offset / max(0.01, math.cos(math.radians(latitude))))
         params = {
-            "lamin": latitude - degree_offset,
-            "lamax": latitude + degree_offset,
-            "lomin": longitude - degree_offset,
-            "lomax": longitude + degree_offset,
+            "lamin": max(-90.0, latitude - degree_offset),
+            "lamax": min(90.0, latitude + degree_offset),
+            "lomin": max(-180.0, longitude - longitude_offset),
+            "lomax": min(180.0, longitude + longitude_offset),
         }
         client = await get_http_client()
         url = f"{settings.opensky_base_url}/states/all"
@@ -290,6 +291,8 @@ class ProviderManager:
             for ac in records:
                 if ac.icao24 and ac.aircraft_type:
                     self._type_cache[ac.icao24] = ac.aircraft_type.upper()
+                    while len(self._type_cache) > 8192:
+                        self._type_cache.pop(next(iter(self._type_cache)))
         for records in results_by_provider.values():
             for ac in records:
                 if not ac.has_position:
@@ -321,19 +324,30 @@ class ProviderManager:
 def parse_adsb_response(data: dict[str, Any]) -> list[NormalizedAircraft]:
     out: list[NormalizedAircraft] = []
     now = time.time()
+    generated_at = _number(data.get("now")) or now
+    if generated_at > 10_000_000_000:
+        generated_at /= 1000.0
+    generated_at = min(now, generated_at)
     for ac in data.get("ac", []):
         try:
+            latitude, longitude = _number(ac.get("lat")), _number(ac.get("lon"))
+            if latitude is not None and not -90 <= latitude <= 90 or longitude is not None and not -180 <= longitude <= 180:
+                continue
+            if ac.get("lat") is not None and latitude is None or ac.get("lon") is not None and longitude is None:
+                continue
             seen = _number(ac.get("seen_pos"))
             if seen is not None and seen > 1_000_000_000:
                 seen = max(0.0, now - seen)
+            observed_at = generated_at - max(0.0, seen) if seen is not None else None
+            seen = max(0.0, now - observed_at) if observed_at is not None else 999.0
             vertical_fpm = ac.get("baro_rate") if ac.get("baro_rate") is not None else ac.get("geom_rate")
             out.append(
                 NormalizedAircraft(
                     icao24=(ac.get("hex") or "").lower().strip(),
                     callsign=(ac.get("flight") or "").strip(),
                     origin_country="",
-                    latitude=ac.get("lat"),
-                    longitude=ac.get("lon"),
+                    latitude=latitude,
+                    longitude=longitude,
                     altitude=_feet_to_metres(ac.get("alt_baro")),
                     velocity=_knots_to_ms(ac.get("gs")),
                     heading=_number(ac.get("track")),
@@ -342,7 +356,7 @@ def parse_adsb_response(data: dict[str, Any]) -> list[NormalizedAircraft]:
                     position_age_s=seen,
                     data_quality=_quality(seen, ac.get("gs"), ac.get("track")),
                     aircraft_type=(ac.get("t") or "").strip().upper(),
-                    timestamp=ac.get("seen_pos"),
+                    timestamp=observed_at,
                 )
             )
         except Exception:

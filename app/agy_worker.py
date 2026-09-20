@@ -323,6 +323,7 @@ class GoalSupervisor:
         _atomic_json(
             SUPERVISOR_STATE_FILE,
             {
+                **_load_json(SUPERVISOR_STATE_FILE, {}),
                 "enabled": self.enabled,
                 "goal": self.goal,
                 "next_run_at": self.next_run_at,

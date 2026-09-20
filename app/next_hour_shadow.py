@@ -370,7 +370,7 @@ def update_next_hour_shadow(now: datetime | None = None) -> dict[str, int]:
                 "predicted_closest_km": round(float(statistics.median(closest_distances)), 3),
                 "historical_days": len(pass_times),
                 "historical_time_spread_s": round(spread_s, 1),
-                "confidence": _confidence(len(pass_times), spread_s),
+                "confidence": "Low" if horizon_s > 1800 else _confidence(len(pass_times), spread_s),
                 "alert_radius_km": radius,
                 "status": "awaiting_outcome",
                 "coverage_mode": "historical_flight_number_timing_shadow",
@@ -426,9 +426,11 @@ def update_next_hour_shadow(now: datetime | None = None) -> dict[str, int]:
             distance_km, actual_ts = closest
             actual_at = datetime.fromtimestamp(actual_ts, timezone.utc)
             radius = float(expectation.get("alert_radius_km") or loc.get("radius_km") or 15.0)
-            actual_pass = distance_km <= radius
+            from app.forecast_outcomes import observed_outcome, OUTCOME_VERSION
+            evidence = observed_outcome(list(route.get("points") or []), float(loc["latitude"]), float(loc["longitude"]), expectation, radius)
+            actual_pass = evidence["actual_pass"]
             predicted_at = _as_utc_datetime(expectation.get("predicted_cpa_at"))
-            timing_error_s = (actual_at - predicted_at).total_seconds() if predicted_at is not None else None
+            timing_error_s = (actual_at - predicted_at).total_seconds() if predicted_at is not None and evidence["timing_scoreable"] else None
             outcome = {
                 "kind": "next_hour_outcome",
                 "expectation_key": key,
@@ -439,6 +441,9 @@ def update_next_hour_shadow(now: datetime | None = None) -> dict[str, int]:
                 "utc_date": str(expectation.get("utc_date") or today),
                 "actual_observed": True,
                 "actual_pass": actual_pass,
+                "scoreable": evidence["scoreable"],
+                "timing_scoreable": evidence["timing_scoreable"],
+                "outcome_version": OUTCOME_VERSION,
                 "actual_closest_km": round(distance_km, 3),
                 "actual_cpa_at": actual_at,
                 "timing_error_s": round(timing_error_s, 1) if timing_error_s is not None else None,
@@ -449,7 +454,7 @@ def update_next_hour_shadow(now: datetime | None = None) -> dict[str, int]:
                 "match_sample_count": match_sample_count,
                 "match_window_start": match_bounds[0] if match_bounds else None,
                 "match_window_end": match_bounds[1] if match_bounds else None,
-                "resolution": "resolved_bounded_window",
+                "resolution": "resolved_bounded_window" if actual_pass else "unresolved_coverage",
             }
             audit.update_one(
                 {"kind": "next_hour_outcome", "expectation_key": key},

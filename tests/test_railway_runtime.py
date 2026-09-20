@@ -20,11 +20,13 @@ def test_railway_requires_core_runtime_secrets_before_starting():
     assert "eval " not in text
 
 
-def test_railway_guard_keeps_gemini_optional_for_v34():
+def test_railway_guard_keeps_gemini_optional_for_deterministic_runtime():
     text = _text(ENTRYPOINT)
     assert '${GEMINI_API_KEY:-}' in text
     assert "Gemini advisor is disabled" in text
-    assert "deterministic v3.4 fallback remains active" in text
+    assert "deterministic fallback remains active" in text
+    assert "Plane?" not in text
+    assert "v3.4 fallback" not in text
 
 
 def test_railway_guard_does_not_echo_secret_values():

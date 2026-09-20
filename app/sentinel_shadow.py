@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pymongo import MongoClient
+from app.forecast_outcomes import observed_outcome, OUTCOME_VERSION
 
 _MONGO_URI = os.getenv("MONGO_URI", "").strip()
 _DB_NAME = os.getenv("DATABASE_NAME", "aircraft_bot").strip() or "aircraft_bot"
@@ -291,7 +292,8 @@ def _update_europe_expectations(database: Any, routes: list[dict[str, Any]], now
             "predicted_closest_km": round(float(statistics.median(distances)), 3),
             "historical_days": len(times),
             "historical_time_spread_s": round(spread, 1),
-            "confidence": "High" if len(times) >= 3 and spread <= 600 else ("Medium" if len(times) >= 2 and spread <= 1200 else "Low"),
+            "confidence": "Low" if horizon_s > 1800 else ("Medium" if len(times) >= 2 and spread <= 1200 else "Low"),
+            "alert_radius_km": ALERT_RADIUS_KM,
             "status": "awaiting_outcome",
             "scoreable": False,
             "coverage_mode": "europe-sentinel-shadow",
@@ -322,14 +324,16 @@ def _update_europe_expectations(database: Any, routes: list[dict[str, Any]], now
             {"sentinel_id": sid, "callsign": callsign, "utc_date": str(expectation.get("utc_date") or today)},
             {"points": 1, "_id": 0},
         )
-        closest = _closest(_clean_points(list((route or {}).get("points") or [])), lat, lon) if route else None
+        evidence = observed_outcome(list((route or {}).get("points") or []), lat, lon, expectation,
+                                    float(expectation.get("alert_radius_km") or ALERT_RADIUS_KM))
+        closest = evidence["closest"]
         key = str(expectation.get("expectation_key") or "")
         if closest is not None:
             distance, actual_ts = closest
             actual_at = datetime.fromtimestamp(actual_ts, timezone.utc)
             predicted_at = expectation.get("predicted_cpa_at")
             timing_error = None
-            if isinstance(predicted_at, datetime):
+            if isinstance(predicted_at, datetime) and evidence["timing_scoreable"]:
                 if predicted_at.tzinfo is None:
                     predicted_at = predicted_at.replace(tzinfo=timezone.utc)
                 timing_error = (actual_at - predicted_at).total_seconds()
@@ -345,16 +349,20 @@ def _update_europe_expectations(database: Any, routes: list[dict[str, Any]], now
                     "callsign": callsign,
                     "utc_date": expectation.get("utc_date"),
                     "actual_observed": True,
+                    "actual_pass": evidence["actual_pass"],
+                    "timing_scoreable": evidence["timing_scoreable"],
+                    "outcome_version": OUTCOME_VERSION,
                     "actual_closest_km": round(distance, 3),
                     "actual_cpa_at": actual_at,
                     "timing_error_s": round(timing_error, 1) if timing_error is not None else None,
                     "prediction_horizon_s": expectation.get("prediction_horizon_s"),
                     "coverage_mode": "europe-sentinel-shadow",
-                    "scoreable": True,
+                    "scoreable": evidence["scoreable"],
+                    "resolution": "observed_pass" if evidence["actual_pass"] else "unresolved_coverage",
                 }},
                 upsert=True,
             )
-            audit.update_one({"_id": expectation["_id"]}, {"$set": {"status": "resolved", "resolved_at": now, "scoreable": True}})
+            audit.update_one({"_id": expectation["_id"]}, {"$set": {"status": "resolved" if evidence["actual_pass"] else "unresolved_coverage", "resolved_at": now, "scoreable": evidence["scoreable"]}})
             resolved += 1
             continue
 

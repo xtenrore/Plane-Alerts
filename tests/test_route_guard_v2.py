@@ -82,7 +82,21 @@ async def test_history_reads_are_cached_for_live_candidate(monkeypatch):
         return []
 
     service._historical_paths = history
+
+    # A cold read must return immediately from the live alert path and schedule
+    # exactly one background refresh. A second hot-path lookup while that refresh
+    # is pending must share the same work rather than spawning another DB read.
     assert await guard._historical_paths_cached(service, "THY1017") == []
+    assert calls == 0
+    task = service._route_guard_v2_history_tasks["THY1017"]
+    assert await guard._historical_paths_cached(service, "THY1017") == []
+    assert service._route_guard_v2_history_tasks["THY1017"] is task
+    assert calls == 0
+
+    await asyncio.wait_for(task, timeout=0.1)
+    assert calls == 1
+
+    # The completed refresh is reused from memory without another history read.
     assert await guard._historical_paths_cached(service, "THY1017") == []
     assert calls == 1
 

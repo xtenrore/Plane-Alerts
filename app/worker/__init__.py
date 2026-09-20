@@ -24,9 +24,9 @@ if "pytest" not in sys.modules:
 
     install_direct_presence_guard_v44()
 
-    # Install the destination adapters first, then the non-blocking v2 route
-    # resolver. Bound v2's background route-history writes before layering the
-    # v4.2 ensemble qualification guard and v4.3 cancellation latch.
+    # Install the destination adapters, the v2 non-blocking route resolver/read
+    # cache, then the bounded route-history write queue. The v4.2 ensemble
+    # qualification guard and v4.3 cancellation latch are layered afterward.
     from app.intelligence.route_guard import install_route_guard
     from app.intelligence.route_guard_v2 import install_route_guard_v2
     from app.intelligence.route_observe_guard_v44 import install_route_observe_guard_v44
@@ -63,3 +63,8 @@ if "pytest" not in sys.modules:
     from app.worker.cadence_due_guard_v424 import install_cadence_due_guard_v424
 
     install_cadence_due_guard_v424()
+
+    # Notification telemetry is integrated directly in notifications.py and
+    # runs through its own bounded post-delivery queue. Do not install a second
+    # wrapper around the sender: edits, retries and lifecycle updates must be
+    # recorded once against the same logical alert.

@@ -161,13 +161,26 @@ def predict_trajectory_v43(
 
     idx = min(range(len(path)), key=lambda index: path[index].horizontal_km)
     if 0 < idx < len(path) - 1:
-        y1 = path[idx - 1].horizontal_km
-        y2 = path[idx].horizontal_km
-        y3 = path[idx + 1].horizontal_km
+        y1 = path[idx - 1].horizontal_km ** 2
+        y2 = path[idx].horizontal_km ** 2
+        y3 = path[idx + 1].horizontal_km ** 2
         denom = y1 - 2 * y2 + y3
         if abs(denom) > 1e-9:
             offset = t._clamp(0.5 * (y1 - y3) / denom, -1.0, 1.0)
             cpa_t = max(0.0, path[idx].seconds + offset * step_s)
+            # Locally constant velocity makes squared range quadratic in time.
+            # Refine range too: a narrow-radius pass can lie between samples.
+            closest_h = math.sqrt(max(0.0, y2 - (y1 - y3) ** 2 / (8.0 * denom))) if denom > 0 else closest_h
+            cpa_altitude = path[idx].altitude_m
+            closest_slant = math.hypot(closest_h, max(0.0, (cpa_altitude or user_altitude_m) - user_altitude_m) / 1000.0)
+
+    # Projected times originate at the observation, not at the poll. Cached
+    # positions must not restart their countdown every five seconds.
+    age = max(0.0, effective_now - latest.timestamp)
+    cpa_t = max(0.0, cpa_t - age)
+    if entry_t is not None:
+        entry_t = max(0.0, entry_t - age)
+    path = [replace(point, seconds=point.seconds - age) for point in path if point.seconds >= age]
 
     increasing = (
         base.distance_trend_km_s is not None

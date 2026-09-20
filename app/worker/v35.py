@@ -177,7 +177,7 @@ class SharedRegionPoller:
         self._locks: dict[str, asyncio.Lock] = {}
 
     def prune(self, live_keys: set[str]) -> None:
-        for key in list(self._snapshots):
+        for key in set(self._snapshots) | set(self._provider_cursor) | set(self._locks):
             if key not in live_keys:
                 self._snapshots.pop(key, None)
                 self._provider_cursor.pop(key, None)

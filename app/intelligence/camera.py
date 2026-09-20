@@ -83,8 +83,9 @@ def frame_occupancy(sensor_width_mm: float, sensor_height_mm: float, focal_mm: f
     if min(sensor_width_mm,sensor_height_mm,focal_mm,distance_km,wingspan_m)<=0: raise ValueError("positive geometry values required")
     distance_m=distance_km*1000.0
     width_pct=100.0*(focal_mm*wingspan_m/distance_m)/sensor_width_mm
-    height_pct=100.0*(focal_mm*min(length_m,wingspan_m)/distance_m)/sensor_height_mm if length_m else None
-    risk="High" if width_pct>=94 else "Moderate" if width_pct>=84 else "Low"
+    height_pct=100.0*(focal_mm*length_m/distance_m)/sensor_height_mm if length_m else None
+    extent = max(width_pct, height_pct or 0.0)
+    risk="High" if extent>=94 else "Moderate" if extent>=84 else "Low"
     return FrameEstimate(focal_mm,max(0.0,width_pct),max(0.0,height_pct) if height_pct is not None else None,risk)
 
 
@@ -97,7 +98,11 @@ def angular_speed_deg_s(observer_lat: float, observer_lon: float, point: Project
     az1=bearing_deg(observer_lat,observer_lon,point.latitude,point.longitude); az2=bearing_deg(observer_lat,observer_lon,next_point.latitude,next_point.longitude)
     el1=math.degrees(math.atan2((point.altitude_m or 0.0)/1000.0,max(point.horizontal_km,1e-4))); el2=math.degrees(math.atan2((next_point.altitude_m or 0.0)/1000.0,max(next_point.horizontal_km,1e-4)))
     daz=(az2-az1+180.0)%360.0-180.0; dt=next_point.seconds-point.seconds
-    return math.hypot(daz,el2-el1)/dt
+    # Great-circle separation of the two sight lines. Azimuth alone becomes
+    # singular overhead and must be weighted by elevation.
+    a, b, delta = map(math.radians, (el1, el2, daz))
+    chord = math.sin((b-a)/2)**2 + math.cos(a)*math.cos(b)*math.sin(delta/2)**2
+    return math.degrees(2 * math.asin(math.sqrt(min(1.0, max(0.0, chord))))) / dt
 
 
 def _standard_shutter(denom: float) -> int:
@@ -148,7 +153,13 @@ def recommend_camera(*,camera: Any,lens: Any|None,aircraft_type: str,prediction:
     cpa_idx=prediction.path.index(closest) if closest and prediction.path else 0; next_p=prediction.path[cpa_idx+1] if prediction.path and cpa_idx+1<len(prediction.path) else None
     angular=angular_speed_deg_s(observer_lat,observer_lon,closest,next_p) if closest else None; floor,preferred=_shutter_for_motion(angular,max(reco_focal,lens_min),geom,mode); floor,preferred=_practical_standard_shutter(floor,preferred,closest,mode)
     low_light=sun_elevation_deg is not None and sun_elevation_deg<8; aperture="f/6.3" if low_light else "f/8" if mode in {"Maximum detail","Contrail shot"} else "f/7.1"
-    if mode=="Night aircraft":aperture="widest practical aperture"
+    wide = getattr(lens, "max_aperture_wide", None) if lens else None
+    tele = getattr(lens, "max_aperture_tele", None) if lens else None
+    # Only endpoint specifications are known; no fabricated aperture curve.
+    available = wide if reco_focal <= lens_min else (tele or wide)
+    if available:
+        aperture = f"f/{max(float(aperture[2:]), float(available)):g}"
+    if mode=="Night aircraft":aperture=f"f/{float(available):g}" if available else "widest practical aperture"
     iso=f"Auto ISO ≤{max_auto_iso}"; ev="+0.7 EV" if "back" in light_relationship.lower() else "+0.3 EV" if low_light else "0 EV"
     if mode=="Silhouette":ev="-0.7 EV"
     haze_penalty={"Very Low":0.0,"Low":0.02,"Moderate":0.07,"High":0.14,"Severe":0.22}.get(heat_haze_level,0.05); light_quality=0.45 if "back" in light_relationship.lower() else 0.95 if "side" in light_relationship.lower() else 0.75
@@ -165,7 +176,7 @@ def recommend_camera(*,camera: Any,lens: Any|None,aircraft_type: str,prediction:
         best=max(v[0] for v in scores); usable=[r for r in scores if r[0]>=best-0.07 and r[1].seconds<=(prediction.time_to_cpa_s or 900)+10]
         if usable:
             center=max(usable,key=lambda r:r[0])[1].seconds; around=[r for r in usable if abs(r[1].seconds-center)<=24]; start_s=min(r[1].seconds for r in around); end_s=max(r[1].seconds for r in around)
-    notes=[]
+    notes=["Shutter guidance assumes smooth panning; increase speed if tracking is difficult."]
     if wingspan is None:notes.append("Exact aircraft dimensions unavailable; framing estimate is conservative.")
     if mode=="Standard aviation" and closest and closest.altitude_m is not None and abs(float(closest.altitude_m))<=3000:notes.append("Low-altitude default favors ~1/1000 with smooth panning instead of unnecessarily high shutter speeds.")
     if heat_haze_level in {"High","Severe"}:notes.append("Atmospheric shimmer may erase detail before the lens reaches its maximum focal length.")
