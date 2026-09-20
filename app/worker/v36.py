@@ -5,6 +5,10 @@ profiles and inherited aircraft filtering outside provider I/O. Priority users
 are still evaluated first and their shared region stays on the five-second hot
 cadence. Delay Time remains a minimum per-user evaluation delay, so
 administrators can slow individual users without multiplying provider calls.
+
+v5.0 reuses this existing heartbeat write to persist a compact provider/runtime
+snapshot for operator observability. It adds no provider request, prediction, or
+synchronous storage operation to the alert-critical path.
 """
 from __future__ import annotations
 
@@ -15,8 +19,13 @@ from typing import Any
 from app.agy_state import is_agy_console_active
 from app.config import settings
 from app.database import system_status_col, users_col
+from app.observability_v50 import _provider_status_safe
+from app.storage_metrics_v48 import storage_metrics
+from app.storage_runtime_v48 import storage_runtime
 from app.version import COMMIT, VERSION
-from app.worker import monitor, v35
+from app.worker import monitor, timing, v35
+from app.worker.notification_telemetry import snapshot as notification_telemetry_snapshot
+from app.worker.optional_work import enrichment
 
 logger = logging.getLogger(__name__)
 _last_user_processed_mono: dict[int, float] = {}
@@ -119,6 +128,30 @@ def _collect_due_users(
     return due_users, deferred
 
 
+def _runtime_diagnostics_v50() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build a cheap, secret-safe in-memory payload for the existing heartbeat."""
+    provider_health = [
+        _provider_status_safe(status)
+        for status in monitor.get_provider_manager().get_all_provider_status()
+    ]
+    runtime_storage = storage_runtime.snapshot()
+    storage_diag = storage_metrics.snapshot(
+        write_queue_depth=int(runtime_storage["critical_write_queue_depth"]) + int(runtime_storage["status_write_queue_depth"]),
+        optional_queue_depth=int(runtime_storage["optional_write_queue_depth"]),
+    )
+    return provider_health, {
+        "timing": timing.snapshot(),
+        "storage_runtime": runtime_storage,
+        "storage_diagnostics": storage_diag,
+        "notification_telemetry": notification_telemetry_snapshot(),
+        "optional_work": {
+            "pending": len(enrichment.pending),
+            "dropped": enrichment.dropped,
+            "failures": enrichment.failures,
+        },
+    }
+
+
 async def _record_v36_metrics(
     *,
     region_count: int,
@@ -129,6 +162,7 @@ async def _record_v36_metrics(
     notifications_paused: int,
 ) -> None:
     try:
+        provider_health, runtime_metrics = _runtime_diagnostics_v50()
         await system_status_col().update_one(
             {"_id": "monitor_worker"},
             {"$set": {
@@ -140,12 +174,14 @@ async def _record_v36_metrics(
                 "priority_users_last_cycle": priority_users,
                 "deferred_users_last_cycle": deferred_users,
                 "notifications_paused_last_cycle": notifications_paused,
-                "polling_mode": "adaptive-shared-regions-priority",
+                "polling_mode": "adaptive-shared-regions-priority-storage-isolated",
+                "provider_health_v50": provider_health,
+                "runtime_metrics_v50": runtime_metrics,
             }},
             upsert=True,
         )
     except Exception:
-        logger.debug("Unable to persist v4.4 polling metrics", exc_info=True)
+        logger.debug("Unable to persist v5.0 polling diagnostics", exc_info=True)
 
 
 async def _monitor_cycle_v36() -> None:

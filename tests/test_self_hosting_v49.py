@@ -26,8 +26,8 @@ def _config(**overrides: object) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def test_release_identity_v49_preserves_prediction_model() -> None:
-    assert VERSION == "4.9.0"
+def test_release_identity_v49_or_later_preserves_prediction_model() -> None:
+    assert tuple(int(part) for part in VERSION.split(".")) >= (4, 9, 0)
     assert PREDICTION_VERSION == "4.7.3-terminal-delivery-landing-path"
 
 
