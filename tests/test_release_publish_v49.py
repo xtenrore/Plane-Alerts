@@ -8,12 +8,14 @@ def _workflow_text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_release_publish_runs_only_after_green_main_tests():
+def test_release_publish_runs_only_after_trusted_green_main_push():
     workflow = _workflow_text()
     assert "workflow_run:" in workflow
     assert "- tests" in workflow
     assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert "github.event.workflow_run.event == 'push'" in workflow
     assert "github.event.workflow_run.head_branch == 'main'" in workflow
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in workflow
     assert "pull_request_target" not in workflow
     assert "contents: write" in workflow
 
