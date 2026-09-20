@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "4.5.0"
-PREDICTION_VERSION = "4.4-observation-confirmations"
+VERSION = "4.6.0"
+PREDICTION_VERSION = "4.6-confidence-freshness"
 
 
 def _runtime_commit() -> str:
