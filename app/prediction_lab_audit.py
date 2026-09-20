@@ -1,7 +1,7 @@
 """Bounded, deterministic Prediction Lab telemetry.
 
 This module records what Plane Alerts predicted before the outcome was known.
-It never calls AI and never changes alert decisions.  The AGY worker consumes a
+It never calls AI and never changes alert decisions. The AGY worker consumes a
 sanitized copy of this data later to compare expectations with reality.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _horizon_bucket(seconds: float | None) -> str:
 
 
 def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | None) -> dict:
-    """Attach v4.6 shadow/provenance evidence without retaining user location."""
+    """Attach shadow/provenance evidence without retaining user location."""
     merged = dict(diagnostics or {})
     try:
         from app.intelligence.prediction_v46 import diagnostics_for
@@ -65,6 +65,15 @@ def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | No
             merged["v46"] = v46
     except Exception:
         logger.debug("v46_prediction_diagnostics_unavailable", exc_info=True)
+
+    try:
+        from app.intelligence.airport_terminal_v47 import diagnostics_for as terminal_diagnostics_for
+
+        v47 = terminal_diagnostics_for(prediction)
+        if v47:
+            merged["v47"] = v47
+    except Exception:
+        logger.debug("v47_terminal_diagnostics_unavailable", exc_info=True)
 
     candidates = getattr(aircraft, "source_candidates", ()) or ()
     if isinstance(candidates, dict):
@@ -201,8 +210,8 @@ async def record_prediction_outcome(
 
 def enqueue_snapshot(*, user_id, aircraft, prediction, alert_radius_km, qualifies, route_suppressed, route_reason="", diagnostics=None):
     # Capture diagnostics before replacing the live prediction object with a
-    # scalar-only copy. This keeps v4.6 shadow evidence bounded and joinable to
-    # the existing Prediction Lab record without retaining projected paths.
+    # scalar-only copy. This keeps shadow evidence bounded and joinable to the
+    # existing Prediction Lab record without retaining projected paths.
     merged_diagnostics = _snapshot_diagnostics(aircraft, prediction, diagnostics)
     pred = SimpleNamespace(**{name: getattr(prediction, name, None) for name in (
         "time_to_cpa_s", "current_distance_km", "projected_closest_km", "state", "confidence", "confidence_score", "enters_alert_radius")})
