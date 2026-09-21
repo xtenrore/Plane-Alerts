@@ -253,6 +253,22 @@ async def cmd_profiles_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     raise ApplicationHandlerStop
 
 
+async def cmd_setup_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Safely reopen setup without deleting the currently working profile first."""
+    user = update.effective_user
+    if not user:
+        return
+    active = await ensure_default_profile(user.id)
+    await legacy._clear_state(user.id)
+    await _render_detail(
+        update,
+        user.id,
+        active["profile_id"],
+        "Setup opened. Your current alerts stay active until you save changes or apply a preset.",
+    )
+    raise ApplicationHandlerStop
+
+
 async def cmd_preferences_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
@@ -400,6 +416,7 @@ def register_v54_handlers(app: Application) -> None:
     """Register UX handlers ahead of the established profile engine."""
     group = -40
     app.add_handler(CommandHandler("profiles", cmd_profiles_v54), group=group)
+    app.add_handler(CommandHandler("setup", cmd_setup_v54), group=group)
     app.add_handler(CommandHandler("preferences", cmd_preferences_v54), group=group)
     app.add_handler(
         CallbackQueryHandler(callback_v54, pattern=r"^(?:ux54:|pf:home$|pf:close$|pf:o:|pf:adone$)"),
