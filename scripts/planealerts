@@ -16,6 +16,9 @@ if len(sys.argv) > 1 and sys.argv[1] in {"diagnostics", "metrics"}:
 
     raise SystemExit(observability_main(sys.argv[1:]))
 
+# app.doctor_v49 was the original self-hosting doctor entry point. v5.5 keeps
+# that operator contract while routing the command through the backend-aware,
+# AGY-free community doctor below.
 from app.doctor_v55 import main  # noqa: E402
 
 if __name__ == "__main__":
