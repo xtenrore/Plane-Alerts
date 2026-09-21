@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.2.1**  
+**Current code version: Plane Alerts v5.3.0**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,14 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v5.3 multi-location and scale
+
+v5.3 reduces duplicated computation when many observers share the same regional ADS-B snapshot. Observer-independent aircraft motion is projected once and reused through bounded process-local caches, including the authoritative v4.3 midpoint-integrated motion path. The established production wrapper order remains `shared base -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing`.
+
+A bounded spatial index filters geographically impossible user/aircraft pairs before per-user prediction. The grid is only an acceleration structure: exact Haversine distance against the existing `radius + 120 km` monitoring envelope remains authoritative, and every surviving candidate still receives its own horizontal CPA, 3D relevance, ETA, confidence, route/terminal, qualification, cancellation and lifecycle evaluation.
+
+Motion caches are limited to 1,024 entries and contain no user coordinates or lifecycle state. Per-user candidate work is also explicitly bounded and surfaced in scale diagnostics. Existing shared provider snapshots and enrichment caches are reused, so v5.3 does not add another ADS-B polling layer or multiply provider calls. The physical prediction version remains `5.1-3d-proximity`.
 
 ## v5.2 shadow models and automatic evaluation
 
@@ -264,7 +272,7 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial-equivalence, full-wrapper output-equivalence, bounded-memory/work and 500-user/600-aircraft deterministic scale gates.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
@@ -272,7 +280,9 @@ python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
 pytest -q tests/test_shadow_evaluation_v52.py
+pytest -q tests/test_scale_v53.py tests/test_v35_shared_polling.py
 python scripts/evaluate_v52_shadow_replay.py
+python scripts/benchmark_v53_scale.py
 python scripts/benchmark_v52_shadow_eval.py
 python scripts/benchmark_v51_geometry.py
 python scripts/benchmark_v50_observability.py
