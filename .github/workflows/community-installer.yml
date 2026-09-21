@@ -54,6 +54,30 @@ jobs:
       - name: Verify dependency consistency
         run: pip check
 
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install locked runtime and test dependencies natively on ARM64
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Exercise native Linux ARM64 installer guard
+        run: |
+          bash setup-linux-arm64.sh --check-platform
+          bash setup-linux-arm64.sh --self-test
+          python scripts/community_installer_v55.py --self-test
+      - name: Run native ARM64 community/local-storage regressions
+        run: pytest -q tests/test_community_self_hosting_v55.py tests/test_local_database_v55.py tests/test_community_installer_v55.py
+      - name: Verify dependency consistency
+        run: pip check
+
   windows-x64:
     runs-on: windows-2025
     timeout-minutes: 20
@@ -83,19 +107,43 @@ jobs:
       - name: Verify dependency consistency
         run: pip check
 
-  arm64-emulation:
+  windows-arm64:
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install locked runtime and test dependencies natively on ARM64
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Exercise native Windows ARM64 installer guard
+        shell: cmd
+        run: |
+          call setup.bat --self-test
+          call setup-windows-arm64.bat --check-platform
+          call setup-windows-arm64.bat --self-test
+          call setup-windows.bat --self-test
+      - name: Exercise shared installer
+        run: python scripts/community_installer_v55.py --self-test
+      - name: Run native Windows ARM64 community/local-storage regressions
+        run: pytest -q tests/test_community_self_hosting_v55.py tests/test_local_database_v55.py tests/test_community_installer_v55.py
+      - name: Verify dependency consistency
+        run: pip check
+
+  raspberry-pi-arm64-emulation:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - name: Exercise generic ARM64 platform guard under QEMU
-        run: |
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD:/src:ro" ubuntu:24.04 \
-            bash /src/setup-linux-arm64.sh --check-platform
-      - name: Exercise Raspberry Pi 5 64-bit guard under QEMU
+      - name: Exercise Raspberry Pi 5 64-bit platform guard under ARM64 QEMU
         run: |
           docker run --rm --platform linux/arm64 \
             -e PLANE_ALERTS_INSTALLER_TEST=1 \
