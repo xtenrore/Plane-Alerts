@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.1.2**  
+**Current code version: Plane Alerts v5.1.3**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -42,7 +42,9 @@ v5.1 also tightens pass-versus-cancellation semantics. A close projected CPA is 
 
 v5.1.1 is a release-infrastructure-only patch. It keeps the same physical predictor and moves the exact-main Railway deployment gate out of the Railway CLI container so the trusted post-CI deploy can verify the tested SHA without depending on tools missing from that container.
 
-v5.1.2 fixes the production wrapper-chain compatibility bug discovered during v5.1.1 verification. The installed v4.6 confidence layer now accepts and forwards the v5.1 `altitude_relevance` option and preserves unknown observer elevation, so the intended `5.1-3d-proximity` model can execute through the real monitor/critical-timing stack.
+v5.1.2 fixes the production wrapper-chain compatibility bug discovered during v5.1.1 verification. The installed v4.6 confidence layer now accepts and forwards the v5.1 `altitude_relevance` option and preserves unknown observer elevation, so the intended `5.1-3d-proximity` model can execute through the monitor/critical-timing layer.
+
+v5.1.3 completes that repair after v5.1.2 production verification exposed the older v4.4 direct-presence and v4.3 midpoint wrappers beneath v4.6. Both now accept and forward the current v5.1 signature. The release gate recreates the full installed chain — core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing — including unknown observer elevation and both enabled/disabled altitude relevance. The physical prediction version and all CPA/ETA, terminal, qualification and alert-timing thresholds remain unchanged.
 
 ## v5.0 observability and explainability
 
@@ -231,7 +233,7 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds a production-wrapper-chain regression so the v4.6 confidence and critical-timing layers must accept and forward the current v5.1 predictor options.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
