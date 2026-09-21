@@ -1,6 +1,6 @@
 # Self-hosting Plane Alerts
 
-Plane Alerts v4.9 supports reproducible self-hosting on x86-64 and ARM64 Linux, including Raspberry Pi 4/5-class systems running a 64-bit OS. The alert-critical prediction path is the same deterministic/statistical code used in production.
+Plane Alerts v5.4.2 supports reproducible self-hosting on x86-64 and ARM64 Linux, including Raspberry Pi 4/5-class systems running a 64-bit OS. The alert-critical prediction path is the same deterministic/statistical code used in production.
 
 ## Recommended: Docker Compose
 
@@ -11,7 +11,9 @@ Requirements:
 - outbound HTTPS access for public ADS-B providers and Telegram
 - at least 2 GB RAM; 4 GB is recommended on Raspberry Pi when MongoDB shares the host
 
-Copy `.env.example` to `.env` and set at minimum `TELEGRAM_BOT_TOKEN`. Docker Compose supplies its own local MongoDB URI, so you do not need an external Mongo service for this setup. Do not commit `.env`.
+Copy `.env.example` to `.env` and set at minimum `TELEGRAM_BOT_TOKEN`. A blank `ADMIN_TELEGRAM_ID` is valid. Docker Compose supplies its own local MongoDB URI, so you do not need an external Mongo service for this setup. Do not commit `.env`.
+
+The web administration API is deliberately disabled while `ADMIN_PASSWORD` is blank. Set a strong `ADMIN_PASSWORD` before using the admin dashboard/API; a blank password does not create anonymous root access.
 
 Run:
 
@@ -58,9 +60,11 @@ The bare `planealerts` executable is installed inside the project Docker image. 
 
 ## Configuration validation
 
-Plane Alerts validates typed settings at startup. v4.9 additionally checks operational contradictions with `planealerts doctor`. Important rules include:
+Plane Alerts validates typed settings at startup. Important rules include:
 
 - `TELEGRAM_BOT_TOKEN` is required for the Telegram runtime.
+- `ADMIN_TELEGRAM_ID` may be blank; a nonblank value must be numeric.
+- `ADMIN_PASSWORD` must be configured before sensitive web-admin APIs can be used; blank fails closed.
 - `MONGO_URI` must use `mongodb://` or `mongodb+srv://`.
 - production monitoring is designed around a five-second `POLL_INTERVAL_SECONDS`.
 - `LOCAL_ADSB_URL`, when present, must be a valid HTTP(S) receiver URL; credentials belong in `LOCAL_ADSB_AUTH_HEADER`, not in the URL.
@@ -71,7 +75,9 @@ The optional Google Contrails integration continues to use `GOOGLE_CONTRAILS_API
 
 ## Health and recovery
 
-Container health is based on `/health`. MongoDB has its own health check. Both services use `restart: unless-stopped`. A warmed Plane Alerts process keeps the v4.8 last-known-good configuration/persistence isolation behavior during Mongo trouble; a cold process still refuses to fabricate missing configuration.
+Container rollout readiness is based on `/ready`; `/health` remains a liveness/diagnostic endpoint that always returns structured health information. MongoDB has its own health check. Both services use `restart: unless-stopped`.
+
+`/ready` requires a verified monitoring configuration, a live worker and an initialized Telegram runtime. A warmed Plane Alerts process can remain ready while MongoDB is temporarily degraded because v4.8 last-known-good configuration/persistence isolation remains active. A cold process does not fabricate missing configuration and therefore does not pass readiness.
 
 To inspect status:
 
@@ -79,6 +85,7 @@ To inspect status:
 docker compose ps
 docker compose logs --tail=200 plane-alerts
 docker compose exec plane-alerts planealerts doctor
+curl -fsS http://127.0.0.1:${PLANE_ALERTS_PORT:-8000}/ready
 ```
 
 Do not interpret missing ADS-B coverage as proof that a route did or did not occur.
@@ -91,7 +98,7 @@ Upgrade one release at a time when crossing documented migration boundaries:
 
 ```bash
 git fetch --tags
-git checkout v4.9.0
+git checkout <verified-release-tag-or-commit>
 docker compose build --no-cache plane-alerts
 docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
@@ -101,7 +108,7 @@ docker compose up -d
 
 Keep the previously verified Git tag/commit before upgrading. To roll back application code, check out that exact tag/commit and rebuild only the Plane Alerts image. Do not delete the Mongo volume. If a future release documents a destructive/non-backward-compatible migration, follow that release's migration notes and restore a compatible database backup rather than forcing older code against a newer schema.
 
-For the v4.9 release family, the immediate rollback target is the verified v4.8.1 commit `bc7f34f98beb2e7f0838d3aac6b9fdbf1ae24ecb`.
+For v5.4.2, the immediate application rollback target is the verified v5.4.1 main commit `8e8b802dc15debe4353e846c7905c21b9a3d74fb`. Normal application rollback does not restart or alter the separate AGY service.
 
 ## Reporting a problem
 
