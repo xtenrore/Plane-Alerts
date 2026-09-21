@@ -219,11 +219,16 @@ async def save_profile(user_id: int, profile_id: str, *, name: str | None = None
     user = await users_col().find_one({"user_id": int(user_id)}, {"active_profile_id": 1})
     is_active = str((user or {}).get("active_profile_id") or "") == profile_id
 
-    # For an active profile, materialize the candidate first. If either legacy
-    # write fails, the authoritative profile document stays on the previous
-    # committed configuration and the worker can retain that coherent LKG.
+    # Publish the candidate legacy generation before committing the authoritative
+    # active profile. If either legacy write tears, immediately attempt to
+    # republish the previous committed profile; the live worker independently
+    # retains its coherent per-user LKG until a verified refresh succeeds.
     if is_active:
-        await materialize_profile(candidate)
+        try:
+            await materialize_profile(candidate)
+        except Exception:
+            await _restore_materialized_profile(profile)
+            raise
 
     try:
         await profiles_col().update_one(
@@ -252,7 +257,11 @@ async def activate_profile(user_id: int, profile_id: str) -> dict[str, Any]:
     previous_id = str((user or {}).get("active_profile_id") or "")
     previous = await get_profile(user_id, previous_id) if previous_id and previous_id != profile_id else None
 
-    await materialize_profile(profile)
+    try:
+        await materialize_profile(profile)
+    except Exception:
+        await _restore_materialized_profile(previous)
+        raise
     try:
         await users_col().update_one(
             {"user_id": int(user_id)},
