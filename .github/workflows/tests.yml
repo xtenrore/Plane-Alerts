@@ -89,8 +89,8 @@ jobs:
       - name: Replay v5.2 shadow evaluation fixtures
         run: python scripts/evaluate_v52_shadow_replay.py
 
-      - name: Run v5.3 multi-user scale and isolation suite
-        run: pytest -q tests/test_scale_v53.py tests/test_v35_shared_polling.py
+      - name: Run v5.3 multi-user scale, production-chain and AGY regression suite
+        run: pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_agy_regressions.py tests/test_v35_shared_polling.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
