@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.3.0**  
+**Current code version: Plane Alerts v5.4.0**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -28,6 +28,18 @@ v4.8 keeps non-critical persistence outside that path. Once a process has loaded
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
 
+## v5.4 user experience and presets
+
+v5.4 makes the existing advanced profile system easier and safer to configure without changing the physical prediction model. `/profiles` now provides clearer profile navigation, explicit Back/Cancel/Close/Status paths, and guided creation through either Quick Preset or the full Custom Setup flow.
+
+Six editable starting presets are included: Casual Observer, Aircraft Photographer, Airport-Adjacent, Rare Aircraft Hunter, Military Watcher, and Local SDR Mode. Presets only populate existing profile configuration such as monitoring radius and aircraft groups; saved coordinates and unrelated preferences are preserved, and every preset value remains editable afterward. Local SDR Mode changes alert preferences only and does not enable or configure a receiver.
+
+`/preferences` opens the active profile editor instead of dropping directly into one sub-menu. `/setup` is non-destructive: reopening setup no longer deletes a working location or preferences before replacement settings are saved. The active profile remains in force until the user explicitly saves changes or confirms a preset.
+
+Preset validation routes users directly to missing location, radius or aircraft settings. Stale profile/preset callbacks recover to the profile home instead of trapping the conversation. Telegram labels and callback payloads remain compact, and the existing Next 60 Mini App now consistently uses Plane Alerts branding.
+
+v5.4 does not change trajectory, CPA, ETA, confidence, terminal inference, qualification, cancellation, alert timing or provider polling. The physical prediction version therefore remains `5.3-3d-proximity-age-aware`.
+
 ## v5.3 multi-location and scale
 
 v5.3 reduces duplicated computation when many observers share the same regional ADS-B snapshot. Observer-independent aircraft motion is projected once and reused through bounded process-local caches, including the authoritative v4.3 midpoint-integrated motion path. The established production wrapper order remains `shared base -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing`.
@@ -40,9 +52,9 @@ v5.3 also fixes two evidence-backed live-prediction issues. Provider-reported AD
 
 ## v5.2 shadow models and automatic evaluation
 
-v5.2 makes prediction development data-driven without changing the live physical predictor. The authoritative prediction version for that release was `5.1-3d-proximity`; existing v4.6 linear and turn-aware candidate models continue to run as shadow-only evidence and cannot qualify, cancel, time or send alerts.
+v5.2 makes prediction development data-driven without changing the live physical predictor. The authoritative physical prediction version for that release was `5.1-3d-proximity`; existing v4.6 linear and turn-aware candidate models continue to run as shadow-only evidence and cannot qualify, cancel, time or send alerts.
 
-Prediction Lab snapshots now record application release version and shadow feature-flag state. When a later outcome has explicit scoreable ground truth, Plane Alerts can evaluate the production control and shadow candidates side by side for CPA error, ETA error, false-positive/false-negative behavior, alert lead time and confidence calibration. Results are grouped by release and model ID so changes can be compared over time.
+Prediction Lab snapshots record application release version and shadow feature-flag state. When a later outcome has explicit scoreable ground truth, Plane Alerts can evaluate the production control and shadow candidates side by side for CPA error, ETA error, false-positive/false-negative behavior, alert lead time and confidence calibration. Results are grouped by release and model ID so changes can be compared over time.
 
 Ground truth remains conservative. An observed in-radius pass is scoreable. A lifecycle cancellation is not automatically a successful negative outcome, because the aircraft may later pass nearby. Missing ADS-B coverage is unresolved. If a denominator does not exist, the corresponding rate remains unknown rather than being reported as zero.
 
@@ -83,9 +95,9 @@ v5.1 also tightens pass-versus-cancellation semantics. A close projected CPA is 
 
 v5.1.1 is a release-infrastructure-only patch. It keeps the same physical predictor and moves the exact-main Railway deployment gate out of the Railway CLI container so the trusted post-CI deploy can verify the tested SHA without depending on tools missing from that container.
 
-v5.1.2 fixes the production wrapper-chain compatibility bug discovered during v5.1.1 verification. The installed v4.6 confidence layer now accepts and forwards the v5.1 `altitude_relevance` option and preserves unknown observer elevation, so the intended `5.1-3d-proximity` model can execute through the monitor/critical-timing layer.
+v5.1.2 fixes the production wrapper-chain compatibility bug discovered during v5.1.1 verification. The installed v4.6 confidence layer accepts and forwards the v5.1 `altitude_relevance` option and preserves unknown observer elevation, so the intended `5.1-3d-proximity` model can execute through the monitor/critical-timing layer.
 
-v5.1.3 completes that repair after v5.1.2 production verification exposed the older v4.4 direct-presence and v4.3 midpoint wrappers beneath v4.6. Both now accept and forward the current v5.1 signature. The release gate recreates the full installed chain — core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing — including unknown observer elevation and both enabled/disabled altitude relevance. The physical prediction version and all CPA/ETA, terminal, qualification and alert-timing thresholds remain unchanged.
+v5.1.3 completes that repair after v5.1.2 production verification exposed the older v4.4 direct-presence and v4.3 midpoint wrappers beneath v4.6. Both accept and forward the current v5.1 signature. The release gate recreates the full installed chain — core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing — including unknown observer elevation and both enabled/disabled altitude relevance. The physical prediction version and all CPA/ETA, terminal, qualification and alert-timing thresholds remain unchanged.
 
 ## v5.0 observability and explainability
 
@@ -103,7 +115,7 @@ planealerts diagnostics --callsign THY5DQ --limit 10
 
 User IDs are pseudonymized in the operator output. Credentials, provider endpoints and exact observer coordinates are not returned. Prediction Lab counts are explicitly described as sampled/rate-limited rather than as a count of every five-second calculation.
 
-The AGY sidecar is also storage-resilient in v5.0. Mongo reads have short bounded timeouts and query max-time. A network failure opens a cooldown circuit; while degraded, the bridge immediately reuses the last-known-good redacted context on `/agy-state` and continues independent `CHATGPT_HANDOFF_JSON` log delivery instead of repeatedly blocking and printing Mongo traceback storms.
+The AGY sidecar is storage-resilient in v5.0. Mongo reads have short bounded timeouts and query max-time. A network failure opens a cooldown circuit; while degraded, the bridge immediately reuses the last-known-good redacted context on `/agy-state` and continues independent `CHATGPT_HANDOFF_JSON` log delivery instead of repeatedly blocking and printing Mongo traceback storms.
 
 ## v4.9 project maturity and self-hosting
 
@@ -228,6 +240,8 @@ Provider state tracks latency, failures, timeouts, malformed responses, stale-po
 
 `/profiles` manages persistent alert profiles. Each profile can have its own location, radius, aircraft selection and advanced rules. Profiles can be created, activated, edited, renamed, duplicated and deleted.
 
+v5.4 adds six editable presets and two clear profile-creation paths: Quick Preset and Custom Setup. Applying a preset to an existing profile requires confirmation, preserves its saved location, and resets hidden category/aircraft overrides so the visible preset behaves as described. `/setup` and `/preferences` reopen the active configuration safely instead of destroying or bypassing the existing profile state.
+
 Advanced filtering inherits deterministically:
 
 ```text
@@ -255,12 +269,13 @@ Google Contrails, when configured through `GOOGLE_CONTRAILS_API_KEY`, remains op
 | Command | Purpose |
 | --- | --- |
 | `/start` | Initial setup |
+| `/setup` | Safely review or change the active alert setup |
 | `/profiles` | Create, switch and manage alert profiles |
 | `/status` | Show monitoring status |
 | `/next60` | Aircraft expected in the next 60 minutes |
 | `/forecast` | Alias for `/next60` |
 | `/location` | Update the active spotting location |
-| `/preferences` | Configure aircraft selection and advanced filters |
+| `/preferences` | Edit the active alert profile |
 | `/camera` | Configure camera body |
 | `/lens` | Configure lens |
 | `/photo` | Current shooting guidance |
@@ -274,7 +289,7 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial equivalence, fresh-interpreter production-wrapper composition, bounded-memory/work, AGY provider-age/stale-latch regressions, and a 500-user/600-aircraft deterministic scale gate.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial equivalence, fresh-interpreter production-wrapper composition, bounded-memory/work, AGY provider-age/stale-latch regressions, and a 500-user/600-aircraft deterministic scale gate. v5.4 adds six-preset mapping/editability checks, non-destructive setup recovery, navigation/stale-callback recovery, Mini App branding validation, callback-size checks, a deterministic preset/profile micro-benchmark, and fresh-image v5.4 runtime wiring verification.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
@@ -283,7 +298,9 @@ python scripts/verify_airport_database.py
 pytest -q
 pytest -q tests/test_shadow_evaluation_v52.py
 pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_agy_regressions.py tests/test_v35_shared_polling.py
+pytest -q tests/test_user_experience_v54.py
 python scripts/evaluate_v52_shadow_replay.py
+python scripts/benchmark_v54_profile_ux.py
 python scripts/benchmark_v53_scale.py
 python scripts/benchmark_v52_shadow_eval.py
 python scripts/benchmark_v51_geometry.py
@@ -303,7 +320,7 @@ The trusted post-CI deployment gate first verifies on a standard GitHub-hosted r
 
 The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and may suggest hypotheses, but it does not control trajectory or notification decisions. Railway AI is not used.
 
-The existing AGY persistent volume and unrelated staged Railway configuration changes are not modified as part of a normal source release.
+Normal Plane Alerts source releases deploy the main service only. The AGY service, its persistent volume, and unrelated staged Railway configuration changes are not restarted or modified as part of this release path.
 
 ## Running locally
 
@@ -317,22 +334,3 @@ docker compose build plane-alerts
 docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
-
-After startup, operators can inspect bounded diagnostics from the same image with `planealerts metrics`, `planealerts diagnostics --aircraft <icao24>`, or `planealerts shadow-eval`.
-
-For native Python and Raspberry Pi/ARM64 instructions, health checks, backups, upgrades and rollback, see [`docs/self-hosting.md`](docs/self-hosting.md).
-
-## Known limitations
-
-- v5.2 can score observed positive passes immediately, but false-positive and cancellation-accuracy rates remain unavailable until a separately validated negative outcome exists; a cancellation by itself is not assumed correct.
-- v5.2 shadow candidates are evaluation-only and cannot be promoted automatically.
-- If observer terrain elevation is initially unavailable, v5.1 uses conservative altitude bounds and falls back to horizontal relevance when the 3D result is ambiguous.
-- ADS-B altitude is treated as uncertain sensor data; malformed or discontinuous altitude cannot safely suppress a horizontally qualifying pass.
-- A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
-- Optional analytics can be dropped under prolonged storage pressure and are counted in diagnostics.
-- AGY may temporarily serve last-known-good redacted context while its Atlas bridge circuit is degraded; that state is labeled and is not evidence of a successful or missed prediction.
-- Mutable SQLite persistence is not implemented.
-- The worldwide airport catalogue is community-maintained; maintained Plane Alerts overrides and fresh physical observations take precedence where stronger evidence exists.
-- Broader runway/history suppression remains shadow-only pending representative outcome evidence.
-- Longer-range 30–60-minute prediction evaluation remains shadow-only; missing regional ADS-B coverage is unresolved rather than scored as success or failure.
-- Raspberry Pi validation is automated ARM64 Docker build validation; it is not a claim of testing every physical Pi model, receiver or storage device.
