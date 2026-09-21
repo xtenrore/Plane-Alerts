@@ -29,6 +29,7 @@ from app.bot.handlers import register_handlers
 from app.bot.next60 import build_next60_docs, register_next60_handlers
 from app.bot.next60_web import NEXT60_HTML, serialize_next60, validate_telegram_init_data
 from app.bot.profile_handlers import register_profile_handlers
+from app.bot.profile_experience_v54 import brand_next60_html_v54, register_v54_handlers
 from app.bot.profile_legacy import register_profile_legacy_handlers
 from app.bot.storage_failure_v48 import register_storage_failure_handler
 from app.config import settings
@@ -45,6 +46,8 @@ from app.storage_metrics_v48 import storage_metrics
 from app.storage_runtime_v48 import storage_runtime
 from app.worker.monitor import get_cycle_stats, init_services
 from app.worker.v36 import run_monitor_cycle_v36 as run_monitor_cycle
+
+NEXT60_HTML = brand_next60_html_v54(NEXT60_HTML)
 
 logger = logging.getLogger(__name__)
 telegram_app: Application | None = None
@@ -149,6 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             register_storage_failure_handler(telegram_app)
             register_agy_console_handlers(telegram_app)
             register_profile_legacy_handlers(telegram_app)
+            register_v54_handlers(telegram_app)
             register_profile_handlers(telegram_app)
             register_handlers(telegram_app)
             register_next60_handlers(telegram_app)
@@ -164,7 +168,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         BotCommand("next60", "Planes expected in the next 60 minutes"),
                         BotCommand("forecast", "Alias for the Next 60 Minutes forecast"),
                         BotCommand("location", "Set monitoring / shooting location"),
-                        BotCommand("preferences", "Choose aircraft and advanced filters"),
+                        BotCommand("preferences", "Edit the active alert profile"),
                         BotCommand("camera", "Set your camera body"),
                         BotCommand("lens", "Set the aircraft lens"),
                         BotCommand("photo", "Get live best-shot camera settings"),
@@ -393,6 +397,7 @@ async def health_check() -> dict[str, Any]:
             "priority_admin_controls": True,
             "monochrome_ui": True,
             "alert_profiles": True,
+            "profile_presets_v54": True,
             "storage_isolated_live_path": True,
         },
         "python_version": platform.python_version(),

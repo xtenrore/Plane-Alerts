@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.3.0"
+VERSION = "5.4.0"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -18,6 +18,8 @@ VERSION = "5.3.0"
 # v5.3 reuses observer-independent aircraft motion across users, adds bounded
 # spatial candidate filtering, and preserves provider-reported position age in
 # the authoritative midpoint ETA correction.
+# v5.4 is a user-experience release: presets, profile navigation/recovery,
+# validation and Mini App terminology change without modifying physical logic.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
