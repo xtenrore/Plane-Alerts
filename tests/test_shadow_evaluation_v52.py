@@ -78,7 +78,7 @@ def test_observed_pass_scores_cpa_eta_false_negative_lead_time_and_calibration()
     turn = next(row for row in rows if row["model_id"].endswith(":turn-aware"))
     assert control["cpa_error_km"] == pytest.approx(6.0)
     assert control["eta_error_s"] == pytest.approx(120.0)
-    assert control["actual_eta_basis"] == "outcome_resolution_at"
+    assert control["actual_eta_basis"] == "observed_closest_at"
     assert control["false_negative"] is True
     assert control["classification_correct"] is False
     assert control["alert_lead_time_s"] is None
