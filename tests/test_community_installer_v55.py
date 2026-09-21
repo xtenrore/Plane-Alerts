@@ -95,9 +95,9 @@ def test_updater_has_backup_validation_and_rollback_gates():
     for required in (
         "latest_stable_release",
         "backup_for_update",
-        "git status",
+        '["git", "status", "--porcelain"',
         "run_doctor(root, offline=True)",
-        "git\", \"checkout\", \"--detach\"",
+        '["git", "checkout", "--detach"',
         "Rolling back",
         "restart_service()",
     ):
@@ -116,11 +116,12 @@ def test_shell_entrypoints_parse_and_are_agy_free():
         assert result.returncode == 0, f"{name}: {result.stderr}"
         text = path.read_text(encoding="utf-8")
         assert "AGY=excluded" in text
-        assert "main" not in [part.strip() for part in text.split("--branch")[1:]]
+        assert "--branch main" not in text
+        assert "refs/heads/main" not in text
 
 
 def test_raspberry_pi_platform_guard_can_be_exercised_without_spoofing_normal_runs():
     text = (ROOT / "setup-raspberry-pi.sh").read_text(encoding="utf-8")
     assert 'PLANE_ALERTS_INSTALLER_TEST' in text
     assert 'Raspberry Pi 4' in text and 'Raspberry Pi 5' in text
-    assert '32-bit' not in text or '64-bit' in text
+    assert '64-bit' in text
