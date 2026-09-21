@@ -20,17 +20,12 @@ from typing import Any
 from app.config import settings
 from app.database import system_status_col
 from app.intelligence.route_history import route_history_service
-from app.intelligence.trajectory_scale_v53 import motion_cache_snapshot, predict_trajectory as predict_trajectory_v53
+from app.intelligence.trajectory_scale_v53 import motion_cache_snapshot
 from app.worker.geo import bounding_box, haversine, km_to_nautical_miles, merge_bounding_boxes
 from app.worker.scale_v53 import partition_aircraft_by_user
 from app.worker import monitor
 
 logger = logging.getLogger(__name__)
-
-# The monitor owns all user-specific qualification/lifecycle behaviour. v5.3
-# swaps only its trajectory function for an output-equivalent implementation
-# that shares the observer-independent projected motion path across users.
-monitor.predict_trajectory = predict_trajectory_v53
 
 MAX_PROVIDER_RADIUS_NM = 250
 DISCOVERY_INTERVAL_S = 15.0
