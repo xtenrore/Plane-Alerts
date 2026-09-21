@@ -103,6 +103,15 @@ def install_profile_safety_v542() -> None:
                 {"user_id": int(user_id)},
                 {"$set": {"setup_complete": True}},
             )
+            # A materialization refresh can race the setup-complete write. Mark
+            # config dirty again after activation so the live worker promptly
+            # refreshes the now-monitorable user rather than waiting for cadence.
+            try:
+                from app.storage_runtime_v48 import storage_runtime
+
+                storage_runtime.invalidate_user_config(int(user_id))
+            except Exception:
+                pass
         await legacy._clear_state(user_id)
         await legacy._render_profile_detail(update, user_id, profile_id)
 
