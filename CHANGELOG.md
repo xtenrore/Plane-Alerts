@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.2.1 — Release documentation truth patch
+
+- Corrected the v5.2 ETA-evaluation documentation to match the final production implementation.
+- ETA truth now explicitly requires a matched physical closest-observation timestamp; lifecycle-resolution time is not substituted when that timestamp is unavailable.
+- Bumped application release identity to `5.2.1`.
+- Physical prediction version remains `5.1-3d-proximity`; no live prediction, qualification, cancellation, terminal, provider, storage, Telegram, or shadow-evaluation behavior changed.
+
 ## v5.2.0 — Shadow Models & Automatic Evaluation
 
 - Added deterministic production-control versus shadow-candidate evaluation using the existing v4.6 linear and turn-aware candidates.
@@ -65,7 +72,7 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - amd64/ARM64 Docker validation, including the Raspberry Pi self-hosting path.
 - `planealerts doctor` configuration/dependency diagnostics with secret-safe output.
 - Fresh-install, Compose, doctor and architecture gates added to CI.
-- Trusted post-CI GitHub release publishing creates an immutable `v4.9.0` tag/release from the exact tested `main` commit and canonical release notes.
+- Trusted post-CI GitHub release publishing creates a `v4.9.0` tag/release from the exact tested `main` commit and canonical release notes.
 - Installation, migration and rollback documentation.
 - Physical prediction version remains `4.7.3-terminal-delivery-landing-path`.
 

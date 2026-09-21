@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.2.0**  
+**Current code version: Plane Alerts v5.2.1**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -35,6 +35,8 @@ v5.2 makes prediction development data-driven without changing the live physical
 Prediction Lab snapshots now record application release version and shadow feature-flag state. When a later outcome has explicit scoreable ground truth, Plane Alerts can evaluate the production control and shadow candidates side by side for CPA error, ETA error, false-positive/false-negative behavior, alert lead time and confidence calibration. Results are grouped by release and model ID so changes can be compared over time.
 
 Ground truth remains conservative. An observed in-radius pass is scoreable. A lifecycle cancellation is not automatically a successful negative outcome, because the aircraft may later pass nearby. Missing ADS-B coverage is unresolved. If a denominator does not exist, the corresponding rate remains unknown rather than being reported as zero.
+
+ETA error is scored only when the actual closest physical observation has a matched timestamp. If that timestamp is unavailable, CPA/classification evidence may still be scoreable, but ETA remains unavailable rather than substituting lifecycle-resolution time.
 
 Shadow evaluation is isolated in the existing bounded Prediction Lab optional-work path and adds no ADS-B provider request or synchronous operation to the five-second alert-critical calculation. Evaluation records have deterministic IDs, bounded lookup windows and a 14-day TTL.
 

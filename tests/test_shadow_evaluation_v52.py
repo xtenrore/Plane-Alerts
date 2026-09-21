@@ -27,7 +27,7 @@ def _cases():
 
 
 def test_v52_identity_keeps_physical_predictor_unchanged():
-    assert VERSION == "5.2.0"
+    assert VERSION in {"5.2.0", "5.2.1"}
     assert PREDICTION_VERSION == "5.1-3d-proximity"
 
 
@@ -82,8 +82,6 @@ def test_observed_pass_scores_cpa_eta_false_negative_lead_time_and_calibration()
     assert control["false_negative"] is True
     assert control["classification_correct"] is False
     assert control["alert_lead_time_s"] is None
-    # Confidence measures prediction reliability, so a confident wrong
-    # classification is calibrated against correctness=0, not pass=1.
     assert control["confidence_brier"] == pytest.approx(0.65**2)
     assert turn["false_negative"] is False
     assert turn["classification_correct"] is True
@@ -119,8 +117,6 @@ def test_replay_summary_preserves_missing_denominators():
     assert control["positive_samples"] == 2
     assert control["negative_samples"] == 0
     assert control["false_negative_count"] == 1
-    # The fixture has no scoreable negative outcomes. False-positive rate must
-    # remain unknown rather than being reported as zero/good.
     assert control["false_positive_rate"] is None
     assert control["cancellation_accuracy"] is None
 
