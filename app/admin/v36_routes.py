@@ -1,4 +1,4 @@
-"""Plane? v3.6 administration APIs.
+"""Plane Alerts administration APIs.
 
 Adds server-side paginated user search, per-user scheduling/priority controls,
 delegated admin access, and an audit trail without changing the legacy admin
@@ -11,13 +11,14 @@ from pathlib import Path
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.admin.auth import get_admin_actor, make_delegated_admin_token, require_root
 from app.config import settings
 from app.database import get_db, locations_col, preferences_col, users_col
+from app.version import VERSION
 
 router = APIRouter(tags=["admin-v3.6"])
 STATIC_DIR = Path(__file__).parent / "static"
@@ -55,7 +56,6 @@ async def _audit(actor: dict[str, Any], action: str, target_user_id: int | None,
             "created_at": datetime.now(timezone.utc),
         })
     except Exception:
-        # Admin actions must not fail only because optional audit storage is unavailable.
         pass
 
 
@@ -77,7 +77,8 @@ async def admin_session(request: Request) -> dict[str, Any]:
         "kind": actor.get("kind"),
         "user_id": actor.get("user_id"),
         "can_manage_admins": bool(actor.get("root")),
-        "version": "3.6.0",
+        "version": VERSION,
+        "api_schema_version": "3.6",
     }
 
 
