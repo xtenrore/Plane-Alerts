@@ -13,6 +13,7 @@ import pytest
 from pymongo.errors import NetworkTimeout
 
 from app import agy_prediction_bridge as bridge
+from app import agy_tool_recovery_v431 as recovery
 from app import agy_worker
 
 
@@ -135,6 +136,57 @@ def test_interactive_console_cannot_bypass_quota_hold(tmp_path: Path, monkeypatc
         asyncio.run(console.start())
 
 
+def test_tool_recovery_wrapper_cannot_bypass_unverified_quota_hold(tmp_path: Path, monkeypatch):
+    state = tmp_path / "supervisor.json"
+    state.write_text(
+        json.dumps({"enabled": True, "last_status": "quota_wait_unverified", "next_run_at": 0}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agy_worker, "SUPERVISOR_STATE_FILE", state)
+    supervisor = agy_worker.GoalSupervisor()
+
+    async def forbidden_original(_self):
+        raise AssertionError("normal AGY run must not be entered while quota recovery is unverified")
+
+    monkeypatch.setattr(recovery, "_ORIGINAL_RUN_GOAL", forbidden_original)
+    asyncio.run(recovery._run_goal_with_same_conversation_recovery(supervisor))
+
+    assert supervisor.last_status == "quota_wait_unverified"
+    assert supervisor.next_run_at == 0
+
+
+def test_tool_recovery_unknown_reset_becomes_indefinite_hold(tmp_path: Path, monkeypatch):
+    state = tmp_path / "supervisor.json"
+    state.write_text(json.dumps({"enabled": True, "last_status": "idle", "next_run_at": 0}), encoding="utf-8")
+    monkeypatch.setattr(agy_worker, "SUPERVISOR_STATE_FILE", state)
+    supervisor = agy_worker.GoalSupervisor()
+
+    async def fake_original(self):
+        self.last_status = "completed"
+        self.output_tail.clear()
+        self.output_tail.append(
+            '[OUT] {"conversation_id":"offline-test","denied_actions":[{"reason":"permission check failed"}]}'
+        )
+
+    async def fake_resume(_self, _conversation_id, _attempt):
+        return recovery.RecoveryTurn(
+            exit_code=1,
+            denied=False,
+            quota_limited=True,
+            watchdog_restart=False,
+            conversation_id="offline-test",
+            combined_output="baseline quota exceeded; reset time unavailable",
+        )
+
+    monkeypatch.setattr(recovery, "_ORIGINAL_RUN_GOAL", fake_original)
+    monkeypatch.setattr(recovery, "_run_resume_turn", fake_resume)
+    asyncio.run(recovery._run_goal_with_same_conversation_recovery(supervisor))
+
+    assert supervisor.last_status == "quota_wait_unverified"
+    assert supervisor.next_run_at == 0
+    assert supervisor.quota_hold_active()[0] is True
+
+
 class _RowsCursor:
     def __init__(self, rows: list[dict]):
         self.rows = rows
@@ -210,8 +262,6 @@ def test_one_failing_collection_does_not_starve_later_agy_inputs(tmp_path: Path,
     for _ in range(3):
         payload = bridge.build_context_snapshot()
         assert payload["prediction_audit"][0]["callsign"] == "TEST1"
-        # Simulate the failing collection's cooldown expiring before the next
-        # bridge cycle without waiting in real time.
         bridge._operation_state("read:notification_history")["open_until"] = 0.0
 
     assert database.reads.count("notification_history") == 3
