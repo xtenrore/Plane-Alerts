@@ -138,13 +138,20 @@ def _scoreable_truth(snapshot: dict[str, Any], outcome: dict[str, Any]) -> dict[
     radius = _number(snapshot.get("alert_radius_km"))
     captured = _utc(snapshot.get("captured_at"))
     closest_at = _utc(outcome.get("observed_closest_at"))
-    resolved_at = _utc(outcome.get("captured_at"))
-    event_at = closest_at or resolved_at
-    if observed is None or radius is None or captured is None or event_at is None:
+    if observed is None or radius is None or captured is None:
         return None
-    actual_eta = (event_at - captured).total_seconds()
-    if actual_eta < 0 or actual_eta > 3600:
-        actual_eta = None
+
+    # ETA truth must come from the timestamp of the observed closest point.
+    # Lifecycle resolution can happen later and is not a physical CPA time.
+    actual_eta = None
+    eta_basis = "unavailable"
+    if closest_at is not None:
+        actual_eta = (closest_at - captured).total_seconds()
+        if actual_eta < 0 or actual_eta > 3600:
+            actual_eta = None
+        else:
+            eta_basis = "observed_closest_at"
+
     outcome_type = str(outcome.get("outcome") or "")
     actual_positive = observed <= radius
     if outcome_type == "passed" and not actual_positive:
@@ -154,7 +161,7 @@ def _scoreable_truth(snapshot: dict[str, Any], outcome: dict[str, Any]) -> dict[
     return {
         "observed_closest_km": observed,
         "actual_eta_s": actual_eta,
-        "actual_eta_basis": "observed_closest_at" if closest_at is not None else "outcome_resolution_at",
+        "actual_eta_basis": eta_basis,
         "actual_positive": actual_positive,
         "outcome": outcome_type,
         "outcome_basis": str(outcome.get("outcome_basis") or ""),
@@ -334,14 +341,15 @@ async def evaluate_live_outcome(db: Any, outcome: dict[str, Any]) -> int:
     if not feature_flags()["evaluation_enabled"] or not bool(outcome.get("scoreable")):
         return 0
     captured = _utc(outcome.get("captured_at"))
-    event_at = _utc(outcome.get("observed_closest_at")) or captured
-    if captured is None or event_at is None:
+    if captured is None:
         return 0
+    closest_at = _utc(outcome.get("observed_closest_at"))
+    lookup_at = closest_at or captured
     query = {
         "kind": "prediction",
         "user_id": outcome.get("user_id"),
         "aircraft_icao24": str(outcome.get("aircraft_icao24") or ""),
-        "captured_at": {"$gte": event_at - timedelta(minutes=LIVE_LOOKBACK_MINUTES), "$lte": event_at},
+        "captured_at": {"$gte": lookup_at - timedelta(minutes=LIVE_LOOKBACK_MINUTES), "$lte": lookup_at},
     }
     cursor = db["prediction_lab_audit"].find(query).sort("captured_at", -1).limit(MAX_LIVE_SNAPSHOTS)
     snapshots = [dict(doc) async for doc in cursor]
