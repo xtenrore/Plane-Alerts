@@ -7,6 +7,7 @@ background. Prediction/CPA/qualification behavior is not modified.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import logging
 from typing import Any
@@ -19,6 +20,7 @@ from app.worker import monitor, v36
 logger = logging.getLogger(__name__)
 _INSTALLED = False
 _ORIGINAL_MATERIALIZE_PROFILE = None
+_ORIGINAL_LOAD_ACTIVE_USERS = None
 
 
 def _memory_state_id(user_id: int, icao24: str) -> str:
@@ -31,14 +33,6 @@ def _normalize_state_query(
     cache: dict[str, dict[str, Any]],
     query: dict[str, Any],
 ) -> dict[str, Any]:
-    """Convert legacy _id updates to the unique natural lifecycle identity.
-
-    v4.8 can create a lifecycle record in memory before Mongo has acknowledged an
-    upsert, so a Mongo-assigned ``_id`` is not a safe hot-path requirement. The
-    collection already has a unique (user_id, aircraft_icao24) identity. Convert
-    both real and synthetic cached IDs to that identity before applying the
-    memory-first update.
-    """
     if "_id" not in query or "aircraft_icao24" in query:
         return dict(query)
     wanted = query.get("_id")
@@ -46,6 +40,115 @@ def _normalize_state_query(
         if document.get("_id") == wanted:
             return {"user_id": int(user_id), "aircraft_icao24": str(icao24)}
     return dict(query)
+
+
+async def _load_active_users_coherent(db: Any) -> dict[int, dict[str, Any]]:
+    """Load only coherent config generations and preserve per-user LKG on tears.
+
+    A failed second materialization write must not turn a successful refresh into
+    removal of a previously monitored user. On a cold process, a torn legacy
+    materialization is repaired from the authoritative active profile before the
+    user is admitted to the cache.
+    """
+    controls: dict[int, dict[str, Any]] = {}
+    active_profile_ids: dict[int, str] = {}
+    ids: list[int] = []
+    cursor = db["users"].find(
+        {"setup_complete": True},
+        {"user_id": 1, "admin_controls": 1, "active_profile_id": 1},
+    )
+    async for row in cursor:
+        uid = int(row["user_id"])
+        ids.append(uid)
+        controls[uid] = dict(row.get("admin_controls") or {})
+        active_profile_ids[uid] = str(row.get("active_profile_id") or "")
+    if not ids:
+        return {}
+
+    locations: dict[int, dict[str, Any]] = {}
+    preferences: dict[int, dict[str, Any]] = {}
+    async for row in db["locations"].find({"user_id": {"$in": ids}}):
+        locations[int(row["user_id"])] = row
+    async for row in db["preferences"].find({"user_id": {"$in": ids}}):
+        preferences[int(row["user_id"])] = row
+
+    out: dict[int, dict[str, Any]] = {}
+    for uid in ids:
+        loc = locations.get(uid)
+        prefs = preferences.get(uid)
+        coherent = bool(
+            loc
+            and prefs
+            and loc.get("config_revision")
+            and loc.get("config_revision") == prefs.get("config_revision")
+        )
+        if coherent:
+            out[uid] = {
+                "user_id": uid,
+                "location": loc,
+                "preferences": prefs,
+                "admin_control": controls.get(uid, {}),
+            }
+            continue
+
+        previous = storage_runtime._users.get(uid)  # noqa: SLF001 - same-runtime safety guard
+        if previous is not None:
+            preserved = deepcopy(previous)
+            preserved["admin_control"] = controls.get(uid, {})
+            out[uid] = preserved
+            logger.warning(
+                "storage_v48_config_generation_incomplete user=%s action=preserve_lkg",
+                uid,
+            )
+            continue
+
+        profile_id = active_profile_ids.get(uid, "")
+        if not profile_id:
+            logger.warning(
+                "storage_v48_config_generation_incomplete user=%s action=cold_skip reason=no_active_profile",
+                uid,
+            )
+            continue
+
+        try:
+            profile = await db["profiles"].find_one({"user_id": uid, "profile_id": profile_id})
+            if not profile:
+                logger.warning(
+                    "storage_v48_config_generation_incomplete user=%s action=cold_skip reason=profile_missing",
+                    uid,
+                )
+                continue
+            from app import alert_profiles
+
+            await alert_profiles.materialize_profile(profile)
+            repaired_loc = await db["locations"].find_one({"user_id": uid})
+            repaired_prefs = await db["preferences"].find_one({"user_id": uid})
+            if (
+                repaired_loc
+                and repaired_prefs
+                and repaired_loc.get("config_revision")
+                and repaired_loc.get("config_revision") == repaired_prefs.get("config_revision")
+            ):
+                out[uid] = {
+                    "user_id": uid,
+                    "location": repaired_loc,
+                    "preferences": repaired_prefs,
+                    "admin_control": controls.get(uid, {}),
+                }
+                logger.warning(
+                    "storage_v48_config_generation_repaired user=%s profile=%s",
+                    uid,
+                    profile_id,
+                )
+            else:
+                logger.error("storage_v48_config_generation_repair_unverified user=%s", uid)
+        except Exception as exc:
+            logger.warning(
+                "storage_v48_config_generation_repair_failed user=%s error=%s",
+                uid,
+                type(exc).__name__,
+            )
+    return out
 
 
 async def _get_active_users_cached() -> list[dict[str, Any]]:
@@ -57,12 +160,18 @@ async def _get_active_users_cached() -> list[dict[str, Any]]:
             logger.warning("storage_v48_cold_warm_failed error=%s", type(exc).__name__)
             return []
     storage_runtime.start()
-    return storage_runtime.active_users()
+    users = storage_runtime.active_users()
+    # Observer terrain is optional work. Queue it from the production cached
+    # path rather than the legacy Mongo getter, never awaiting it here.
+    for user in users:
+        try:
+            monitor._queue_observer_elevation(int(user["user_id"]), user.get("location") or {})
+        except Exception:
+            logger.debug("observer_elevation_queue_failed", exc_info=True)
+    return users
 
 
 async def _attach_admin_controls_cached(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # v4.8 loads admin controls atomically with the user configuration snapshot.
-    # Keep v36's field name and semantics so priority/delay behavior is unchanged.
     for user in users:
         user.setdefault("admin_control", {})
     return users
@@ -78,9 +187,6 @@ async def _prefetch_approach_states_cached(
         if str(getattr(aircraft, "icao24", "") or "").strip()
     }
     states = storage_runtime.approach_states(int(user_id), icao24s)
-    # The legacy monitor still reads old["_id"] on later pass/cancel paths. A
-    # memory-first record may not have reached Mongo yet, so provide a stable
-    # in-process ID and normalize it back to the natural identity on update.
     for icao24, document in states.items():
         document.setdefault("_id", _memory_state_id(int(user_id), icao24))
     return states
@@ -94,7 +200,6 @@ async def _approach_update_cached(
     upsert: bool = False,
     **_kwargs: Any,
 ) -> Any:
-    """Commit lifecycle state to memory immediately; Mongo flush is background."""
     normalized = _normalize_state_query(int(self._user_id), self._cache, query)
     return storage_runtime.apply_approach_update(
         int(self._user_id),
@@ -156,24 +261,20 @@ async def _materialize_profile_invalidating(profile: dict[str, Any]) -> None:
 
 
 def install_storage_guard_v48() -> None:
-    global _INSTALLED, _ORIGINAL_MATERIALIZE_PROFILE
+    global _INSTALLED, _ORIGINAL_MATERIALIZE_PROFILE, _ORIGINAL_LOAD_ACTIVE_USERS
     if _INSTALLED:
         return
 
-    # Replace v4.2.3's still-synchronous DB snapshots with the v4.8 memory copy.
+    _ORIGINAL_LOAD_ACTIVE_USERS = storage_runtime._load_active_users  # noqa: SLF001
+    storage_runtime._load_active_users = _load_active_users_coherent  # type: ignore[method-assign]
+
     monitor._get_active_users = _get_active_users_cached
     cadence._prefetch_approach_states = _prefetch_approach_states_cached
     cadence._ApproachStatesCollectionProxy.update_one = _approach_update_cached
-
-    # Admin controls are already part of the same verified configuration image.
     v36._attach_admin_controls = _attach_admin_controls_cached
-
-    # Heartbeats/diagnostics are useful but must never stretch the alert cycle.
     monitor._record_worker_heartbeat = _record_worker_heartbeat_cached
     v36._record_v36_metrics = _record_v36_metrics_cached
 
-    # Active profile materialization remains an acknowledged Mongo write. Only
-    # after it succeeds do we invalidate the LKG cache and accelerate refresh.
     try:
         from app import alert_profiles
 
