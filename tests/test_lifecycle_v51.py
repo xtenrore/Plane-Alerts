@@ -30,7 +30,7 @@ def _sample(lat, *, heading=0.0, t=NOW, alt=1200.0):
 
 
 def test_v513_keeps_v51_physical_prediction_identity():
-    assert VERSION == "5.1.3"
+    assert tuple(int(part) for part in VERSION.split(".")) >= (5, 1, 3)
     assert PREDICTION_VERSION == "5.1-3d-proximity"
 
 

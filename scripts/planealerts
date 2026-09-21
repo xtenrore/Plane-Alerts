@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+if len(sys.argv) > 1 and sys.argv[1] == "shadow-eval":
+    from app.shadow_report_v52 import main as shadow_main  # noqa: E402
+
+    raise SystemExit(shadow_main(sys.argv[2:]))
+
 if len(sys.argv) > 1 and sys.argv[1] in {"diagnostics", "metrics"}:
     from app.observability_v50 import main as observability_main  # noqa: E402
 

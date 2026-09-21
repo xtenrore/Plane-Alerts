@@ -83,6 +83,12 @@ jobs:
       - name: Run v5.1 3D proximity and observed-pass lifecycle suite
         run: pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py tests/test_v512_predictor_wrapper.py
 
+      - name: Run v5.2 shadow evaluation and promotion-safety suite
+        run: pytest -q tests/test_shadow_evaluation_v52.py
+
+      - name: Replay v5.2 shadow evaluation fixtures
+        run: python scripts/evaluate_v52_shadow_replay.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -116,6 +122,9 @@ jobs:
       - name: Benchmark v5.1 deterministic 3D geometry
         run: python scripts/benchmark_v51_geometry.py
 
+      - name: Benchmark v5.2 shadow evaluation overhead
+        run: python scripts/benchmark_v52_shadow_eval.py
+
       - name: Verify dependency consistency
         run: pip check
 
@@ -138,17 +147,19 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build fresh amd64 image
-        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v51 .
+        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v52 .
 
       - name: Run doctor in fresh image
         run: |
           docker run --rm --entrypoint planealerts \
             -e TELEGRAM_BOT_TOKEN=123456:test-token \
             -e MONGO_URI=mongodb://mongo:27017 \
-            plane-alerts:v51 doctor --offline
+            plane-alerts:v52 doctor --offline
 
       - name: Verify v5 operator CLI is installed in fresh image
-        run: docker run --rm --entrypoint planealerts plane-alerts:v51 diagnostics --help
+        run: |
+          docker run --rm --entrypoint planealerts plane-alerts:v52 diagnostics --help
+          docker run --rm --entrypoint planealerts plane-alerts:v52 shadow-eval --help
 
       - name: Build ARM64 image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .
