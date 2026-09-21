@@ -16,7 +16,7 @@ if len(sys.argv) > 1 and sys.argv[1] in {"diagnostics", "metrics"}:
 
     raise SystemExit(observability_main(sys.argv[1:]))
 
-from app.doctor_v49 import main  # noqa: E402
+from app.doctor_v55 import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main())
