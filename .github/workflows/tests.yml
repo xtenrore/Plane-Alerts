@@ -173,8 +173,8 @@ jobs:
           docker run --rm --entrypoint planealerts plane-alerts:v54 diagnostics --help
           docker run --rm --entrypoint planealerts plane-alerts:v54 shadow-eval --help
 
-      - name: Verify v5.4 preset UX imports in fresh image
-        run: docker run --rm plane-alerts:v54 python -c "from app.profile_presets_v54 import PRESETS; from app.bot.next60_web import NEXT60_HTML; assert len(PRESETS) == 6; assert 'Plane Alerts · Next 60' in NEXT60_HTML"
+      - name: Verify v5.4 runtime wiring in fresh image
+        run: docker run --rm plane-alerts:v54 python -c "from app.profile_presets_v54 import PRESETS; from app.main import NEXT60_HTML; assert len(PRESETS) == 6; assert 'Plane Alerts · Next 60' in NEXT60_HTML"
 
       - name: Build ARM64 image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .
