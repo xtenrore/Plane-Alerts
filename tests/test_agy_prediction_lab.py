@@ -15,17 +15,14 @@ def test_quota_refresh_duration_adds_ten_minute_guard(monkeypatch):
     monkeypatch.setattr(agy_worker, "QUOTA_REFRESH_GUARD_SECONDS", 600)
     before = datetime.now(timezone.utc).timestamp()
     deadline = agy_worker._parse_refresh_deadline("Quota exceeded. Refreshes in 2 hours")
+    assert deadline is not None
     delta = deadline.timestamp() - before
     assert 2 * 3600 + 590 <= delta <= 2 * 3600 + 620
 
 
-def test_quota_refresh_fallback_is_five_hours_plus_guard(monkeypatch):
-    monkeypatch.setattr(agy_worker, "QUOTA_FALLBACK_SECONDS", 5 * 3600)
+def test_quota_refresh_unknown_text_never_schedules_automatic_retry(monkeypatch):
     monkeypatch.setattr(agy_worker, "QUOTA_REFRESH_GUARD_SECONDS", 600)
-    before = datetime.now(timezone.utc).timestamp()
-    deadline = agy_worker._parse_refresh_deadline("baseline quota exhausted")
-    delta = deadline.timestamp() - before
-    assert 5 * 3600 + 590 <= delta <= 5 * 3600 + 620
+    assert agy_worker._parse_refresh_deadline("baseline quota exhausted") is None
 
 
 def test_terminal_cleaner_removes_ansi_sequences():

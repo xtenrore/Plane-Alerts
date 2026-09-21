@@ -1,15 +1,15 @@
 """Private Antigravity supervisor for Plane Alerts Prediction Lab.
 
-This process runs in its own Railway service.  It deliberately has no Telegram
-credentials and no Gemini API key.  Account-based Antigravity authentication is
+This process runs in its own Railway service. It deliberately has no Telegram
+credentials and no Gemini API key. Account-based Antigravity authentication is
 performed once through the private Telegram console exposed by the main app.
 
 Safety invariants:
 * AI credit overages are forcibly disabled before every AGY launch.
 * API-key auth variables are stripped from AGY child processes.
-* quota/rate-limit exits pause until the reported refresh + 10 minutes (or a
-  conservative 5h10m fallback when the refresh timestamp cannot be parsed).
-* silence is not treated as failure: long reasoning is allowed.  A separate
+* quota/rate-limit exits pause until the latest verified refresh + 10 minutes.
+* unknown or ambiguous quota reset text never schedules an automatic retry.
+* silence is not treated as failure: long reasoning is allowed. A separate
   heartbeat reports process liveness; only a very long no-output interval can
   trigger a watchdog restart.
 * findings are persisted immediately to the mounted volume and, when MongoDB is
@@ -45,10 +45,9 @@ SETTINGS_FILE = HOME_DIR / ".gemini" / "antigravity-cli" / "settings.json"
 WORKER_TOKEN = os.getenv("AGY_WORKER_TOKEN", "").strip()
 PORT = int(os.getenv("PORT", "8090"))
 
-# User explicitly requires no paid AI credits.  Google AI Pro baseline quota is
-# refreshed on a five-hour cadence; the +10m guard prevents an edge-of-window
-# retry from accidentally bouncing straight back into a limit.
-QUOTA_FALLBACK_SECONDS = int(os.getenv("AGY_QUOTA_FALLBACK_SECONDS", str(5 * 3600)))
+# The +10m guard is mandatory. If AGY does not provide an unambiguous reset
+# deadline, the supervisor remains held until recovery is independently verified
+# and the persisted state is explicitly cleared/advanced by an operator.
 QUOTA_REFRESH_GUARD_SECONDS = int(os.getenv("AGY_QUOTA_REFRESH_GUARD_SECONDS", "600"))
 WATCHDOG_SILENCE_SECONDS = int(os.getenv("AGY_WATCHDOG_SILENCE_SECONDS", "1200"))
 GOAL_RETRY_SECONDS = int(os.getenv("AGY_GOAL_RETRY_SECONDS", "60"))
@@ -79,9 +78,13 @@ QUOTA_PATTERNS = (
 )
 REFRESH_TS_RE = re.compile(
     r"(?:refresh(?:es|ed)?|reset(?:s)?)(?:\s+(?:at|on|in))?\s*[:=]?\s*"
-    r"(?P<value>\d{4}-\d{2}-\d{2}[T ][0-9:.+-]+Z?|\d+\s*(?:seconds?|minutes?|hours?))",
+    r"(?P<value>"
+    r"\d{4}-\d{2}-\d{2}[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})"
+    r"|(?:\d+\s*(?:days?|hours?|minutes?|seconds?|d|h|m|s)(?:\s*(?:,|and)?\s*)?)+"
+    r")",
     re.IGNORECASE,
 )
+DURATION_PART_RE = re.compile(r"(\d+)\s*(days?|hours?|minutes?|seconds?|d|h|m|s)\b", re.IGNORECASE)
 
 
 def _utcnow() -> datetime:
@@ -113,7 +116,7 @@ def _enforce_no_paid_credits() -> None:
     """Force account auth and permanently disable AI-credit overages."""
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     settings = _load_json(SETTINGS_FILE, {})
-    settings.pop("modelProvider", None)  # Never switch to Gemini API-key billing.
+    settings.pop("modelProvider", None)
     settings["useG1Credits"] = False
     settings.setdefault("agentMode", "accept-edits")
     permissions = settings.setdefault("permissions", {})
@@ -139,11 +142,8 @@ def _agy_env() -> dict[str, str]:
     env["PATH"] = f"/usr/local/bin:{HOME_DIR / '.local' / 'bin'}:" + env.get("PATH", "")
     env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
     env["NO_COLOR"] = "1"
-    # Force the documented remote-terminal OAuth flow.  The process is also
-    # attached to a real PTY; these SSH markers prevent browser-launch attempts.
     env["SSH_CONNECTION"] = env.get("SSH_CONNECTION", "127.0.0.1 1 127.0.0.1 1")
     env["SSH_TTY"] = env.get("SSH_TTY", "/dev/pts/agy")
-    # Absolutely no API-key fallback in this worker.
     for key in (
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
@@ -154,33 +154,70 @@ def _agy_env() -> dict[str, str]:
     return env
 
 
-def _parse_refresh_deadline(text: str) -> datetime:
-    """Parse a quota refresh hint, else use a conservative 5h fallback."""
+def _parse_duration_seconds(raw: str) -> int | None:
+    parts = list(DURATION_PART_RE.finditer(raw))
+    if not parts:
+        return None
+    # Reject stray non-separator text so an ambiguous phrase cannot be accepted
+    # as a verified reset duration.
+    remainder = DURATION_PART_RE.sub("", raw)
+    if re.sub(r"[\s,]+|\band\b", "", remainder, flags=re.IGNORECASE):
+        return None
+    seconds = 0
+    for part in parts:
+        amount = int(part.group(1))
+        unit = part.group(2).lower()
+        if unit.startswith("day") or unit == "d":
+            seconds += amount * 86400
+        elif unit.startswith("hour") or unit == "h":
+            seconds += amount * 3600
+        elif unit.startswith("minute") or unit == "m":
+            seconds += amount * 60
+        else:
+            seconds += amount
+    return seconds if seconds > 0 else None
+
+
+def _parse_refresh_deadline(text: str) -> datetime | None:
+    """Return the latest verified reset plus guard, or None when unverified."""
     now = _utcnow()
-    match = REFRESH_TS_RE.search(text)
-    if match:
+    candidates: list[datetime] = []
+    for match in REFRESH_TS_RE.finditer(text):
         raw = match.group("value").strip()
-        duration = re.fullmatch(r"(\d+)\s*(seconds?|minutes?|hours?)", raw, re.I)
-        if duration:
-            amount = int(duration.group(1))
-            unit = duration.group(2).lower()
-            seconds = amount
-            if unit.startswith("minute"):
-                seconds *= 60
-            elif unit.startswith("hour"):
-                seconds *= 3600
-            return now + timedelta(seconds=seconds + QUOTA_REFRESH_GUARD_SECONDS)
+        duration_s = _parse_duration_seconds(raw)
+        if duration_s is not None:
+            candidates.append(now + timedelta(seconds=duration_s))
+            continue
         try:
             normalized = raw.replace(" ", "T")
             if normalized.endswith("Z"):
                 normalized = normalized[:-1] + "+00:00"
+            # Offsets without a colon are legal ISO input in Python; the regex
+            # deliberately requires a timezone so local/naive text is rejected.
             parsed = datetime.fromisoformat(normalized)
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc) + timedelta(seconds=QUOTA_REFRESH_GUARD_SECONDS)
+                continue
+            parsed = parsed.astimezone(timezone.utc)
+            if parsed > now:
+                candidates.append(parsed)
         except ValueError:
-            pass
-    return now + timedelta(seconds=QUOTA_FALLBACK_SECONDS + QUOTA_REFRESH_GUARD_SECONDS)
+            continue
+    if not candidates:
+        return None
+    return max(candidates) + timedelta(seconds=QUOTA_REFRESH_GUARD_SECONDS)
+
+
+def _quota_hold_from_state(state: dict[str, Any] | None = None, *, now: float | None = None) -> tuple[bool, str]:
+    state = state if state is not None else _load_json(SUPERVISOR_STATE_FILE, {})
+    status = str(state.get("last_status") or "")
+    if status == "quota_wait_unverified":
+        return True, "quota reset is unverified; automatic AGY launches are disabled"
+    if status == "quota_wait":
+        deadline = float(state.get("next_run_at", 0) or 0)
+        current = time.time() if now is None else float(now)
+        if deadline > current:
+            return True, f"quota guard active until {datetime.fromtimestamp(deadline, tz=timezone.utc).isoformat()}"
+    return False, ""
 
 
 class ConsoleInput(BaseModel):
@@ -216,6 +253,9 @@ class InteractiveConsole:
         async with self.lock:
             if self.process and self.process.returncode is None:
                 return
+            held, reason = _quota_hold_from_state()
+            if held:
+                raise RuntimeError(reason)
             _enforce_no_paid_credits()
             master_fd, slave_fd = pty.openpty()
             env = _agy_env()
@@ -334,6 +374,12 @@ class GoalSupervisor:
             },
         )
 
+    def quota_hold_active(self, *, now: float | None = None) -> tuple[bool, str]:
+        return _quota_hold_from_state(
+            {"last_status": self.last_status, "next_run_at": self.next_run_at},
+            now=now,
+        )
+
     async def start_task(self) -> None:
         if self.task and not self.task.done():
             return
@@ -343,7 +389,8 @@ class GoalSupervisor:
         self.enabled = enabled
         if goal:
             self.goal = goal
-        if enabled and self.next_run_at <= 0:
+        held, _ = self.quota_hold_active()
+        if enabled and self.next_run_at <= 0 and not held:
             self.next_run_at = time.time()
         self._save()
         await self.start_task()
@@ -353,6 +400,11 @@ class GoalSupervisor:
         return any(pattern in lowered for pattern in QUOTA_PATTERNS)
 
     async def _run_goal(self) -> None:
+        held, reason = self.quota_hold_active()
+        if held:
+            logger.warning("AGY launch blocked: %s", reason)
+            self._save()
+            return
         _enforce_no_paid_credits()
         self.last_run_at = time.time()
         self.last_output_at = self.last_run_at
@@ -403,8 +455,6 @@ class GoalSupervisor:
         stdout_task = asyncio.create_task(consume(self.current_process.stdout, "OUT"))
         stderr_task = asyncio.create_task(consume(self.current_process.stderr, "ERR"))
 
-        # Long reasoning is normal.  We never restart after a one-minute silence.
-        # The watchdog only acts after a sustained 20m (configurable) silence.
         while self.current_process.returncode is None:
             await asyncio.sleep(15)
             if time.time() - self.last_output_at > WATCHDOG_SILENCE_SECONDS:
@@ -427,9 +477,17 @@ class GoalSupervisor:
         combined = "\n".join(list(self.output_tail)[-120:] + quota_text)
         if quota_text or self._quota_limited(combined):
             resume = _parse_refresh_deadline(combined)
-            self.next_run_at = resume.timestamp()
-            self.last_status = "quota_wait"
-            logger.warning("AGY baseline quota reached; paid credits disabled. Resume at %s", resume.isoformat())
+            if resume is None:
+                self.next_run_at = 0
+                self.last_status = "quota_wait_unverified"
+                logger.error(
+                    "AGY baseline quota reached but no verified reset deadline was parsed; "
+                    "automatic retries are disabled to prevent paid-credit usage"
+                )
+            else:
+                self.next_run_at = resume.timestamp()
+                self.last_status = "quota_wait"
+                logger.warning("AGY baseline quota reached; paid credits disabled. Resume no earlier than %s", resume.isoformat())
         elif self._restart_requested:
             self._restart_requested = False
             self.next_run_at = time.time() + GOAL_RETRY_SECONDS
@@ -448,6 +506,10 @@ class GoalSupervisor:
                 if not self.enabled:
                     await asyncio.sleep(5)
                     continue
+                held, _ = self.quota_hold_active()
+                if held:
+                    await asyncio.sleep(30)
+                    continue
                 wait = self.next_run_at - time.time()
                 if wait > 0:
                     await asyncio.sleep(min(wait, 30))
@@ -462,9 +524,12 @@ class GoalSupervisor:
                 logger.exception("AGY binary missing")
                 await asyncio.sleep(30)
             except Exception:
-                self.last_status = "supervisor_error"
-                self.next_run_at = time.time() + GOAL_RETRY_SECONDS
-                self._save()
+                # Never convert an active quota hold into a generic retry.
+                held, _ = self.quota_hold_active()
+                if not held:
+                    self.last_status = "supervisor_error"
+                    self.next_run_at = time.time() + GOAL_RETRY_SECONDS
+                    self._save()
                 logger.exception("AGY supervisor iteration failed")
                 await asyncio.sleep(10)
 
@@ -476,6 +541,7 @@ class GoalSupervisor:
                 pass
 
     def status(self) -> dict[str, Any]:
+        held, reason = self.quota_hold_active()
         return {
             "enabled": self.enabled,
             "status": self.last_status,
@@ -486,6 +552,9 @@ class GoalSupervisor:
             "next_run_iso": datetime.fromtimestamp(self.next_run_at, tz=timezone.utc).isoformat() if self.next_run_at else None,
             "seconds_since_output": round(time.time() - self.last_output_at, 1) if self.last_output_at else None,
             "paid_credit_overages": False,
+            "quota_hold_active": held,
+            "quota_hold_reason": reason or None,
+            "quota_deadline_verified": self.last_status != "quota_wait_unverified",
             "output_tail": list(self.output_tail)[-80:],
         }
 
@@ -527,7 +596,10 @@ async def health() -> dict[str, Any]:
 
 @app.post("/console/start", dependencies=[Depends(_auth)])
 async def console_start() -> dict[str, Any]:
-    await console.start()
+    try:
+        await console.start()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return console.output(0)
 
 
@@ -569,18 +641,35 @@ async def supervisor_status() -> dict[str, Any]:
 async def findings(after: int = 0, limit: int = 100) -> dict[str, Any]:
     if not FINDINGS_FILE.exists():
         return {"findings": [], "cursor": after}
-    rows: list[dict[str, Any]] = []
-    cursor = after
-    for raw in FINDINGS_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            item = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        seq = int(item.get("seq", 0) or 0)
-        if seq > after:
-            rows.append(item)
-            cursor = max(cursor, seq)
-    rows = rows[-max(1, min(limit, 500)):]
+    page_limit = max(1, min(limit, 500))
+    # Keep only the earliest next page in memory. This remains O(limit) even
+    # when the JSONL grows and is correct even if file order is imperfect.
+    page: dict[int, dict[str, Any]] = {}
+    with FINDINGS_FILE.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            try:
+                seq = int(item.get("seq", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if seq <= after:
+                continue
+            if seq in page:
+                page[seq] = item
+                continue
+            if len(page) < page_limit:
+                page[seq] = item
+                continue
+            largest = max(page)
+            if seq < largest:
+                del page[largest]
+                page[seq] = item
+    ordered_seq = sorted(page)
+    rows = [page[seq] for seq in ordered_seq]
+    cursor = ordered_seq[-1] if ordered_seq else after
     return {"findings": rows, "cursor": cursor}
 
 

@@ -9,10 +9,10 @@ the parent worker immediately upserts each new finding into MongoDB and emits a
 single-line CHATGPT_HANDOFF_JSON marker into Railway logs. ChatGPT scheduled
 tasks can therefore consume findings independently of AGY's hourly boundaries.
 
-v5.0 makes Mongo access explicitly non-critical. A slow Atlas read may delay one
-bridge refresh briefly, but it opens a bounded circuit and subsequent refreshes
-reuse the last-known-good redacted context instead of repeatedly blocking the
-handoff loop or emitting traceback storms.
+Mongo access is explicitly non-critical. Each context collection has an
+independent bounded circuit so one slow collection cannot starve the remaining
+AGY evidence inputs. Failed collections reuse their last-known-good sanitized
+cache and expose freshness/age diagnostics in the context snapshot.
 """
 from __future__ import annotations
 
@@ -43,21 +43,23 @@ _MONGO_TIMEOUT_MS = max(250, min(2500, int(os.getenv("AGY_MONGO_TIMEOUT_MS", "12
 _MONGO_QUERY_MAX_MS = max(100, min(_MONGO_TIMEOUT_MS, int(os.getenv("AGY_MONGO_QUERY_MAX_MS", "900") or 900)))
 _MONGO_COOLDOWN_S = max(5.0, min(300.0, float(os.getenv("AGY_MONGO_COOLDOWN_SECONDS", "45") or 45)))
 _client: MongoClient | None = None
-_mongo_circuit_open_until = 0.0
-_mongo_failures = 0
+_mongo_operations: dict[str, dict[str, Any]] = {}
 _mongo_last_error = ""
 _mongo_last_success = 0.0
 _recent_cache: dict[str, list[dict[str, Any]]] = {}
+_cache_updated_at: dict[str, float] = {}
+_cache_source: dict[str, str] = {}
 _cache_seeded = False
 
-# Snapshot keys mapped back to their Mongo collections for persisted fallback.
+# Snapshot keys mapped back to their authoritative Mongo collections for
+# persisted fallback. Profiles are stored in `profiles`, not `alert_profiles`.
 _CONTEXT_COLLECTION_KEYS = {
     "approach_states": "approach_states",
     "notification_history": "notification_history",
     "photo_alert_snapshots": "photo_alert_snapshots",
     "feedback": "feedback",
     "system_health": "system_status",
-    "profile_configuration": "alert_profiles",
+    "profile_configuration": "profiles",
     "route_history_summary": "flight_route_samples",
     "prediction_audit": "prediction_lab_audit",
 }
@@ -91,25 +93,47 @@ def _close_client() -> None:
     _client = None
 
 
-def _circuit_open() -> bool:
-    return time.monotonic() < _mongo_circuit_open_until
+def _operation_state(operation: str) -> dict[str, Any]:
+    return _mongo_operations.setdefault(
+        operation,
+        {
+            "open_until": 0.0,
+            "failures": 0,
+            "last_error": "",
+            "last_failure_at": 0.0,
+            "last_success_at": 0.0,
+        },
+    )
 
 
-def _record_mongo_success() -> None:
-    global _mongo_circuit_open_until, _mongo_failures, _mongo_last_error, _mongo_last_success
-    _mongo_circuit_open_until = 0.0
-    _mongo_failures = 0
-    _mongo_last_error = ""
-    _mongo_last_success = time.time()
+def _operation_circuit_open(operation: str) -> bool:
+    return time.monotonic() < float(_operation_state(operation).get("open_until", 0.0) or 0.0)
+
+
+def _record_mongo_success(operation: str = "generic") -> None:
+    global _mongo_last_success
+    state = _operation_state(operation)
+    now = time.time()
+    state["open_until"] = 0.0
+    state["failures"] = 0
+    state["last_error"] = ""
+    state["last_success_at"] = now
+    _mongo_last_success = max(_mongo_last_success, now)
 
 
 def _record_mongo_failure(exc: BaseException, operation: str) -> None:
-    global _mongo_circuit_open_until, _mongo_failures, _mongo_last_error
-    _mongo_failures += 1
-    _mongo_last_error = type(exc).__name__
-    exponent = min(3, max(0, _mongo_failures - 1))
+    global _mongo_last_error
+    state = _operation_state(operation)
+    failures = int(state.get("failures", 0) or 0) + 1
+    state["failures"] = failures
+    state["last_error"] = type(exc).__name__
+    state["last_failure_at"] = time.time()
+    exponent = min(3, max(0, failures - 1))
     cooldown = min(300.0, _MONGO_COOLDOWN_S * (2**exponent))
-    _mongo_circuit_open_until = time.monotonic() + cooldown
+    state["open_until"] = time.monotonic() + cooldown
+    _mongo_last_error = type(exc).__name__
+    # Drop the possibly unhealthy pooled connection, but do not block other
+    # independent operations from creating a fresh client immediately.
     _close_client()
     logger.warning(
         "AGY_MONGO_DEGRADED operation=%s error=%s cooldown_s=%.1f cached_context=true",
@@ -119,29 +143,70 @@ def _record_mongo_failure(exc: BaseException, operation: str) -> None:
     )
 
 
+def _iso_timestamp(epoch: float) -> str | None:
+    if not epoch:
+        return None
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
 def bridge_status() -> dict[str, Any]:
-    remaining = max(0.0, _mongo_circuit_open_until - time.monotonic())
+    now_mono = time.monotonic()
+    now_epoch = time.time()
+    operation_retry = {
+        op: max(0.0, float(state.get("open_until", 0.0) or 0.0) - now_mono)
+        for op, state in _mongo_operations.items()
+    }
+    active_retry = [value for value in operation_retry.values() if value > 0]
+    failures = sum(int(state.get("failures", 0) or 0) for state in _mongo_operations.values())
     if not _MONGO_URI:
-        state = "unconfigured"
-    elif remaining > 0:
-        state = "degraded"
+        state_name = "unconfigured"
+    elif active_retry:
+        state_name = "degraded"
     else:
-        state = "ready"
+        state_name = "ready"
+
+    collections: dict[str, dict[str, Any]] = {}
+    for collection in dict.fromkeys(_CONTEXT_COLLECTION_KEYS.values()):
+        operation = f"read:{collection}"
+        op_state = _operation_state(operation)
+        retry_in = max(0.0, float(op_state.get("open_until", 0.0) or 0.0) - now_mono)
+        updated_at = float(_cache_updated_at.get(collection, 0.0) or 0.0)
+        source = _cache_source.get(collection)
+        if retry_in > 0:
+            collection_state = "degraded"
+        elif source == "mongo":
+            collection_state = "fresh"
+        elif source == "persisted":
+            collection_state = "cached"
+        else:
+            collection_state = "unknown"
+        collections[collection] = {
+            "state": collection_state,
+            "cache_source": source,
+            "cached_rows": len(_recent_cache.get(collection, [])),
+            "stale_age_s": round(max(0.0, now_epoch - updated_at), 1) if updated_at else None,
+            "retry_in_s": round(retry_in, 1),
+            "failures": int(op_state.get("failures", 0) or 0),
+            "last_error": str(op_state.get("last_error") or ""),
+            "last_success_at": _iso_timestamp(float(op_state.get("last_success_at", 0.0) or 0.0)),
+        }
+
     return {
-        "mongo_state": state,
-        "mongo_failures": int(_mongo_failures),
+        "mongo_state": state_name,
+        "mongo_failures": failures,
         "mongo_last_error": _mongo_last_error,
-        "mongo_last_success_at": datetime.fromtimestamp(_mongo_last_success, tz=timezone.utc).isoformat() if _mongo_last_success else None,
-        "mongo_retry_in_s": round(remaining, 1),
+        "mongo_last_success_at": _iso_timestamp(_mongo_last_success),
+        "mongo_retry_in_s": round(max(active_retry, default=0.0), 1),
         "read_timeout_ms": _MONGO_TIMEOUT_MS,
         "query_max_ms": _MONGO_QUERY_MAX_MS,
         "cached_collections": len(_recent_cache),
+        "collections": collections,
     }
 
 
 def _db():
     global _client
-    if not _MONGO_URI or _circuit_open():
+    if not _MONGO_URI:
         return None
     if _client is None:
         _client = MongoClient(
@@ -196,13 +261,27 @@ def _sanitize(doc: dict[str, Any]) -> dict[str, Any]:
         if lowered in _DROP_KEYS or any(word in lowered for word in ("password", "secret", "token", "api_key")):
             continue
         if key == "points" and isinstance(value, list):
-            # Route geometry itself is unnecessary for AGY's audit. Preserve
-            # only how much history exists so the model can reason about data
-            # sufficiency without receiving location traces.
             out["point_count"] = len(value)
             continue
         out[key] = _json_value(value)
     return out
+
+
+def _parse_context_timestamp(payload: dict[str, Any]) -> float:
+    raw = payload.get("generated_at")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            normalized = raw.strip().replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).timestamp()
+        except ValueError:
+            pass
+    try:
+        return CONTEXT_FILE.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _seed_recent_cache_from_context() -> None:
@@ -216,10 +295,13 @@ def _seed_recent_cache_from_context() -> None:
         return
     if not isinstance(payload, dict):
         return
+    generated_at = _parse_context_timestamp(payload)
     for snapshot_key, collection in _CONTEXT_COLLECTION_KEYS.items():
         value = payload.get(snapshot_key)
         if isinstance(value, list):
             _recent_cache[collection] = [dict(item) for item in value if isinstance(item, dict)]
+            _cache_updated_at[collection] = generated_at
+            _cache_source[collection] = "persisted"
 
 
 def _cached_recent(collection: str, limit: int) -> list[dict[str, Any]]:
@@ -229,6 +311,9 @@ def _cached_recent(collection: str, limit: int) -> list[dict[str, Any]]:
 
 
 def _recent(collection: str, sort_field: str, limit: int, projection: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    operation = f"read:{collection}"
+    if _operation_circuit_open(operation):
+        return _cached_recent(collection, limit)
     database = _db()
     if database is None:
         return _cached_recent(collection, limit)
@@ -238,14 +323,14 @@ def _recent(collection: str, sort_field: str, limit: int, projection: dict[str, 
             cursor = cursor.max_time_ms(_MONGO_QUERY_MAX_MS)
         rows = [_sanitize(dict(doc)) for doc in cursor]
         _recent_cache[collection] = [dict(row) for row in rows]
-        _record_mongo_success()
+        _cache_updated_at[collection] = time.time()
+        _cache_source[collection] = "mongo"
+        _record_mongo_success(operation)
         return rows
     except PyMongoError as exc:
-        _record_mongo_failure(exc, f"read:{collection}")
+        _record_mongo_failure(exc, operation)
         return _cached_recent(collection, limit)
     except Exception as exc:
-        # Programming/data-shape errors should not create an endless traceback
-        # storm either, but they are not treated as proof Atlas is unavailable.
         logger.warning("AGY bridge read failed collection=%s error=%s", collection, type(exc).__name__)
         return _cached_recent(collection, limit)
 
@@ -259,7 +344,7 @@ def build_context_snapshot() -> dict[str, Any]:
     photos = _recent("photo_alert_snapshots", "captured_at", 150)
     feedback = _recent("feedback", "updated_at", 150)
     system = _recent("system_status", "updated_at", 20)
-    profiles = _recent("alert_profiles", "updated_at", 100, {"name": 0})
+    profiles = _recent("profiles", "updated_at", 100, {"name": 0})
     route_history = _recent(
         "flight_route_samples",
         "updated_at",
@@ -290,7 +375,7 @@ def build_context_snapshot() -> dict[str, Any]:
             "The public Next 60 Minutes forecast is not yet trusted; treat long-horizon records as shadow evidence only.",
             "Exact user/observer coordinates and credentials are intentionally removed.",
             "Cancellation is a lifecycle event, not proof of a miss. Only coverage-validated outcomes marked outcome_version 4.4-bounded-observed-pass are suitable for new accuracy claims.",
-            "When bridge_status.mongo_state is degraded, collection data may be last-known-good cached evidence until Atlas recovers.",
+            "When bridge_status.mongo_state is degraded, individual collection data may be last-known-good cached evidence until that collection recovers; inspect per-collection freshness before drawing conclusions.",
         ],
         "bridge_status": mongo_status,
         "summary": {
@@ -348,14 +433,18 @@ def sync_findings_to_handoff() -> int:
             item = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        seq = int(item.get("seq", 0) or 0)
+        try:
+            seq = int(item.get("seq", 0) or 0)
+        except (TypeError, ValueError):
+            continue
         if seq > cursor:
             rows.append(item)
     rows.sort(key=lambda item: int(item.get("seq", 0) or 0))
     if not rows:
         return 0
 
-    database = _db()
+    operation = "finding-handoff"
+    database = None if _operation_circuit_open(operation) else _db()
     published = 0
     for item in rows:
         seq = int(item.get("seq", 0) or 0)
@@ -377,12 +466,9 @@ def sync_findings_to_handoff() -> int:
                     {"$set": {**clean, "source": "Plane-Alerts-AGY"}},
                     upsert=True,
                 )
-                _record_mongo_success()
+                _record_mongo_success(operation)
             except PyMongoError as exc:
-                # Railway logs are an independent durable handoff path. Open a
-                # circuit after the first timeout so the next rows do not each
-                # pay another socket timeout or print another traceback.
-                _record_mongo_failure(exc, "finding-handoff")
+                _record_mongo_failure(exc, operation)
                 database = None
             except Exception as exc:
                 logger.warning("AGY finding Mongo handoff failed seq=%s error=%s", seq, type(exc).__name__)
@@ -396,11 +482,12 @@ def sync_findings_to_handoff() -> int:
 
 def _reset_resilience_state_for_tests() -> None:
     """Reset module-local resilience state; never used by production runtime."""
-    global _mongo_circuit_open_until, _mongo_failures, _mongo_last_error, _mongo_last_success, _cache_seeded
+    global _mongo_last_error, _mongo_last_success, _cache_seeded
     _close_client()
-    _mongo_circuit_open_until = 0.0
-    _mongo_failures = 0
+    _mongo_operations.clear()
     _mongo_last_error = ""
     _mongo_last_success = 0.0
     _recent_cache.clear()
+    _cache_updated_at.clear()
+    _cache_source.clear()
     _cache_seeded = False

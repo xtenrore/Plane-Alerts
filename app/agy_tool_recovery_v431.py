@@ -87,9 +87,6 @@ def extract_conversation_id(lines: Iterable[str]) -> str | None:
                 if isinstance(candidate, str) and candidate.strip():
                     return candidate.strip()
 
-        # Supervisor log lines are intentionally capped at 4,000 characters.
-        # conversation_id appears near the front of Antigravity stream events,
-        # so recover it even if a very long response truncates the JSON tail.
         match = _CONVERSATION_ID_RE.search(raw)
         if match:
             return match.group(1).strip()
@@ -129,6 +126,10 @@ def recovery_prompt(attempt: int) -> str:
 
 
 async def _run_resume_turn(self: Any, conversation_id: str, attempt: int) -> RecoveryTurn:
+    held, reason = self.quota_hold_active()
+    if held:
+        raise RuntimeError(f"AGY tooling recovery launch blocked: {reason}")
+
     prompt = recovery_prompt(attempt)
     command = [
         "agy",
@@ -215,10 +216,25 @@ async def _run_resume_turn(self: Any, conversation_id: str, attempt: int) -> Rec
 
 
 async def _run_goal_with_same_conversation_recovery(self: Any) -> None:
+    # The durable quota hold dominates the recovery wrapper itself. In
+    # particular, an unverified reset must not fall through to stale denied-tool
+    # output and accidentally resume a paid-credit-eligible conversation.
+    held, reason = self.quota_hold_active()
+    if held:
+        self._tool_recovery_count_v431 = 0
+        logger.warning("AGY tooling recovery blocked: %s", reason)
+        return
+
     await _ORIGINAL_RUN_GOAL(self)
 
+    held, reason = self.quota_hold_active()
+    if held:
+        self._tool_recovery_count_v431 = 0
+        logger.warning("AGY tooling recovery remains blocked after goal turn: %s", reason)
+        return
+
     initial_lines = tuple(self.output_tail)
-    if self.last_status == "quota_wait" or not output_has_permission_denial(initial_lines):
+    if not output_has_permission_denial(initial_lines):
         self._tool_recovery_count_v431 = 0
         return
 
@@ -234,6 +250,11 @@ async def _run_goal_with_same_conversation_recovery(self: Any) -> None:
         return
 
     for attempt in range(1, _MAX_RECOVERY_TURNS + 1):
+        held, reason = self.quota_hold_active()
+        if held:
+            self._tool_recovery_count_v431 = 0
+            logger.warning("AGY tooling recovery blocked before resume turn: %s", reason)
+            return
         self._tool_recovery_count_v431 = attempt
         logger.warning(
             "AGY headless tool choice denied; immediately resuming conversation=%s recovery_turn=%d/%d",
@@ -246,13 +267,22 @@ async def _run_goal_with_same_conversation_recovery(self: Any) -> None:
 
         if turn.quota_limited:
             resume = base._parse_refresh_deadline(turn.combined_output)
-            self.next_run_at = resume.timestamp()
-            self.last_status = "quota_wait"
-            self._save()
-            logger.warning(
-                "AGY baseline quota reached during tooling recovery; paid credits remain disabled. Resume at %s",
-                resume.isoformat(),
-            )
+            if resume is None:
+                self.next_run_at = 0
+                self.last_status = "quota_wait_unverified"
+                self._save()
+                logger.error(
+                    "AGY baseline quota reached during tooling recovery with no verified reset deadline; "
+                    "automatic retries disabled"
+                )
+            else:
+                self.next_run_at = resume.timestamp()
+                self.last_status = "quota_wait"
+                self._save()
+                logger.warning(
+                    "AGY baseline quota reached during tooling recovery; paid credits remain disabled. Resume no earlier than %s",
+                    resume.isoformat(),
+                )
             return
 
         if turn.watchdog_restart:

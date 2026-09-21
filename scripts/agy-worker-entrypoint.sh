@@ -52,7 +52,7 @@ export AGY_CLI_DISABLE_AUTO_UPDATE=true
 # Plane Alerts source and its redacted Prediction Lab context, and may only run
 # the explicitly allowlisted git/test/python/read-only inspection commands.
 python - <<'PY'
-import json, os
+import json, os, time
 from pathlib import Path
 
 home = Path(os.environ['HOME'])
@@ -133,25 +133,43 @@ if enable:
         goal = f'{goal}\n\n{tooling_rules}'
         supervisor['goal'] = goal
 
-    # A tooling-policy change must run once immediately even when the previous
-    # denied CLI cycle incorrectly persisted a normal hourly completion time.
+    # A persisted quota hold dominates every startup override. A deployment,
+    # enable toggle, tooling-policy migration, or force token may never shorten
+    # a future guarded quota deadline. Unknown/unverified resets remain held
+    # indefinitely until explicitly cleared after verified recovery.
+    quota_status = str(supervisor.get('last_status') or '')
+    quota_deadline = float(supervisor.get('next_run_at', 0) or 0)
+    quota_hold_active = quota_status == 'quota_wait_unverified' or (
+        quota_status == 'quota_wait' and quota_deadline > time.time()
+    )
+
+    # A tooling-policy change may run immediately only when no quota hold is
+    # active. The policy version is still persisted while waiting.
     tooling_policy_version = 3
     if int(supervisor.get('tooling_policy_version', 0) or 0) != tooling_policy_version:
         supervisor['tooling_policy_version'] = tooling_policy_version
-        if supervisor.get('last_status') != 'quota_wait':
+        if not quota_hold_active:
             supervisor['next_run_at'] = 0
 
-    if not was_enabled:
+    if not was_enabled and not quota_hold_active:
         supervisor['next_run_at'] = 0
-    # Changing this token deliberately forces one immediate run. Persisting the
-    # consumed token means ordinary restarts never reset a quota-wait deadline.
+    # Changing this token deliberately requests one immediate run, but it may
+    # never bypass an active quota hold. Consume/persist the token while waiting
+    # so an old request cannot fire later simply because the deadline expires.
     force_token = os.environ.get('AGY_FORCE_RUN_TOKEN', '').strip()
     if force_token and supervisor.get('last_force_run_token') != force_token:
         supervisor['last_force_run_token'] = force_token
-        supervisor['next_run_at'] = 0
-    stmp = supervisor_path.with_suffix('.tmp')
-    stmp.write_text(json.dumps(supervisor, indent=2, sort_keys=True))
-    stmp.replace(supervisor_path)
+        if not quota_hold_active:
+            supervisor['next_run_at'] = 0
+else:
+    # An explicit operator disable must win over persisted state. Preserve the
+    # quota status/deadline exactly so a maintenance deployment can start the
+    # bridge/API without launching inference, then later re-enable safely.
+    supervisor['enabled'] = False
+
+stmp = supervisor_path.with_suffix('.tmp')
+stmp.write_text(json.dumps(supervisor, indent=2, sort_keys=True))
+stmp.replace(supervisor_path)
 PY
 
 # Parent-side bridge keeps Mongo credentials. AGY itself never receives them.
