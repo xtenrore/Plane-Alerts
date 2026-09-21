@@ -3,14 +3,14 @@
 The proven v4.3 profile engine remains authoritative. This module registers a
 higher-priority presentation layer for profile home/detail, presets and setup
 recovery, then delegates detailed aircraft/rule editing to the existing engine.
+It is registered explicitly by ``app.main`` so importing bot modules cannot
+change the prediction-worker composition as a side effect.
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from telegram import InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -22,7 +22,6 @@ from telegram.ext import (
 )
 
 from app.alert_profiles import (
-    activate_profile,
     create_profile,
     ensure_default_profile,
     get_active_profile,
@@ -40,6 +39,16 @@ from app.worker.geo import compute_geohash
 
 def _b(text: str, data: str):
     return legacy._button(text, data)
+
+
+def brand_next60_html_v54(html: str) -> str:
+    """Return the existing Next 60 Mini App with current product terminology."""
+    return (
+        str(html)
+        .replace("<title>Plane? · Next 60</title>", "<title>Plane Alerts · Next 60</title>")
+        .replace("PLANE? · FORECAST", "PLANE ALERTS · FORECAST")
+        .replace("Plane? Telegram bot", "Plane Alerts Telegram bot")
+    )
 
 
 async def _home_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -110,14 +119,15 @@ async def _render_new_method(update: Update) -> None:
 async def _render_presets(update: Update, *, existing_profile_id: str = "") -> None:
     prefix = f"ux54:pick:{existing_profile_id}" if existing_profile_id else "ux54:picknew"
     rows = _preset_rows(prefix)
-    rows.append([_b("Custom Setup", "ux54:custom")] if not existing_profile_id else [_b("Back", f"ux54:o:{existing_profile_id}")])
-    if not existing_profile_id:
-        rows.append([_b("Back", "ux54:new")])
-    text = (
-        "<b>Choose a Preset</b>\n\n"
-        "Presets only set understandable alert defaults. You can edit every setting afterward."
+    if existing_profile_id:
+        rows.append([_b("Back", f"ux54:o:{existing_profile_id}")])
+    else:
+        rows.extend([[_b("Custom Setup", "ux54:custom")], [_b("Back", "ux54:new")]])
+    await legacy._show(
+        update,
+        "<b>Choose a Preset</b>\n\nPresets only set understandable alert defaults. You can edit every setting afterward.",
+        InlineKeyboardMarkup(rows),
     )
-    await legacy._show(update, text, InlineKeyboardMarkup(rows))
 
 
 async def _render_preset_preview(update: Update, user_id: int, profile_id: str, preset_id: str) -> None:
@@ -126,7 +136,10 @@ async def _render_preset_preview(update: Update, user_id: int, profile_id: str, 
     if not preset or not profile:
         await _recover(update, user_id, "That preset or profile is no longer available.")
         return
-    note = "\n\nLocal SDR Mode changes alert preferences only; receiver connectivity remains a deployment setting." if preset_id == "local_sdr" else ""
+    note = (
+        "\n\nLocal SDR Mode changes alert preferences only; receiver connectivity remains a deployment setting."
+        if preset_id == "local_sdr" else ""
+    )
     await legacy._show(
         update,
         f"<b>{legacy._esc(preset.name)}</b>\n\n{legacy._esc(preset.description)}\n{legacy._esc(preset_summary(preset))}{note}\n\n"
@@ -165,16 +178,17 @@ async def _render_review(update: Update, user_id: int) -> None:
     selection = legacy.normalized_filter_config(prefs)
     radius = loc.get("radius_km")
     location_text = "Saved" if loc.get("latitude") is not None and loc.get("longitude") is not None else "Needed"
+    radius_text = f"{float(radius):g} km" if radius is not None else "Needed"
     aircraft_text = "All aircraft" if selection["mode"] == "all" else f"{len(selection['selected_categories'])} groups"
     await legacy._set_state(user_id, "v54:review", temp)
     text = (
         f"<b>{legacy._esc(temp.get('draft_name') or 'New Profile')}</b>\n\n"
         f"Preset: {legacy._esc(preset.name if preset else 'Custom')}\n"
         f"Location: {location_text}\n"
-        f"Radius: {float(radius):g} km\n" if radius is not None else
-        f"<b>{legacy._esc(temp.get('draft_name') or 'New Profile')}</b>\n\nPreset: {legacy._esc(preset.name if preset else 'Custom')}\nLocation: {location_text}\nRadius: Needed\n"
+        f"Radius: {radius_text}\n"
+        f"Aircraft: {legacy._esc(aircraft_text)}\n\n"
+        "Review anything you want, then save."
     )
-    text += f"Aircraft: {legacy._esc(aircraft_text)}\n\nReview anything you want, then save."
     await legacy._show(update, text, InlineKeyboardMarkup([
         [_b("Location", "ux54:loc"), _b("Radius", "ux54:radius")],
         [_b("Aircraft", "ux54:aircraft"), _b("Advanced", "ux54:advanced")],
@@ -258,7 +272,7 @@ async def callback_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     uid = user.id
 
     # Only intercept legacy Done when this is our preset review flow. Otherwise
-    # return without stopping so the v4.3 handler receives it normally.
+    # return without stopping so the established v4.3 handler receives it.
     if data == "pf:adone":
         _, temp = await legacy._raw_state(uid)
         if not temp.get("v54_preset_flow"):
@@ -279,11 +293,7 @@ async def callback_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         elif data == "ux54:new":
             await _render_new_method(update)
         elif data == "ux54:presets":
-            _, temp = await legacy._raw_state(uid)
-            if temp.get("v54_preset_flow"):
-                await _render_presets(update)
-            else:
-                await _render_presets(update)
+            await _render_presets(update)
         elif data == "ux54:custom":
             await legacy._start_create(update, uid)
         elif data == "ux54:status":
@@ -307,7 +317,7 @@ async def callback_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await save_profile(uid, parts[2], config=config)
                 await legacy._clear_state(uid)
                 await _render_detail(update, uid, parts[2], f"{preset.name} applied. You can edit any setting.")
-        elif data in {"ux54:review"}:
+        elif data == "ux54:review":
             await _render_review(update, uid)
         elif data == "ux54:loc":
             _, temp = await legacy._raw_state(uid)
@@ -387,41 +397,13 @@ async def text_v54(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def register_v54_handlers(app: Application) -> None:
+    """Register UX handlers ahead of the established profile engine."""
     group = -40
     app.add_handler(CommandHandler("profiles", cmd_profiles_v54), group=group)
     app.add_handler(CommandHandler("preferences", cmd_preferences_v54), group=group)
     app.add_handler(
-        CallbackQueryHandler(
-            callback_v54,
-            pattern=r"^(?:ux54:|pf:home$|pf:close$|pf:o:|pf:adone$)",
-        ),
+        CallbackQueryHandler(callback_v54, pattern=r"^(?:ux54:|pf:home$|pf:close$|pf:o:|pf:adone$)"),
         group=group,
     )
     app.add_handler(MessageHandler(filters.LOCATION, location_v54), group=group)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_v54), group=group)
-
-
-def install_v54_profile_experience() -> None:
-    if getattr(legacy, "_v54_installed", False):
-        return
-    original_register = legacy.register_profile_handlers
-
-    def combined_register(app: Application) -> None:
-        register_v54_handlers(app)
-        original_register(app)
-
-    legacy.register_profile_handlers = combined_register
-    legacy._v54_installed = True
-
-    # The existing Mini App is Next 60 only; keep its UX language consistent
-    # with the project name without inventing a separate settings Mini App.
-    from app.bot import next60_web
-    next60_web.NEXT60_HTML = (
-        next60_web.NEXT60_HTML
-        .replace("<title>Plane? · Next 60</title>", "<title>Plane Alerts · Next 60</title>")
-        .replace("PLANE? · FORECAST", "PLANE ALERTS · FORECAST")
-        .replace("Plane? Telegram bot", "Plane Alerts Telegram bot")
-    )
-
-
-install_v54_profile_experience()
