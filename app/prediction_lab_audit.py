@@ -3,17 +3,22 @@
 This module records what Plane Alerts predicted before the outcome was known.
 It never calls AI and never changes alert decisions. The AGY worker consumes a
 sanitized copy of this data later to compare expectations with reality.
+
+v5.2 adds automatic shadow evaluation only for explicitly scoreable outcomes.
+A lifecycle cancellation remains unresolved evidence and is never silently
+converted into a successful prediction or a miss.
 """
 from __future__ import annotations
 
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 
 from app.database import get_db
-from app.version import PREDICTION_VERSION
+from app.shadow_evaluation_v52 import evaluate_live_outcome, feature_flags
+from app.version import PREDICTION_VERSION, VERSION
 from app.worker.optional_work import OptionalCache
 
 audit_work = OptionalCache(max_entries=4096, max_pending=64, concurrency=2, timeout=3.0)
@@ -149,7 +154,9 @@ async def record_prediction_snapshot(
 
     doc = {
         "kind": "prediction",
+        "release_version": VERSION,
         "prediction_version": PREDICTION_VERSION,
+        "shadow_feature_flags": feature_flags(),
         "diagnostics": diagnostics or {},
         "captured_at": now,
         "expires_at": now + timedelta(days=4),
@@ -201,11 +208,15 @@ async def record_prediction_outcome(
     now = datetime.now(timezone.utc)
     icao = str(getattr(aircraft, "icao24", "") or "").lower().strip()
     previous_cpa = _safe_float(previous_projected_closest_km)
+    observed_pass = str(outcome) == "passed"
     doc = {
         "kind": "outcome",
+        "release_version": VERSION,
         "prediction_version": PREDICTION_VERSION,
-        "outcome_basis": "lifecycle_transition_only",
-        "scoreable": False,
+        "outcome_basis": "observed_in_radius_pass" if observed_pass else "lifecycle_transition_only",
+        # A cancellation can still be followed by a later physical pass. Until
+        # a separate final resolver proves the negative outcome, do not score it.
+        "scoreable": bool(observed_pass),
         "captured_at": now,
         "expires_at": now + timedelta(days=8),
         "user_id": int(user_id),
@@ -228,7 +239,13 @@ async def record_prediction_outcome(
         "coverage_mode": "regional_adsb_current_predictor",
     }
     try:
-        await get_db()["prediction_lab_audit"].insert_one(doc)
+        result = await get_db()["prediction_lab_audit"].insert_one(doc)
+        doc["_id"] = result.inserted_id
+        if doc["scoreable"]:
+            try:
+                await evaluate_live_outcome(get_db(), doc)
+            except Exception:
+                logger.exception("v52_shadow_outcome_evaluation_failed user=%s icao=%s", user_id, icao)
     except Exception:
         logger.exception("prediction_lab_outcome_failed user=%s icao=%s", user_id, icao)
 
