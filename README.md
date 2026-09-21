@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.1.3**  
+**Current code version: Plane Alerts v5.2.0**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,35 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v5.2 shadow models and automatic evaluation
+
+v5.2 makes prediction development data-driven without changing the live physical predictor. The authoritative prediction version remains `5.1-3d-proximity`; existing v4.6 linear and turn-aware candidate models continue to run as shadow-only evidence and cannot qualify, cancel, time or send alerts.
+
+Prediction Lab snapshots now record application release version and shadow feature-flag state. When a later outcome has explicit scoreable ground truth, Plane Alerts can evaluate the production control and shadow candidates side by side for CPA error, ETA error, false-positive/false-negative behavior, alert lead time and confidence calibration. Results are grouped by release and model ID so changes can be compared over time.
+
+Ground truth remains conservative. An observed in-radius pass is scoreable. A lifecycle cancellation is not automatically a successful negative outcome, because the aircraft may later pass nearby. Missing ADS-B coverage is unresolved. If a denominator does not exist, the corresponding rate remains unknown rather than being reported as zero.
+
+Shadow evaluation is isolated in the existing bounded Prediction Lab optional-work path and adds no ADS-B provider request or synchronous operation to the five-second alert-critical calculation. Evaluation records have deterministic IDs, bounded lookup windows and a 14-day TTL.
+
+Shadow feature flags are evaluation-only:
+
+```env
+PLANE_SHADOW_EVALUATION_ENABLED=true
+PLANE_SHADOW_V46_LINEAR_ENABLED=true
+PLANE_SHADOW_V46_TURN_ENABLED=true
+```
+
+These flags can disable evaluation candidates; they cannot select the model used for live alerts.
+
+Operators can inspect the bounded evaluation report with:
+
+```bash
+planealerts shadow-eval
+planealerts shadow-eval --days 7 --limit 2000
+```
+
+Candidate promotion is never automatic. A candidate must first have enough scoreable samples, representative horizon coverage, no major safety regression, successful replay evidence and successful live-shadow evidence. Even then the evaluator only marks it eligible for engineering review.
 
 ## v5.1 3D proximity and advanced geometry
 
@@ -199,9 +228,9 @@ Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle ch
 
 ## Prediction Lab and Error Museum
 
-Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. Missing ADS-B coverage remains unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
+Prediction Lab records forecasts before outcomes are known and later compares them with observed behavior. v5.2 evaluates the current production control and existing shadow candidates only when a later outcome carries explicit scoreable ground truth. Missing ADS-B coverage remains unresolved rather than counted as a hit or miss. Longer-range 30–60 minute expectations remain shadow-only until enough trustworthy outcomes exist.
 
-Database outage does not turn a missing outcome write into a successful prediction or a miss. Error Museum fixtures remain permanent regression evidence and are not subject to transient-data TTL cleanup.
+Lifecycle cancellation alone is not ground truth for false-positive or cancellation-accuracy claims. Those metrics remain unavailable until a later coverage-validated negative outcome exists. Database outage does not turn a missing outcome write into a successful prediction or a miss. Error Museum fixtures remain permanent regression evidence and are not subject to transient-data TTL cleanup.
 
 ## Photography and contrails
 
@@ -233,14 +262,16 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py tests/test_v512_predictor_wrapper.py
+pytest -q tests/test_shadow_evaluation_v52.py
+python scripts/evaluate_v52_shadow_replay.py
+python scripts/benchmark_v52_shadow_eval.py
 python scripts/benchmark_v51_geometry.py
 python scripts/benchmark_v50_observability.py
 python scripts/benchmark_v49_doctor.py
@@ -273,12 +304,14 @@ docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
 
-After startup, operators can inspect bounded diagnostics from the same image with `planealerts metrics` or `planealerts diagnostics --aircraft <icao24>`.
+After startup, operators can inspect bounded diagnostics from the same image with `planealerts metrics`, `planealerts diagnostics --aircraft <icao24>`, or `planealerts shadow-eval`.
 
 For native Python and Raspberry Pi/ARM64 instructions, health checks, backups, upgrades and rollback, see [`docs/self-hosting.md`](docs/self-hosting.md).
 
 ## Known limitations
 
+- v5.2 can score observed positive passes immediately, but false-positive and cancellation-accuracy rates remain unavailable until a separately validated negative outcome exists; a cancellation by itself is not assumed correct.
+- v5.2 shadow candidates are evaluation-only and cannot be promoted automatically.
 - If observer terrain elevation is initially unavailable, v5.1 uses conservative altitude bounds and falls back to horizontal relevance when the 3D result is ambiguous.
 - ADS-B altitude is treated as uncertain sensor data; malformed or discontinuous altitude cannot safely suppress a horizontally qualifying pass.
 - A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
