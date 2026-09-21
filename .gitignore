@@ -6,6 +6,10 @@
 *.key
 groq.txt
 
+# Community installer runtime state, local SQLite data and rollback backups
+.community/
+plane-alerts-data/
+
 # Provider credentials - never commit live credentials
 api/*.json
 !api/.gitkeep
