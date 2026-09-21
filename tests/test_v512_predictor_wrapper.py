@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.intelligence import direct_presence_guard_v44 as v44
 from app.intelligence import prediction_v46 as v46
 from app.intelligence import trajectory as trajectory
 from app.intelligence import trajectory_hotfix_v43 as v43
@@ -13,21 +14,29 @@ def _sample(lat: float, *, t: float, alt: float = 12000.0) -> trajectory.History
     return trajectory.HistorySample(t, lat, 29.0, alt, 420.0, 180.0, 0.0, 0.0)
 
 
-def test_production_wrapper_chain_accepts_and_forwards_altitude_relevance(monkeypatch):
-    """Regression for the v5.1.1 production TypeError in the real wrapper order."""
+def _install_chain(monkeypatch, *, core=None):
+    core_predict = core or trajectory.predict_trajectory
+    monkeypatch.setattr(v43, "_ORIGINAL_PREDICT", core_predict)
+    monkeypatch.setattr(v44, "_BASE_PREDICT", v43.predict_trajectory_v43)
+    monkeypatch.setattr(v46, "_BASE_PREDICT", v44.predict_trajectory_v44)
+    monkeypatch.setattr(critical_timing, "_ORIGINAL_PREDICT_TRAJECTORY", v46.predict_trajectory_v46)
+    return core_predict
+
+
+def test_complete_production_wrapper_chain_forwards_altitude_relevance(monkeypatch):
+    """Recreate core -> v4.3 -> v4.4 -> v4.6 -> critical timing exactly."""
     samples = [
         _sample(41.20, t=NOW - 10),
         _sample(41.18, t=NOW),
     ]
-    base_predict = v46._BASE_PREDICT
+    core_predict = trajectory.predict_trajectory
     forwarded: list[bool] = []
 
-    def spy_base(*args, **kwargs):
+    def spy_core(*args, **kwargs):
         forwarded.append(bool(kwargs["altitude_relevance"]))
-        return base_predict(*args, **kwargs)
+        return core_predict(*args, **kwargs)
 
-    monkeypatch.setattr(v46, "_BASE_PREDICT", spy_base)
-    monkeypatch.setattr(critical_timing, "_ORIGINAL_PREDICT_TRAJECTORY", v46.predict_trajectory_v46)
+    _install_chain(monkeypatch, core=spy_core)
 
     disabled = critical_timing._critical_predict_trajectory(
         samples,
@@ -53,12 +62,36 @@ def test_production_wrapper_chain_accepts_and_forwards_altitude_relevance(monkey
     assert enabled.altitude_relevance_applied is True
 
 
-def test_v46_wrapper_keeps_unknown_observer_elevation_as_unknown():
+def test_v44_direct_presence_does_not_undo_trustworthy_3d_exclusion(monkeypatch):
+    samples = [
+        _sample(41.055, t=NOW - 10, alt=12000.0),
+        _sample(41.040, t=NOW, alt=12000.0),
+    ]
+    _install_chain(monkeypatch)
+
+    pred = critical_timing._critical_predict_trajectory(
+        samples,
+        *USER,
+        5.0,
+        now=NOW,
+        user_altitude_m=100.0,
+        altitude_relevance=True,
+    )
+
+    assert pred.current_distance_km < 5.0
+    assert pred.altitude_relevance_applied is True
+    assert pred.enters_alert_radius is False
+    assert pred.state == "Will not approach"
+
+
+def test_complete_wrapper_chain_keeps_unknown_observer_elevation(monkeypatch):
     samples = [
         _sample(41.20, t=NOW - 10, alt=900.0),
         _sample(41.18, t=NOW, alt=900.0),
     ]
-    pred = v46.predict_trajectory_v46(
+    _install_chain(monkeypatch)
+
+    pred = critical_timing._critical_predict_trajectory(
         samples,
         *USER,
         8.0,
@@ -67,20 +100,75 @@ def test_v46_wrapper_keeps_unknown_observer_elevation_as_unknown():
         altitude_relevance=True,
     )
     assert pred.observer_altitude_known is False
+    assert pred.projected_closest_km >= 0.0
 
 
-def test_legacy_v43_wrapper_accepts_unknown_observer_elevation():
-    """Regression for the production float-minus-None crash after compatibility retry."""
+def test_each_legacy_wrapper_accepts_current_v51_signature(monkeypatch):
     samples = [
         _sample(41.20, t=NOW - 10, alt=900.0),
         _sample(41.18, t=NOW, alt=900.0),
     ]
-    pred = v43.predict_trajectory_v43(
+    core_predict = trajectory.predict_trajectory
+    monkeypatch.setattr(v43, "_ORIGINAL_PREDICT", core_predict)
+    monkeypatch.setattr(v44, "_BASE_PREDICT", v43.predict_trajectory_v43)
+
+    p43 = v43.predict_trajectory_v43(
         samples,
         *USER,
         8.0,
         now=NOW,
         user_altitude_m=None,
+        altitude_relevance=False,
     )
-    assert pred.observer_altitude_known is False
-    assert pred.projected_closest_km >= 0.0
+    p44 = v44.predict_trajectory_v44(
+        samples,
+        *USER,
+        8.0,
+        now=NOW,
+        user_altitude_m=None,
+        altitude_relevance=False,
+    )
+    assert p43.observer_altitude_known is False
+    assert p44.observer_altitude_known is False
+
+
+def test_full_chain_does_not_restore_projected_cpa_pass_shortcut(monkeypatch):
+    samples = [
+        _sample(41.10, t=NOW - 10, alt=1200.0),
+        _sample(41.11, t=NOW - 5, alt=1200.0),
+        _sample(41.12, t=NOW, alt=1200.0),
+    ]
+    _install_chain(monkeypatch)
+
+    pred = critical_timing._critical_predict_trajectory(
+        samples,
+        *USER,
+        5.0,
+        now=NOW,
+        user_altitude_m=100.0,
+        altitude_relevance=True,
+    )
+
+    assert pred.already_passed is False
+    assert pred.state != "Passed"
+
+
+def test_full_chain_preserves_observed_in_radius_pass(monkeypatch):
+    samples = [
+        _sample(41.012, t=NOW - 10, alt=1200.0),
+        _sample(41.020, t=NOW - 5, alt=1200.0),
+        _sample(41.030, t=NOW, alt=1200.0),
+    ]
+    _install_chain(monkeypatch)
+
+    pred = critical_timing._critical_predict_trajectory(
+        samples,
+        *USER,
+        2.0,
+        now=NOW,
+        user_altitude_m=100.0,
+        altitude_relevance=True,
+    )
+
+    assert pred.already_passed is True
+    assert pred.state == "Passed"
