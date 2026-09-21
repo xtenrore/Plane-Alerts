@@ -34,6 +34,7 @@ from app.bot.profile_handlers import (
     _set_state,
 )
 from app.database import users_col, user_state_col
+from app.version import VERSION
 from app.worker.geo import compute_geohash
 
 
@@ -131,13 +132,13 @@ async def cmd_status_profiled(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_help_profiled(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Keep the command reference aligned with the v4.3 Telegram UX."""
+    """Keep the command reference aligned with the current Plane Alerts runtime."""
     del context
     message = update.message
     if not message:
         return
     await message.reply_text(
-        "<b>Plane Alerts v4.3</b>\n\n"
+        f"<b>Plane Alerts v{VERSION}</b>\n\n"
         "/profiles — create, switch and manage alert profiles\n"
         "/preferences — aircraft selection and advanced filters\n"
         "/location — update the active profile location\n"
@@ -157,7 +158,7 @@ async def cmd_help_profiled(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def accept_terms_profiled(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Keep the existing welcome/disclaimer but use the v4.3 setup after it."""
+    """Keep the existing welcome/disclaimer but use the profiled setup after it."""
     del context
     query = update.callback_query
     user = update.effective_user
@@ -183,8 +184,6 @@ async def stale_profile_callback_guard(update: Update, context: ContextTypes.DEF
 
     parts = query.data.split(":")
     action = parts[1] if len(parts) > 1 else ""
-    # Profile-list actions are self-contained and remain valid after restarts.
-    # Nested selection/rule callbacks require a persisted profile_draft.
     if action in {"home", "new", "o", "a", "e", "r", "d", "x", "xd"}:
         return
 
@@ -210,7 +209,6 @@ async def unknown_aircraft_search_fallback(update: Update, context: ContextTypes
         return
 
     raw = message.text.strip()
-    # Known catalogue terms still use the richer normal search/results UI.
     if search_aircraft(raw, limit=1):
         return
     code = raw.upper()
@@ -266,7 +264,14 @@ async def quick_location_message(update: Update, context: ContextTypes.DEFAULT_T
 
 
 def register_profile_legacy_handlers(app: Application) -> None:
-    # Run before the v4.3 general profile handlers (-30) and old handlers (0).
+    # Explicitly install runtime composition fixes after the required bot modules
+    # are loaded and before any handler objects capture their callback functions.
+    from app.profile_safety_v542 import install_profile_safety_v542
+    from app.bot.interaction_v46 import install_interaction_v46
+
+    install_profile_safety_v542()
+    install_interaction_v46()
+
     group = -31
     app.add_handler(CommandHandler("setup", cmd_setup_profiled), group=group)
     app.add_handler(CommandHandler("location", cmd_location_profiled), group=group)
