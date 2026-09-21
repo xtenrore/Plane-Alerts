@@ -189,9 +189,11 @@ def predict_trajectory_v43(
     path = [replace(point, seconds=point.seconds - age) for point in path if point.seconds >= age]
 
     increasing = base.distance_trend_km_s is not None and base.distance_trend_km_s > 0.002
-    already_passed = cpa_t <= step_s and increasing
+    # v5.1 deliberately requires an observed in-radius pass before classifying
+    # an encounter as Passed. Never restore the older projected-CPA shortcut.
+    already_passed = bool(base.already_passed)
     horizon_edge = cpa_t >= horizon - step_s
-    enters = (
+    horizontal_enters = (
         closest_h <= alert_radius_km
         and cpa_t > 0
         and not base.stale
@@ -204,20 +206,42 @@ def predict_trajectory_v43(
     )
 
     directly_inside = not base.stale and base.current_distance_km <= float(alert_radius_km)
-    if directly_inside:
-        enters = True
-        already_passed = False
+    if directly_inside and not already_passed:
+        horizontal_enters = True
         turning_away = False
         entry_t = 0.0
-        state = "Passing nearby"
-        reason = "fresh ADS-B position is directly inside the configured alert radius"
-    elif base.stale:
+
+    # v4.3 owns the midpoint-adjusted production path, so recompute v5.1 3D
+    # relevance against that exact path instead of overwriting the core result
+    # with a horizontal-only legacy decision.
+    proximity3d = t.assess_proximity_3d(
+        path=path,
+        samples=recent,
+        alert_radius_km=alert_radius_km,
+        age_s=age,
+        observer_altitude_m=user_altitude_m,
+        step_s=float(step_s),
+    )
+    altitude_suppressed = bool(
+        altitude_relevance
+        and horizontal_enters
+        and proximity3d.suppress_horizontal_entry
+    )
+    enters = horizontal_enters and not altitude_suppressed
+
+    if base.stale:
         state, reason = "Prediction uncertain", "ADS-B position is stale"
+    elif already_passed:
+        state = "Passed"
+        reason = "the aircraft was observed inside the configured radius and is now receding from its observed closest point"
     elif turning_away:
         state = "Turning away"
         reason = "sustained recent turn and distance trend move the aircraft away from the observer"
-    elif already_passed:
-        state, reason = "Passed", "closest approach is behind the current position and distance is increasing"
+    elif altitude_suppressed:
+        state, reason = "Will not approach", proximity3d.reason
+    elif directly_inside and enters:
+        state = "Passing nearby"
+        reason = "fresh ADS-B position is directly inside the configured alert radius"
     elif enters and cpa_t <= 30:
         state = "Passing nearby"
         reason = "robust midpoint-projected path enters the configured radius and CPA is imminent"
@@ -243,6 +267,18 @@ def predict_trajectory_v43(
         turning_away=turning_away,
         reason=reason,
         path=path,
+        current_vertical_separation_m=proximity3d.current_vertical_separation_m,
+        projected_closest_3d_km=proximity3d.projected_closest_3d_km,
+        projected_closest_3d_lower_bound_km=proximity3d.projected_closest_3d_lower_bound_km,
+        time_to_3d_cpa_s=proximity3d.time_to_3d_cpa_s,
+        horizontal_at_3d_cpa_km=proximity3d.horizontal_at_3d_cpa_km,
+        vertical_at_3d_cpa_m=proximity3d.vertical_at_3d_cpa_m,
+        three_d_available=proximity3d.available,
+        observer_altitude_known=proximity3d.observer_altitude_known,
+        altitude_confidence=proximity3d.altitude_confidence,
+        altitude_uncertainty_m=proximity3d.altitude_uncertainty_m,
+        altitude_relevance_applied=altitude_suppressed,
+        altitude_relevance_reason=proximity3d.reason,
     )
 
 
