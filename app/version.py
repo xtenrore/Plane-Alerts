@@ -15,9 +15,10 @@ VERSION = "5.3.0"
 # v5.2 adds shadow-only automatic evaluation and release-to-release metrics.
 # v5.2.1 corrects release documentation/identity only; the physical model and
 # v5.2 evaluator behavior are unchanged.
-# v5.3 reuses observer-independent aircraft motion across users and adds bounded
-# spatial candidate filtering. The authoritative physical model is unchanged.
-PREDICTION_VERSION = "5.1-3d-proximity"
+# v5.3 reuses observer-independent aircraft motion across users, adds bounded
+# spatial candidate filtering, and preserves provider-reported position age in
+# the authoritative midpoint ETA correction.
+PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
 def _runtime_commit() -> str:
