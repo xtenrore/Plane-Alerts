@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Any, Iterable
 
+from pymongo import UpdateOne
+
 from app.version import PREDICTION_VERSION, VERSION
 
 EVALUATION_SCHEMA = "plane-alerts-shadow-evaluation-v52"
@@ -38,6 +40,18 @@ def feature_flags() -> dict[str, bool]:
         "evaluation_enabled": _flag("PLANE_SHADOW_EVALUATION_ENABLED", True),
         "v46_linear_enabled": _flag("PLANE_SHADOW_V46_LINEAR_ENABLED", True),
         "v46_turn_enabled": _flag("PLANE_SHADOW_V46_TURN_ENABLED", True),
+    }
+
+
+def _snapshot_flags(snapshot: dict[str, Any]) -> dict[str, bool]:
+    """Use the flags that were in force when the prediction was captured."""
+    current = feature_flags()
+    stored = snapshot.get("shadow_feature_flags")
+    if not isinstance(stored, dict):
+        return current
+    return {
+        key: bool(stored.get(key, current[key]))
+        for key in current
     }
 
 
@@ -87,7 +101,7 @@ def _control_model(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _shadow_models(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    flags = feature_flags()
+    flags = _snapshot_flags(snapshot)
     diagnostics = snapshot.get("diagnostics") if isinstance(snapshot.get("diagnostics"), dict) else {}
     v46 = diagnostics.get("v46") if isinstance(diagnostics.get("v46"), dict) else {}
     out: list[dict[str, Any]] = []
@@ -123,10 +137,12 @@ def _scoreable_truth(snapshot: dict[str, Any], outcome: dict[str, Any]) -> dict[
     observed = _number(outcome.get("observed_closest_km"))
     radius = _number(snapshot.get("alert_radius_km"))
     captured = _utc(snapshot.get("captured_at"))
-    resolved = _utc(outcome.get("captured_at"))
-    if observed is None or radius is None or captured is None or resolved is None:
+    closest_at = _utc(outcome.get("observed_closest_at"))
+    resolved_at = _utc(outcome.get("captured_at"))
+    event_at = closest_at or resolved_at
+    if observed is None or radius is None or captured is None or event_at is None:
         return None
-    actual_eta = (resolved - captured).total_seconds()
+    actual_eta = (event_at - captured).total_seconds()
     if actual_eta < 0 or actual_eta > 3600:
         actual_eta = None
     outcome_type = str(outcome.get("outcome") or "")
@@ -138,6 +154,7 @@ def _scoreable_truth(snapshot: dict[str, Any], outcome: dict[str, Any]) -> dict[
     return {
         "observed_closest_km": observed,
         "actual_eta_s": actual_eta,
+        "actual_eta_basis": "observed_closest_at" if closest_at is not None else "outcome_resolution_at",
         "actual_positive": actual_positive,
         "outcome": outcome_type,
         "outcome_basis": str(outcome.get("outcome_basis") or ""),
@@ -146,14 +163,15 @@ def _scoreable_truth(snapshot: dict[str, Any], outcome: dict[str, Any]) -> dict[
 
 def evaluate_snapshot_outcome(snapshot: dict[str, Any], outcome: dict[str, Any]) -> list[dict[str, Any]]:
     """Evaluate production and shadow predictions against one scoreable outcome."""
-    if not feature_flags()["evaluation_enabled"]:
+    flags = _snapshot_flags(snapshot)
+    if not flags["evaluation_enabled"]:
         return []
     truth = _scoreable_truth(snapshot, outcome)
     if truth is None:
         return []
 
     snapshot_at = _utc(snapshot.get("captured_at"))
-    release_version = str(snapshot.get("release_version") or snapshot.get("plane_version") or VERSION)
+    release_version = str(snapshot.get("release_version") or snapshot.get("plane_version") or "pre-v5.2-unversioned")
     source_id = str(snapshot.get("_id") or snapshot.get("record_id") or "")
     outcome_id = str(outcome.get("_id") or outcome.get("record_id") or "")
     rows: list[dict[str, Any]] = []
@@ -162,6 +180,7 @@ def evaluate_snapshot_outcome(snapshot: dict[str, Any], outcome: dict[str, Any])
         eta = _number(model.get("eta_s"))
         predicted_positive = bool(model.get("enters_radius"))
         actual_positive = bool(truth["actual_positive"])
+        classification_correct = predicted_positive == actual_positive
         confidence = _number(model.get("confidence_score"))
         evaluation_key = "|".join((source_id, outcome_id, str(model["model_id"]), str(snapshot_at)))
         row = {
@@ -177,21 +196,29 @@ def evaluate_snapshot_outcome(snapshot: dict[str, Any], outcome: dict[str, Any])
             "outcome_at": _utc(outcome.get("captured_at")),
             "horizon_bucket": str(snapshot.get("horizon_bucket") or _horizon_bucket(eta)),
             "coverage_mode": str(snapshot.get("coverage_mode") or "unknown"),
+            "shadow_feature_flags": flags,
             "predicted_cpa_km": cpa,
             "observed_closest_km": truth["observed_closest_km"],
             "cpa_error_km": abs(cpa - truth["observed_closest_km"]) if cpa is not None else None,
             "predicted_eta_s": eta,
             "actual_eta_s": truth["actual_eta_s"],
+            "actual_eta_basis": truth["actual_eta_basis"],
             "eta_error_s": abs(eta - truth["actual_eta_s"]) if eta is not None and truth["actual_eta_s"] is not None else None,
             "predicted_positive": predicted_positive,
             "actual_positive": actual_positive,
+            "classification_correct": classification_correct,
             "false_positive": predicted_positive and not actual_positive,
             "false_negative": (not predicted_positive) and actual_positive,
             "alert_lead_time_s": truth["actual_eta_s"] if predicted_positive else None,
             "confidence_score": confidence,
-            "confidence_brier": (confidence - (1.0 if actual_positive else 0.0)) ** 2 if confidence is not None else None,
+            # v4.6 confidence describes reliability of the prediction, not the
+            # probability that the aircraft will pass. Calibrate it against
+            # classification correctness rather than against pass/no-pass.
+            "confidence_brier": (confidence - (1.0 if classification_correct else 0.0)) ** 2 if confidence is not None else None,
             "outcome": truth["outcome"],
             "outcome_basis": truth["outcome_basis"],
+            # Cancellation accuracy is deliberately unavailable until the
+            # lifecycle emits a separately coverage-validated resolved negative.
             "cancellation_scoreable": truth["outcome"] in {"cancelled_resolved", "resolved_negative"},
             "cancellation_correct": (
                 (not predicted_positive) and (not actual_positive)
@@ -226,14 +253,19 @@ def summarize_evaluations(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         cancellation_correct = sum(bool(item.get("cancellation_correct")) for item in cancellation_rows)
         horizons: dict[str, int] = defaultdict(int)
         coverage: dict[str, int] = defaultdict(int)
+        eta_bases: dict[str, int] = defaultdict(int)
         for item in items:
             horizons[str(item.get("horizon_bucket") or "unknown")] += 1
             coverage[str(item.get("coverage_mode") or "unknown")] += 1
+            if item.get("actual_eta_s") is not None:
+                eta_bases[str(item.get("actual_eta_basis") or "unknown")] += 1
         models.append({
             "release_version": release,
             "model_id": model_id,
             "model_role": str(items[0].get("model_role") or "unknown"),
             "samples": len(items),
+            "positive_samples": actual_pos,
+            "negative_samples": actual_neg,
             "cpa_mae_km": _avg(item.get("cpa_error_km") for item in items),
             "eta_mae_s": _avg(item.get("eta_error_s") for item in items),
             "false_positive_rate": round(fp / actual_neg, 4) if actual_neg else None,
@@ -246,6 +278,7 @@ def summarize_evaluations(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "confidence_brier_mean": _avg(item.get("confidence_brier") for item in items),
             "horizon_counts": dict(sorted(horizons.items())),
             "coverage_modes": dict(sorted(coverage.items())),
+            "eta_basis_counts": dict(sorted(eta_bases.items())),
         })
     return {
         "schema": EVALUATION_SCHEMA,
@@ -270,15 +303,20 @@ def promotion_assessment(
     horizons = candidate_metrics.get("horizon_counts") if isinstance(candidate_metrics.get("horizon_counts"), dict) else {}
     represented = sum(1 for count in horizons.values() if int(count or 0) >= 5)
     safety_regression = False
+    safety_rates_comparable = True
     for key in ("false_positive_rate", "false_negative_rate"):
         candidate = _number(candidate_metrics.get(key))
         control = _number(control_metrics.get(key))
-        if candidate is not None and control is not None and candidate > control + 0.02:
+        if candidate is None or control is None:
+            safety_rates_comparable = False
+            continue
+        if candidate > control + 0.02:
             safety_regression = True
     requirements = {
         "enough_samples": samples >= max(1, int(min_samples)),
         "representative_coverage": represented >= 2,
-        "no_major_safety_regression": not safety_regression,
+        "safety_rates_comparable": safety_rates_comparable,
+        "no_major_safety_regression": safety_rates_comparable and not safety_regression,
         "replay_success": bool(replay_success),
         "live_shadow_success": bool(live_shadow_success),
     }
@@ -296,41 +334,51 @@ async def evaluate_live_outcome(db: Any, outcome: dict[str, Any]) -> int:
     if not feature_flags()["evaluation_enabled"] or not bool(outcome.get("scoreable")):
         return 0
     captured = _utc(outcome.get("captured_at"))
-    if captured is None:
+    event_at = _utc(outcome.get("observed_closest_at")) or captured
+    if captured is None or event_at is None:
         return 0
     query = {
         "kind": "prediction",
         "user_id": outcome.get("user_id"),
         "aircraft_icao24": str(outcome.get("aircraft_icao24") or ""),
-        "captured_at": {"$gte": captured - timedelta(minutes=LIVE_LOOKBACK_MINUTES), "$lte": captured},
+        "captured_at": {"$gte": event_at - timedelta(minutes=LIVE_LOOKBACK_MINUTES), "$lte": event_at},
     }
     cursor = db["prediction_lab_audit"].find(query).sort("captured_at", -1).limit(MAX_LIVE_SNAPSHOTS)
     snapshots = [dict(doc) async for doc in cursor]
-    writes = 0
     now = datetime.now(timezone.utc)
+    operations: list[UpdateOne] = []
     for snapshot in snapshots:
         for row in evaluate_snapshot_outcome(snapshot, outcome):
             row["evaluated_at"] = now
             row["expires_at"] = now + timedelta(days=EVALUATION_TTL_DAYS)
-            await db[EVALUATION_COLLECTION].update_one(
-                {"evaluation_id": row["evaluation_id"]},
-                {"$set": row},
-                upsert=True,
+            operations.append(
+                UpdateOne(
+                    {"evaluation_id": row["evaluation_id"]},
+                    {"$set": row},
+                    upsert=True,
+                )
             )
-            writes += 1
-    return writes
+    if not operations:
+        return 0
+    # One bounded Mongo command per resolved outcome avoids turning a scoreable
+    # pass into dozens of sequential optional writes.
+    await db[EVALUATION_COLLECTION].bulk_write(operations, ordered=False)
+    return len(operations)
 
 
 def evaluate_replay_cases(cases: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Pure deterministic replay evaluator used by CI and offline tooling."""
     rows: list[dict[str, Any]] = []
     skipped = 0
+    input_cases = 0
     for case in cases:
+        input_cases += 1
         evaluated = evaluate_snapshot_outcome(dict(case.get("snapshot") or {}), dict(case.get("outcome") or {}))
         if not evaluated:
             skipped += 1
         rows.extend(evaluated)
     summary = summarize_evaluations(rows)
-    summary["replay_cases"] = len(rows)
+    summary["input_cases"] = input_cases
+    summary["evaluation_rows"] = len(rows)
     summary["skipped_unscoreable_cases"] = skipped
     return summary
