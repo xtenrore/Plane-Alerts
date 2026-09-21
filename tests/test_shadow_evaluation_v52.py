@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,7 +47,7 @@ def test_shadow_feature_flags_default_to_shadow_only_enabled(monkeypatch):
 def test_snapshot_exposes_control_and_two_candidates_without_promotion():
     snapshot = _cases()[0]["snapshot"]
     models = models_for_snapshot(snapshot)
-    assert [item["model_role"] for item in models] == [
+    assert [item["role"] for item in models] == [
         "production-control",
         "shadow-candidate",
         "shadow-candidate",
