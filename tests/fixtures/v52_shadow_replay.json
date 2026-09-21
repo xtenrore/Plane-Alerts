@@ -1,0 +1,118 @@
+[
+  {
+    "name": "nearby observed pass",
+    "snapshot": {
+      "_id": "snap-1",
+      "release_version": "5.2.0",
+      "prediction_version": "5.1-3d-proximity",
+      "captured_at": "2026-09-21T05:00:00+00:00",
+      "aircraft_icao24": "abc001",
+      "user_id": 1,
+      "alert_radius_km": 9.0,
+      "projected_closest_km": 5.0,
+      "time_to_cpa_s": 120.0,
+      "enters_alert_radius": true,
+      "confidence_score": 0.82,
+      "horizon_bucket": "0-10m",
+      "coverage_mode": "regional_adsb_current_predictor",
+      "diagnostics": {
+        "v46": {
+          "linear_shadow": {"model_version": "4.6-turn-shadow-1", "mode": "linear", "cpa_km": 6.0, "eta_s": 130.0, "enters_radius": true},
+          "turn_shadow": {"model_version": "4.6-turn-shadow-1", "mode": "turn-aware", "cpa_km": 4.4, "eta_s": 118.0, "enters_radius": true}
+        }
+      }
+    },
+    "outcome": {
+      "_id": "out-1",
+      "outcome": "passed",
+      "outcome_basis": "observed_in_radius_pass",
+      "scoreable": true,
+      "captured_at": "2026-09-21T05:02:00+00:00",
+      "observed_closest_km": 4.2
+    }
+  },
+  {
+    "name": "positive pass exposes false negative",
+    "snapshot": {
+      "_id": "snap-2",
+      "release_version": "5.2.0",
+      "prediction_version": "5.1-3d-proximity",
+      "captured_at": "2026-09-21T05:10:00+00:00",
+      "aircraft_icao24": "abc002",
+      "user_id": 1,
+      "alert_radius_km": 9.0,
+      "projected_closest_km": 11.0,
+      "time_to_cpa_s": 720.0,
+      "enters_alert_radius": false,
+      "confidence_score": 0.65,
+      "horizon_bucket": "10-30m",
+      "coverage_mode": "regional_adsb_current_predictor",
+      "diagnostics": {
+        "v46": {
+          "linear_shadow": {"model_version": "4.6-turn-shadow-1", "mode": "linear", "cpa_km": 10.0, "eta_s": 600.0, "enters_radius": false},
+          "turn_shadow": {"model_version": "4.6-turn-shadow-1", "mode": "turn-aware", "cpa_km": 7.0, "eta_s": 590.0, "enters_radius": true}
+        }
+      }
+    },
+    "outcome": {
+      "_id": "out-2",
+      "outcome": "passed",
+      "outcome_basis": "observed_in_radius_pass",
+      "scoreable": true,
+      "captured_at": "2026-09-21T05:20:00+00:00",
+      "observed_closest_km": 5.0
+    }
+  },
+  {
+    "name": "unresolved cancellation is never scored",
+    "snapshot": {
+      "_id": "snap-3",
+      "release_version": "5.2.0",
+      "prediction_version": "5.1-3d-proximity",
+      "captured_at": "2026-09-21T05:30:00+00:00",
+      "aircraft_icao24": "abc003",
+      "user_id": 1,
+      "alert_radius_km": 9.0,
+      "projected_closest_km": 15.0,
+      "time_to_cpa_s": 200.0,
+      "enters_alert_radius": false,
+      "confidence_score": 0.70,
+      "coverage_mode": "regional_adsb_current_predictor",
+      "diagnostics": {}
+    },
+    "outcome": {
+      "_id": "out-3",
+      "outcome": "cancelled",
+      "outcome_basis": "lifecycle_transition_only",
+      "scoreable": false,
+      "captured_at": "2026-09-21T05:31:00+00:00",
+      "observed_closest_km": 12.0
+    }
+  },
+  {
+    "name": "missing coverage remains unresolved",
+    "snapshot": {
+      "_id": "snap-4",
+      "release_version": "5.2.0",
+      "prediction_version": "5.1-3d-proximity",
+      "captured_at": "2026-09-21T06:00:00+00:00",
+      "aircraft_icao24": "abc004",
+      "user_id": 1,
+      "alert_radius_km": 9.0,
+      "projected_closest_km": 6.0,
+      "time_to_cpa_s": 1500.0,
+      "enters_alert_radius": true,
+      "confidence_score": 0.60,
+      "coverage_mode": "regional_adsb_missing_after_prediction",
+      "diagnostics": {}
+    },
+    "outcome": {
+      "_id": "out-4",
+      "outcome": "coverage_lost",
+      "outcome_basis": "missing_adsb_coverage",
+      "scoreable": false,
+      "captured_at": "2026-09-21T06:25:00+00:00",
+      "observed_closest_km": 6.0
+    }
+  }
+]
