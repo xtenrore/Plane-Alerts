@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -114,6 +115,7 @@ def test_windows_dependency_lock_excludes_uvloop_only_on_windows():
     assert 'uvloop==0.22.1; platform_system != "Windows"' in lock
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell syntax is gated on Linux CI; Windows CI gates the .bat entry points natively")
 def test_shell_entrypoints_parse_and_are_agy_free():
     for name in ("setup-linux.sh", "setup-linux-arm64.sh", "setup-raspberry-pi.sh"):
         path = ROOT / name
