@@ -110,7 +110,7 @@ def test_midpoint_step_uses_average_speed_and_heading():
     assert midpoint_heading == pytest.approx(0.5)
 
 
-def test_midpoint_predictor_keeps_fresh_in_radius_presence_authoritative():
+def test_midpoint_predictor_marks_observed_in_radius_receding_motion_as_passed():
     samples = [
         HistorySample(
             timestamp=100.0,
@@ -127,6 +127,37 @@ def test_midpoint_predictor_keeps_fresh_in_radius_presence_authoritative():
             altitude_m=3000.0,
             speed_kts=260.0,
             heading_deg=0.0,
+        ),
+    ]
+    prediction = predict_trajectory_v43(
+        samples,
+        0.0,
+        0.0,
+        9.0,
+        now=110.0,
+    )
+    assert prediction.current_distance_km < 9.0
+    assert prediction.already_passed
+    assert prediction.state == "Passed"
+
+
+def test_midpoint_predictor_keeps_fresh_approaching_in_radius_presence_authoritative():
+    samples = [
+        HistorySample(
+            timestamp=100.0,
+            latitude=0.055,
+            longitude=0.0,
+            altitude_m=3000.0,
+            speed_kts=260.0,
+            heading_deg=180.0,
+        ),
+        HistorySample(
+            timestamp=110.0,
+            latitude=0.045,
+            longitude=0.0,
+            altitude_m=3000.0,
+            speed_kts=260.0,
+            heading_deg=180.0,
         ),
     ]
     prediction = predict_trajectory_v43(
