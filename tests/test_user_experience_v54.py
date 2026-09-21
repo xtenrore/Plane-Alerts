@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import inspect
 
+import app.main as main_runtime
 from app.aircraft.registry import CATEGORY_LABELS
-from app.bot import next60_web, profile_handlers
+from app.bot import next60_web
 from app.bot import profile_experience_v54 as ux
 from app.profile_presets_v54 import PRESETS, apply_preset, get_preset
 from app.version import PREDICTION_VERSION, VERSION
@@ -75,12 +76,15 @@ def test_local_sdr_preset_does_not_claim_to_enable_a_provider():
     assert config["preferences"]["aircraft_filter"]["mode"] == "all"
 
 
-def test_guided_profile_layer_is_installed_before_legacy_handlers():
-    assert getattr(profile_handlers, "_v54_installed", False) is True
-    source = inspect.getsource(ux.register_v54_handlers)
-    assert "group = -40" in source
-    assert 'CommandHandler("profiles"' in source
-    assert 'CommandHandler("preferences"' in source
+def test_guided_profile_layer_is_explicit_and_before_legacy_handlers():
+    ux_source = inspect.getsource(ux.register_v54_handlers)
+    main_source = inspect.getsource(main_runtime)
+    assert "group = -40" in ux_source
+    assert 'CommandHandler("profiles"' in ux_source
+    assert 'CommandHandler("preferences"' in ux_source
+    assert "register_v54_handlers(telegram_app)" in main_source
+    assert main_source.index("register_v54_handlers(telegram_app)") < main_source.index("register_profile_handlers(telegram_app)")
+    assert "install_v54_profile_experience" not in inspect.getsource(ux)
 
 
 def test_profile_navigation_has_quick_custom_back_cancel_close_and_status():
@@ -116,9 +120,11 @@ def test_new_callback_data_and_button_labels_fit_telegram():
 
 
 def test_next60_mini_app_uses_plane_alerts_branding():
-    assert "Plane Alerts · Next 60" in next60_web.NEXT60_HTML
-    assert "PLANE ALERTS · FORECAST" in next60_web.NEXT60_HTML
-    assert "Plane? Telegram bot" not in next60_web.NEXT60_HTML
+    branded = ux.brand_next60_html_v54(next60_web.NEXT60_HTML)
+    assert "Plane Alerts · Next 60" in branded
+    assert "PLANE ALERTS · FORECAST" in branded
+    assert "Plane? Telegram bot" not in branded
+    assert main_runtime.NEXT60_HTML == branded
 
 
 def test_preset_module_has_no_prediction_or_network_dependency():
