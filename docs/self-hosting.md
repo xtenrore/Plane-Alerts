@@ -291,7 +291,11 @@ Docker Compose remains MongoDB-based. The guided installer is the recommended v5
 
 ## Reporting a problem
 
-Use the GitHub issue templates and include:
+Open the public Plane Alerts issue form at:
+
+https://github.com/xtenrore/Plane-Alerts/issues/new/choose
+
+Include:
 
 - release tag and commit;
 - operating system and architecture;
