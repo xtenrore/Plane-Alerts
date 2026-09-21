@@ -2,6 +2,32 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.4.2 — General Reliability Audit Fixes
+
+- Fixed first-time setup so monitoring is enabled only after a successful coherent profile save.
+- Preserved per-user last-known-good monitoring configuration across partial profile materialization and added cold-start repair from the authoritative active profile.
+- Made blank optional `ADMIN_TELEGRAM_ID` valid while keeping invalid nonnumeric values rejected.
+- Made sensitive admin APIs fail closed when `ADMIN_PASSWORD` is blank.
+- Changed Compose rollout health to `/ready` and aligned self-hosting readiness documentation.
+- Explicitly installed the v4.6 Telegram interaction layer in fresh production runtime composition.
+- Reconnected nonblocking observer-elevation enrichment to the cached live-user path and bound persistence to the exact saved coordinates.
+- Bound preset Save callbacks to one persisted draft session so stale/duplicate buttons cannot create or activate the wrong profile.
+- Preserved absolute age for historical photography snapshots and prevented stale snapshots from generating current shooting countdowns.
+- Reused the canonical aircraft filter for untargeted `/photo` selection.
+- Added effective inherited altitude-rule contradiction validation.
+- Updated help, photography and admin product-version displays to the canonical release identity.
+- Added dedicated v5.4.2 audit regressions; physical prediction remains `5.3-3d-proximity-age-aware`.
+
+## v5.4.1 — AGY Reliability Hotfix
+
+- Preserved durable AGY quota holds across restart/deploy, enable changes, force tokens, tooling migration and recovery paths.
+- Made unknown quota-reset wording remain blocked and kept the required ten-minute guard after verified reset deadlines.
+- Isolated AGY Mongo context failures per collection and exposed per-collection cache freshness.
+- Corrected AGY profile context to the authoritative `profiles` collection.
+- Made findings pagination lossless for sequential consumers.
+- Added offline AGY regressions without launching inference or introducing paid-credit usage.
+- Physical prediction remains `5.3-3d-proximity-age-aware`.
+
 ## v5.4.0 — User Experience & Presets
 
 - Added six editable profile presets: Casual Observer, Aircraft Photographer, Airport-Adjacent, Rare Aircraft Hunter, Military Watcher, and Local SDR Mode.
