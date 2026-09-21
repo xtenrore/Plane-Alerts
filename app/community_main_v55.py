@@ -2,8 +2,10 @@
 
 The owner's AGY tooling remains in the repository for private development, but
 community services must never import, register, start, call or authenticate it.
-This module stubs the sole runtime console import before loading app.main and
-filters the private Telegram command from the command menu.
+This module stubs the sole runtime console import before loading app.main,
+filters the private Telegram command, and applies community-only local receiver
+coverage relevance using a receiver location that remains separate from user
+Telegram profile locations.
 """
 from __future__ import annotations
 
@@ -19,6 +21,10 @@ from telegram import Bot
 _stub = ModuleType("app.agy_console")
 _stub.register_agy_console_handlers = lambda application: None  # type: ignore[attr-defined]
 sys.modules["app.agy_console"] = _stub
+
+from app.local_adsb_coverage_v55 import install_local_receiver_coverage_guard  # noqa: E402
+
+install_local_receiver_coverage_guard()
 
 _original_set_my_commands = Bot.set_my_commands
 
