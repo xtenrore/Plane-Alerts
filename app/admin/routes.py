@@ -38,7 +38,6 @@ router = admin_router
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Optional HTTP Basic auth
 _security = HTTPBasic(auto_error=False)
 _start_time = time.time()
 
@@ -46,10 +45,9 @@ _start_time = time.time()
 async def _check_auth(
     credentials: HTTPBasicCredentials | None = Depends(_security),
 ) -> None:
-    """Check admin password if one is configured."""
-    if not settings.admin_password:
-        return  # No password set — open or protected by firewall/reverse proxy
-    if credentials is None or credentials.password != settings.admin_password:
+    """Require configured HTTP Basic authentication for legacy admin routes."""
+    configured = settings.admin_password.strip()
+    if not configured or credentials is None or credentials.password != configured:
         raise HTTPException(
             status_code=401,
             detail="Unauthorized",
@@ -79,14 +77,9 @@ async def _get_effective_cycle_stats() -> dict[str, Any]:
     return stats
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STATIC ASSETS (HTML / CSS / JS)
-# ═══════════════════════════════════════════════════════════════════════════
-
 @admin_router.api_route("", methods=["GET", "HEAD"], response_class=FileResponse, include_in_schema=False)
 @admin_router.api_route("/", methods=["GET", "HEAD"], response_class=FileResponse, include_in_schema=False)
 async def serve_admin_index() -> FileResponse:
-    """Serve admin HTML dashboard."""
     html_file = STATIC_DIR / "admin.html"
     if not html_file.exists():
         raise HTTPException(status_code=404, detail="Admin dashboard HTML not found")
@@ -95,7 +88,6 @@ async def serve_admin_index() -> FileResponse:
 
 @admin_router.api_route("/admin.css", methods=["GET", "HEAD"], response_class=FileResponse, include_in_schema=False)
 async def serve_admin_css() -> FileResponse:
-    """Serve admin CSS stylesheet."""
     css_file = STATIC_DIR / "admin.css"
     if not css_file.exists():
         raise HTTPException(status_code=404, detail="admin.css not found")
@@ -104,21 +96,15 @@ async def serve_admin_css() -> FileResponse:
 
 @admin_router.api_route("/admin.js", methods=["GET", "HEAD"], response_class=FileResponse, include_in_schema=False)
 async def serve_admin_js() -> FileResponse:
-    """Serve admin JavaScript logic."""
     js_file = STATIC_DIR / "admin.js"
     if not js_file.exists():
         raise HTTPException(status_code=404, detail="admin.js not found")
     return FileResponse(js_file, media_type="application/javascript")
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# OVERVIEW
-# ═══════════════════════════════════════════════════════════════════════════
-
 @admin_router.get("/overview")
 @admin_router.get("/api/overview")
 async def admin_overview(_: None = Depends(_check_auth)) -> dict[str, Any]:
-    """High-level system overview."""
     total_users = 0
     active_users = 0
     total_notifications = 0
@@ -132,7 +118,6 @@ async def admin_overview(_: None = Depends(_check_auth)) -> dict[str, Any]:
 
     cycle_stats = await _get_effective_cycle_stats()
 
-    # Memory usage
     try:
         import psutil  # type: ignore[import-untyped]
         process = psutil.Process()
@@ -152,23 +137,16 @@ async def admin_overview(_: None = Depends(_check_auth)) -> dict[str, Any]:
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# USERS
-# ═══════════════════════════════════════════════════════════════════════════
-
 @admin_router.get("/users")
 @admin_router.get("/api/users")
 async def admin_users(_: None = Depends(_check_auth)) -> list[dict[str, Any]]:
-    """List all registered users with their locations and preferences."""
     users = []
     try:
         cursor = users_col().find({}).sort("created_at", -1)
         async for doc in cursor:
             user_id = doc["user_id"]
-
             loc = await locations_col().find_one({"user_id": user_id})
             prefs = await preferences_col().find_one({"user_id": user_id})
-
             users.append({
                 "user_id": user_id,
                 "username": doc.get("username", ""),
@@ -190,53 +168,30 @@ async def admin_users(_: None = Depends(_check_auth)) -> list[dict[str, Any]]:
             })
     except Exception as exc:
         logger.debug("Could not fetch users list from DB: %s", exc)
-
     return users
 
 
 @admin_router.post("/user/{user_id}/toggle")
 @admin_router.post("/api/user/{user_id}/toggle")
-async def admin_toggle_user(
-    user_id: int,
-    _: None = Depends(_check_auth),
-) -> dict[str, Any]:
-    """Toggle a user's setup_complete status (enable/disable monitoring)."""
+async def admin_toggle_user(user_id: int, _: None = Depends(_check_auth)) -> dict[str, Any]:
     doc = await users_col().find_one({"user_id": user_id})
     if not doc:
         raise HTTPException(status_code=404, detail="User not found")
-
     new_status = not doc.get("setup_complete", False)
-    await users_col().update_one(
-        {"user_id": user_id},
-        {"$set": {"setup_complete": new_status}},
-    )
-
+    await users_col().update_one({"user_id": user_id}, {"$set": {"setup_complete": new_status}})
     return {"user_id": user_id, "setup_complete": new_status}
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PROVIDERS
-# ═══════════════════════════════════════════════════════════════════════════
 
 @admin_router.get("/providers")
 @admin_router.get("/api/providers")
 async def admin_providers(_: None = Depends(_check_auth)) -> dict[str, Any]:
-    """Provider health and request counts."""
     pm = get_provider_manager()
-    return {
-        "providers": pm.get_all_provider_status(),
-        "ai_usage": ai_judge.get_usage_report(),
-    }
+    return {"providers": pm.get_all_provider_status(), "ai_usage": ai_judge.get_usage_report()}
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# API KEYS
-# ═══════════════════════════════════════════════════════════════════════════
 
 @admin_router.get("/keys")
 @admin_router.get("/api/keys")
 async def admin_keys(_: None = Depends(_check_auth)) -> dict[str, Any]:
-    """OpenSky API key rotation status."""
     status = opensky_key_manager.get_status()
     return {
         "total_keys": status.total_keys,
@@ -246,25 +201,15 @@ async def admin_keys(_: None = Depends(_check_auth)) -> dict[str, Any]:
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# NOTIFICATIONS
-# ═══════════════════════════════════════════════════════════════════════════
-
 @admin_router.get("/notifications")
 @admin_router.get("/api/notifications")
 async def admin_notifications(
     limit: int = Query(default=50, le=200),
     _: None = Depends(_check_auth),
 ) -> list[dict[str, Any]]:
-    """Recent notification history."""
     results = []
     try:
-        cursor = (
-            notification_history_col()
-            .find({})
-            .sort("notified_at", -1)
-            .limit(limit)
-        )
+        cursor = notification_history_col().find({}).sort("notified_at", -1).limit(limit)
         async for doc in cursor:
             results.append({
                 "user_id": doc.get("user_id"),
@@ -276,21 +221,13 @@ async def admin_notifications(
             })
     except Exception as exc:
         logger.debug("Could not fetch notifications from DB: %s", exc)
-
     return results
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SYSTEM
-# ═══════════════════════════════════════════════════════════════════════════
 
 @admin_router.get("/system")
 @admin_router.get("/api/system")
 async def admin_system(_: None = Depends(_check_auth)) -> dict[str, Any]:
-    """System info: worker stats, database stats, platform info."""
     cycle_stats = await _get_effective_cycle_stats()
-
-    # Database stats
     try:
         db_stats = {
             "users": await users_col().count_documents({}),
