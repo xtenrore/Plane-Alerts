@@ -1,4 +1,4 @@
-"""Authentication helpers for Plane? v3.6 delegated administration."""
+"""Authentication helpers for Plane Alerts delegated administration."""
 from __future__ import annotations
 
 import base64
@@ -59,11 +59,25 @@ async def delegated_admin_user(token: str) -> int | None:
     return user_id
 
 
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": "Basic"},
+    )
+
+
 async def get_admin_actor(request: Request) -> dict[str, Any]:
-    """Return root/delegated actor metadata for v3.6 mutation endpoints."""
+    """Return root/delegated actor metadata for administration endpoints."""
     delegated_id = getattr(request.state, "delegated_admin_user_id", None)
     if delegated_id is not None:
         return {"root": False, "kind": "delegated", "user_id": int(delegated_id)}
+
+    configured = settings.admin_password.strip()
+    if not configured:
+        # Fail closed. Self-hosted deployments may expose the application port;
+        # an empty password must never turn that into anonymous root access.
+        raise _unauthorized()
 
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("basic "):
@@ -72,17 +86,10 @@ async def get_admin_actor(request: Request) -> dict[str, Any]:
             _, password = decoded.split(":", 1)
         except Exception:
             password = ""
-        configured = settings.admin_password
-        if configured and hmac.compare_digest(password, configured):
+        if hmac.compare_digest(password, configured):
             return {"root": True, "kind": "root", "user_id": None}
-        if not configured:
-            return {"root": True, "kind": "root-open", "user_id": None}
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized",
-        headers={"WWW-Authenticate": "Basic"},
-    )
+    raise _unauthorized()
 
 
 def require_root(actor: dict[str, Any]) -> None:
@@ -94,7 +101,7 @@ class DelegatedAdminMiddleware(BaseHTTPMiddleware):
     """Translate valid bearer admin links into the dashboard's existing Basic auth.
 
     Existing /admin endpoints remain unchanged. A delegated admin presents the
-    signed bearer token from the v3.6 admin link; after revocation the users
+    signed bearer token from the administration link; after revocation the users
     collection check fails immediately.
     """
 
