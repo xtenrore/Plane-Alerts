@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _INSTALLED = False
 _ORIGINAL_MATERIALIZE_PROFILE = None
 _ORIGINAL_LOAD_ACTIVE_USERS = None
+_ORIGINAL_QUEUE_OBSERVER_ELEVATION = None
 
 
 def _memory_state_id(user_id: int, icao24: str) -> str:
@@ -186,7 +187,7 @@ async def _get_active_users_cached() -> list[dict[str, Any]]:
     users = storage_runtime.active_users()
     for user in users:
         try:
-            _queue_observer_elevation_cached(int(user["user_id"]), user.get("location") or {})
+            monitor._queue_observer_elevation(int(user["user_id"]), user.get("location") or {})
         except Exception:
             logger.debug("observer_elevation_queue_failed", exc_info=True)
     return users
@@ -282,13 +283,15 @@ async def _materialize_profile_invalidating(profile: dict[str, Any]) -> None:
 
 
 def install_storage_guard_v48() -> None:
-    global _INSTALLED, _ORIGINAL_MATERIALIZE_PROFILE, _ORIGINAL_LOAD_ACTIVE_USERS
+    global _INSTALLED, _ORIGINAL_MATERIALIZE_PROFILE, _ORIGINAL_LOAD_ACTIVE_USERS, _ORIGINAL_QUEUE_OBSERVER_ELEVATION
     if _INSTALLED:
         return
 
     _ORIGINAL_LOAD_ACTIVE_USERS = storage_runtime._load_active_users  # noqa: SLF001
     storage_runtime._load_active_users = _load_active_users_coherent  # type: ignore[method-assign]
 
+    _ORIGINAL_QUEUE_OBSERVER_ELEVATION = monitor._queue_observer_elevation
+    monitor._queue_observer_elevation = _queue_observer_elevation_cached
     monitor._get_active_users = _get_active_users_cached
     cadence._prefetch_approach_states = _prefetch_approach_states_cached
     cadence._ApproachStatesCollectionProxy.update_one = _approach_update_cached
