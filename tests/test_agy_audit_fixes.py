@@ -68,6 +68,34 @@ def test_entrypoint_overrides_never_erase_quota_hold(tmp_path: Path, persisted: 
         assert result["last_force_run_token"] == force_token
 
 
+def test_entrypoint_explicit_disable_wins_without_erasing_quota_state(tmp_path: Path):
+    state_dir = tmp_path / "state"
+    supervisor_path = state_dir / "prediction-lab" / "supervisor.json"
+    supervisor_path.parent.mkdir(parents=True)
+    persisted = {
+        "enabled": True,
+        "last_status": "quota_wait",
+        "next_run_at": 9_999_999_999,
+        "last_force_run_token": "keep-token",
+    }
+    supervisor_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path / "home")
+    env["AGY_STATE_DIR"] = str(state_dir)
+    env["AGY_GOAL_ENABLED"] = "false"
+    env["AGY_FORCE_RUN_TOKEN"] = "new-token-must-not-be-consumed"
+    env.pop("AGY_GOAL", None)
+
+    subprocess.run([sys.executable, "-c", _entrypoint_python()], env=env, check=True, capture_output=True, text=True)
+
+    result = json.loads(supervisor_path.read_text(encoding="utf-8"))
+    assert result["enabled"] is False
+    assert result["last_status"] == "quota_wait"
+    assert result["next_run_at"] == 9_999_999_999
+    assert result["last_force_run_token"] == "keep-token"
+
+
 def test_compound_quota_duration_uses_complete_duration_and_guard(monkeypatch):
     now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(agy_worker, "_utcnow", lambda: now)
