@@ -89,6 +89,9 @@ jobs:
       - name: Replay v5.2 shadow evaluation fixtures
         run: python scripts/evaluate_v52_shadow_replay.py
 
+      - name: Run v5.3 multi-user scale and isolation suite
+        run: pytest -q tests/test_scale_v53.py tests/test_v35_shared_polling.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -125,6 +128,9 @@ jobs:
       - name: Benchmark v5.2 shadow evaluation overhead
         run: python scripts/benchmark_v52_shadow_eval.py
 
+      - name: Benchmark v5.3 multi-location scale path
+        run: python scripts/benchmark_v53_scale.py
+
       - name: Verify dependency consistency
         run: pip check
 
@@ -147,19 +153,19 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build fresh amd64 image
-        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v52 .
+        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v53 .
 
       - name: Run doctor in fresh image
         run: |
           docker run --rm --entrypoint planealerts \
             -e TELEGRAM_BOT_TOKEN=123456:test-token \
             -e MONGO_URI=mongodb://mongo:27017 \
-            plane-alerts:v52 doctor --offline
+            plane-alerts:v53 doctor --offline
 
       - name: Verify v5 operator CLI is installed in fresh image
         run: |
-          docker run --rm --entrypoint planealerts plane-alerts:v52 diagnostics --help
-          docker run --rm --entrypoint planealerts plane-alerts:v52 shadow-eval --help
+          docker run --rm --entrypoint planealerts plane-alerts:v53 diagnostics --help
+          docker run --rm --entrypoint planealerts plane-alerts:v53 shadow-eval --help
 
       - name: Build ARM64 image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .
