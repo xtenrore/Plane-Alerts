@@ -1,13 +1,14 @@
 """Persistent multi-profile alert configuration for Plane Alerts v4.3.
 
 The active profile is materialized into the existing ``locations`` and
-``preferences`` collections.  This preserves backward compatibility and keeps
+``preferences`` collections. This preserves backward compatibility and keeps
 profile collection reads out of the five-second monitoring hot path.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import logging
 import re
 import uuid
 from typing import Any
@@ -16,6 +17,7 @@ from app.aircraft.filtering import clear_filter_cache, normalized_filter_config,
 from app.config import settings
 from app.database import locations_col, preferences_col, profiles_col, users_col
 
+logger = logging.getLogger(__name__)
 _PROFILE_ID_RE = re.compile(r"^[0-9a-f]{10}$")
 
 
@@ -164,29 +166,8 @@ async def create_profile(user_id: int, name: str, config: dict[str, Any], *, act
     return profile
 
 
-async def save_profile(user_id: int, profile_id: str, *, name: str | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
-    profile = await get_profile(user_id, profile_id)
-    if not profile:
-        raise KeyError("profile not found")
-    update: dict[str, Any] = {"updated_at": _now()}
-    if name is not None:
-        update["name"] = clean_name(name)
-    if config is not None:
-        update["config"] = deepcopy(config)
-    await profiles_col().update_one(
-        {"user_id": int(user_id), "profile_id": profile_id},
-        {"$set": update},
-    )
-    refreshed = await get_profile(user_id, profile_id)
-    assert refreshed is not None
-    user = await users_col().find_one({"user_id": int(user_id)}, {"active_profile_id": 1})
-    if str((user or {}).get("active_profile_id") or "") == profile_id:
-        await materialize_profile(refreshed)
-    return refreshed
-
-
 async def materialize_profile(profile: dict[str, Any]) -> None:
-    """Write active config into legacy collections consumed by the live worker."""
+    """Write one coherent active-config generation into the legacy collections."""
     uid = int(profile["user_id"])
     config = deepcopy(profile.get("config") or {})
     prefs = dict(config.get("preferences") or {})
@@ -209,16 +190,78 @@ async def materialize_profile(profile: dict[str, Any]) -> None:
     clear_filter_cache()
 
 
+async def _restore_materialized_profile(profile: dict[str, Any] | None) -> None:
+    if not profile:
+        return
+    try:
+        await materialize_profile(profile)
+    except Exception:
+        logger.exception(
+            "profile_materialization_rollback_failed user=%s profile=%s",
+            profile.get("user_id"),
+            profile.get("profile_id"),
+        )
+
+
+async def save_profile(user_id: int, profile_id: str, *, name: str | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    profile = await get_profile(user_id, profile_id)
+    if not profile:
+        raise KeyError("profile not found")
+
+    update: dict[str, Any] = {"updated_at": _now()}
+    if name is not None:
+        update["name"] = clean_name(name)
+    if config is not None:
+        update["config"] = deepcopy(config)
+
+    candidate = deepcopy(profile)
+    candidate.update(deepcopy(update))
+    user = await users_col().find_one({"user_id": int(user_id)}, {"active_profile_id": 1})
+    is_active = str((user or {}).get("active_profile_id") or "") == profile_id
+
+    # For an active profile, materialize the candidate first. If either legacy
+    # write fails, the authoritative profile document stays on the previous
+    # committed configuration and the worker can retain that coherent LKG.
+    if is_active:
+        await materialize_profile(candidate)
+
+    try:
+        await profiles_col().update_one(
+            {"user_id": int(user_id), "profile_id": profile_id},
+            {"$set": update},
+        )
+    except Exception:
+        if is_active:
+            await _restore_materialized_profile(profile)
+        raise
+
+    refreshed = await get_profile(user_id, profile_id)
+    if refreshed is None:
+        if is_active:
+            await _restore_materialized_profile(profile)
+        raise RuntimeError("profile save could not be verified")
+    return refreshed
+
+
 async def activate_profile(user_id: int, profile_id: str) -> dict[str, Any]:
     profile = await get_profile(user_id, profile_id)
     if not profile:
         raise KeyError("profile not found")
+
+    user = await users_col().find_one({"user_id": int(user_id)}, {"active_profile_id": 1})
+    previous_id = str((user or {}).get("active_profile_id") or "")
+    previous = await get_profile(user_id, previous_id) if previous_id and previous_id != profile_id else None
+
     await materialize_profile(profile)
-    await users_col().update_one(
-        {"user_id": int(user_id)},
-        {"$set": {"active_profile_id": profile_id, "last_active": _now()}},
-        upsert=True,
-    )
+    try:
+        await users_col().update_one(
+            {"user_id": int(user_id)},
+            {"$set": {"active_profile_id": profile_id, "last_active": _now()}},
+            upsert=True,
+        )
+    except Exception:
+        await _restore_materialized_profile(previous)
+        raise
     return profile
 
 
@@ -250,11 +293,13 @@ async def delete_profile(user_id: int, profile_id: str) -> dict[str, Any]:
 
     user = await users_col().find_one({"user_id": int(user_id)}, {"active_profile_id": 1})
     active_id = str((user or {}).get("active_profile_id") or "")
-    await profiles_col().delete_one({"user_id": int(user_id), "profile_id": profile_id})
     if active_id == profile_id:
         fallback = next(p for p in profiles if p.get("profile_id") != profile_id)
         await activate_profile(user_id, fallback["profile_id"])
+        await profiles_col().delete_one({"user_id": int(user_id), "profile_id": profile_id})
         return fallback
+
+    await profiles_col().delete_one({"user_id": int(user_id), "profile_id": profile_id})
     active = await get_active_profile(user_id)
     assert active is not None
     return active
