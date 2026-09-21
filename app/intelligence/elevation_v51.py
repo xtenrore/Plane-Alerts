@@ -66,7 +66,10 @@ async def resolve_observer_elevation(user_id: int, latitude: float, longitude: f
                 "elevation_updated_at": datetime.now(timezone.utc),
             }},
         )
-        if int(getattr(result, "matched_count", 0) or 0) <= 0:
+        # Motor returns UpdateResult. Some lightweight test doubles return None;
+        # only an explicit zero match proves the user moved before persistence.
+        matched = getattr(result, "matched_count", None)
+        if matched is not None and int(matched or 0) <= 0:
             return None
         from app.storage_runtime_v48 import storage_runtime
 
