@@ -94,7 +94,8 @@ def predict_trajectory_v44(
     alert_radius_km: float,
     *,
     now: float | None = None,
-    user_altitude_m: float = 0.0,
+    user_altitude_m: float | None = None,
+    altitude_relevance: bool = True,
     max_horizon_s: int = 900,
     step_s: int = 3,
 ) -> t.TrajectoryPrediction:
@@ -107,6 +108,7 @@ def predict_trajectory_v44(
         alert_radius_km,
         now=effective_now,
         user_altitude_m=user_altitude_m,
+        altitude_relevance=altitude_relevance,
         max_horizon_s=max_horizon_s,
         step_s=step_s,
     )
