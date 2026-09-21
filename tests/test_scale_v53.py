@@ -135,9 +135,9 @@ def _assert_prediction_equivalent(left, right) -> None:
         assert a.heading_deg == pytest.approx(b.heading_deg, abs=1e-9)
 
 
-def test_v53_release_identity_preserves_physical_predictor():
+def test_v53_release_identity_preserves_age_aware_physical_predictor():
     assert VERSION == "5.3.0"
-    assert PREDICTION_VERSION == "5.1-3d-proximity"
+    assert PREDICTION_VERSION == "5.3-3d-proximity-age-aware"
 
 
 def test_shared_motion_is_output_equivalent_for_multiple_observers():
