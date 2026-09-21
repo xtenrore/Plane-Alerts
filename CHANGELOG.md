@@ -2,6 +2,23 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.5.0 — Guided Community Self-Hosting
+
+- Added guided community installers for Windows x64, Windows ARM64, Linux x64, generic Linux ARM64 and Raspberry Pi 4/5-class 64-bit systems.
+- Added architecture-detecting `setup.bat` with release-asset SHA-256 verification.
+- Added a first-class local SQLite persistence backend with Mongo-style async document compatibility, TTL/index/migration support, integrity checks, restart persistence and consistent backups.
+- Added explicit MongoDB Atlas and existing-MongoDB guided paths while keeping SQLite recommended for personal self-hosting.
+- Added live Telegram token validation and optional OpenSky OAuth2 client-credential validation.
+- Added local readsb/dump1090/dump1090-fa/ultrafeeder setup with receiver coordinates kept separate from Telegram profile/alert locations.
+- Added Windows Task Scheduler and Linux/systemd always-on runtime registration plus optional stable-release update schedules.
+- Added preflight backup, stable-tag update, post-update doctor and automatic rollback behavior.
+- Added backend-aware v5.5 doctor diagnostics and sanitized support-bundle redaction.
+- Added `app.community_main_v55:app` so the community service does not import/register the private AGY console or expose `/agy`.
+- Kept the community installer/release path isolated from Railway; normal Railway deployment remains gated to tested `main` pushes only.
+- Made the exact pinned dependency lock Windows-compatible by excluding POSIX-only `uvloop` on Windows.
+- Added dedicated native Windows/Linux and ARM64/QEMU installer CI plus community AGY-exclusion, SQLite, updater and platform regressions.
+- Physical prediction remains `5.3-3d-proximity-age-aware`; v5.5.0 does not intentionally change trajectory, CPA, ETA, terminal inference, qualification, cancellation or alert timing.
+
 ## v5.4.2 — General Reliability Audit Fixes
 
 - Fixed first-time setup so monitoring is enabled only after a successful coherent profile save.
