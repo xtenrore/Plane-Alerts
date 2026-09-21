@@ -4,6 +4,9 @@ v3.5 removes provider traffic from the number of users. Nearby users are packed
 into the largest safe shared query regions, each region reuses one aircraft
 snapshot, providers are rotated rather than all queried every cycle, and quiet
 regions poll more slowly than regions with an aircraft approaching a user.
+
+v5.3 keeps that provider behaviour but adds observer-independent motion reuse
+and a bounded spatial candidate index before per-user CPA evaluation.
 """
 from __future__ import annotations
 
@@ -17,10 +20,17 @@ from typing import Any
 from app.config import settings
 from app.database import system_status_col
 from app.intelligence.route_history import route_history_service
+from app.intelligence.trajectory_scale_v53 import motion_cache_snapshot, predict_trajectory as predict_trajectory_v53
 from app.worker.geo import bounding_box, haversine, km_to_nautical_miles, merge_bounding_boxes
+from app.worker.scale_v53 import partition_aircraft_by_user
 from app.worker import monitor
 
 logger = logging.getLogger(__name__)
+
+# The monitor owns all user-specific qualification/lifecycle behaviour. v5.3
+# swaps only its trajectory function for an output-equivalent implementation
+# that shares the observer-independent projected motion path across users.
+monitor.predict_trajectory = predict_trajectory_v53
 
 MAX_PROVIDER_RADIUS_NM = 250
 DISCOVERY_INTERVAL_S = 15.0
@@ -377,9 +387,28 @@ async def _process_shared_region(region: SharedPollRegion, *, cycle_number: int,
                 radius_km=loc.get("radius_km", settings.default_radius_km),
             )
 
+    candidate_map, scale_stats = partition_aircraft_by_user(region.users, accepted_aircraft)
     count = 0
     for user in region.users:
-        count += await monitor._match_user_aircraft(user, accepted_aircraft, poll.by_provider)
+        user_candidates = candidate_map.get(int(user["user_id"]), [])
+        count += await monitor._match_user_aircraft(user, user_candidates, poll.by_provider)
+
+    scale = scale_stats.as_dict()
+    motion = motion_cache_snapshot()
+    logger.debug(
+        "v53_scale region=%s users=%d aircraft=%d candidate_pairs=%d full_pairs=%d reduction=%.3f max_user_candidates=%d capped_users=%d motion_cache_entries=%d motion_cache_hits=%d motion_cache_misses=%d",
+        region.key,
+        scale_stats.users,
+        scale_stats.aircraft,
+        scale_stats.candidate_pairs,
+        scale_stats.full_pairs,
+        float(scale["pair_reduction_ratio"]),
+        scale_stats.max_candidates_per_user,
+        scale_stats.capped_users,
+        motion["entries"],
+        motion["hits"],
+        motion["misses"],
+    )
     return count, poll
 
 
