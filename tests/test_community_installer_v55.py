@@ -81,6 +81,7 @@ def test_community_env_defaults_to_real_sqlite_and_keeps_receiver_location_separ
 def test_community_runtime_and_installer_cannot_start_agy():
     runtime = (ROOT / "app" / "community_main_v55.py").read_text(encoding="utf-8")
     installer = SCRIPT.read_text(encoding="utf-8")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert 'ModuleType("app.agy_console")' in runtime
     assert "register_agy_console_handlers = lambda" in runtime
     assert "Dockerfile.agy" not in installer
@@ -88,6 +89,10 @@ def test_community_runtime_and_installer_cannot_start_agy():
     assert "from app.agy" not in installer
     assert "import app.agy" not in installer
     assert "agy_enabled\": False" in installer
+    assert "app.community_main_v55:app" in compose
+    assert "DATABASE_BACKEND: mongodb" in compose
+    assert 'AGY_WORKER_URL: ""' in compose
+    assert 'AGY_WORKER_TOKEN: ""' in compose
 
 
 def test_updater_has_backup_validation_and_rollback_gates():
