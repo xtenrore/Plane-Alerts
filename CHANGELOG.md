@@ -2,6 +2,18 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.2.0 — Shadow Models & Automatic Evaluation
+
+- Added deterministic production-control versus shadow-candidate evaluation using the existing v4.6 linear and turn-aware candidates.
+- Added explicit shadow-only feature flags without adding a model-selection path to live alerts.
+- Prediction Lab snapshots now record application release version and shadow feature-flag state.
+- Observed in-radius passes are scoreable outcomes; lifecycle cancellations and missing ADS-B coverage remain unresolved until separately validated.
+- Added bounded live post-outcome evaluation with 14-day TTL storage and deterministic evaluation IDs.
+- Added release-to-release CPA error, ETA error, false-positive/false-negative, cancellation, lead-time and confidence-calibration metric support while preserving missing denominators as unknown.
+- Added `planealerts shadow-eval` read-only operator reporting and conservative promotion evidence; automatic promotion is always disabled.
+- Added deterministic replay fixtures, v5.2 regressions and a sub-millisecond pure evaluation benchmark.
+- Physical prediction version remains `5.1-3d-proximity`; no CPA/ETA, route/terminal, qualification/cancellation or alert-timing policy changed.
+
 ## v5.1.3 — Complete v5.1 wrapper-chain compatibility hotfix
 
 - Fixed the additional production `TypeError` discovered after v5.1.2 deployment, where the installed v4.4 direct-presence wrapper rejected the v5.1 `altitude_relevance` option.
