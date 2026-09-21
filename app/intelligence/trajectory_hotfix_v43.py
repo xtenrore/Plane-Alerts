@@ -53,7 +53,7 @@ def predict_trajectory_v43(
     alert_radius_km: float,
     *,
     now: float | None = None,
-    user_altitude_m: float = 0.0,
+    user_altitude_m: float | None = None,
     max_horizon_s: int = 900,
     step_s: int = 3,
 ) -> t.TrajectoryPrediction:
@@ -62,6 +62,11 @@ def predict_trajectory_v43(
         raise ValueError("at least one trajectory sample is required")
 
     effective_now = time.time() if now is None else now
+    # Preserve an unknown observer elevation for the authoritative v5.1 3D
+    # predictor. This legacy wrapper still needs a numeric reference only for
+    # its historical slant-distance diagnostics, where sea level is the same
+    # conservative nominal fallback used by the core trajectory path.
+    legacy_observer_altitude_m = float(user_altitude_m) if user_altitude_m is not None else 0.0
     base = _ORIGINAL_PREDICT(
         raw_samples,
         user_lat,
@@ -136,7 +141,7 @@ def predict_trajectory_v43(
         slant = (
             math.hypot(
                 horizontal,
-                max(0.0, altitude - user_altitude_m) / 1000.0,
+                max(0.0, altitude - legacy_observer_altitude_m) / 1000.0,
             )
             if altitude is not None
             else horizontal
@@ -168,24 +173,20 @@ def predict_trajectory_v43(
         if abs(denom) > 1e-9:
             offset = t._clamp(0.5 * (y1 - y3) / denom, -1.0, 1.0)
             cpa_t = max(0.0, path[idx].seconds + offset * step_s)
-            # Locally constant velocity makes squared range quadratic in time.
-            # Refine range too: a narrow-radius pass can lie between samples.
             closest_h = math.sqrt(max(0.0, y2 - (y1 - y3) ** 2 / (8.0 * denom))) if denom > 0 else closest_h
             cpa_altitude = path[idx].altitude_m
-            closest_slant = math.hypot(closest_h, max(0.0, (cpa_altitude or user_altitude_m) - user_altitude_m) / 1000.0)
+            closest_slant = math.hypot(
+                closest_h,
+                max(0.0, float(cpa_altitude if cpa_altitude is not None else legacy_observer_altitude_m) - legacy_observer_altitude_m) / 1000.0,
+            )
 
-    # Projected times originate at the observation, not at the poll. Cached
-    # positions must not restart their countdown every five seconds.
     age = max(0.0, effective_now - latest.timestamp)
     cpa_t = max(0.0, cpa_t - age)
     if entry_t is not None:
         entry_t = max(0.0, entry_t - age)
     path = [replace(point, seconds=point.seconds - age) for point in path if point.seconds >= age]
 
-    increasing = (
-        base.distance_trend_km_s is not None
-        and base.distance_trend_km_s > 0.002
-    )
+    increasing = base.distance_trend_km_s is not None and base.distance_trend_km_s > 0.002
     already_passed = cpa_t <= step_s and increasing
     horizon_edge = cpa_t >= horizon - step_s
     enters = (
@@ -200,14 +201,8 @@ def predict_trajectory_v43(
         and closest_h >= min(base.current_distance_km, alert_radius_km * 1.1)
     )
 
-    directly_inside = (
-        not base.stale
-        and base.current_distance_km <= float(alert_radius_km)
-    )
+    directly_inside = not base.stale and base.current_distance_km <= float(alert_radius_km)
     if directly_inside:
-        # Preserve the pre-existing reliability guarantee: after an ADS-B gap,
-        # a fresh observed position physically inside the requested radius is
-        # stronger evidence than a projected CPA that is already behind us.
         enters = True
         already_passed = False
         turning_away = False

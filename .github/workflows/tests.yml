@@ -81,7 +81,7 @@ jobs:
         run: pytest -q tests/test_observability_v50.py tests/test_agy_mongo_resilience_v50.py tests/test_agy_prediction_bridge.py
 
       - name: Run v5.1 3D proximity and observed-pass lifecycle suite
-        run: pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py
+        run: pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py tests/test_v512_predictor_wrapper.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
