@@ -1,0 +1,142 @@
+name: community-release-v55
+
+on:
+  push:
+    branches:
+      - "release/community-self-hosting-v5.5"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: plane-alerts-community-v55-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: contains(github.event.head_commit.message, '[community-release]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ github.sha }}
+      RELEASE_BRANCH: release/community-self-hosting-v5.5
+    steps:
+      - name: Wait for exact-commit CI gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1500))
+          while (( SECONDS < deadline )); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${RELEASE_SHA}&per_page=100")"
+            tests_status="$(jq -r '[.workflow_runs[] | select(.name == "tests")][0].status // "missing"' <<<"$runs")"
+            tests_result="$(jq -r '[.workflow_runs[] | select(.name == "tests")][0].conclusion // ""' <<<"$runs")"
+            installer_status="$(jq -r '[.workflow_runs[] | select(.name == "community-installer")][0].status // "missing"' <<<"$runs")"
+            installer_result="$(jq -r '[.workflow_runs[] | select(.name == "community-installer")][0].conclusion // ""' <<<"$runs")"
+            echo "tests=${tests_status}/${tests_result:-pending} installer=${installer_status}/${installer_result:-pending}"
+            if [[ "$tests_status" == "completed" && "$installer_status" == "completed" ]]; then
+              [[ "$tests_result" == "success" ]] || { echo "Full tests failed: $tests_result" >&2; exit 1; }
+              [[ "$installer_result" == "success" ]] || { echo "Community installer CI failed: $installer_result" >&2; exit 1; }
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for exact-commit CI gates." >&2
+          exit 1
+
+      - name: Checkout exact tested release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify release identity and branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python -c 'from app.version import VERSION; print(VERSION)')"
+          [[ "$VERSION" == "5.5.0" ]] || { echo "Expected VERSION=5.5.0, got $VERSION" >&2; exit 1; }
+          [[ -s docs/releases/v5.5.0.md ]] || { echo "Missing v5.5.0 release notes" >&2; exit 1; }
+          CURRENT_BRANCH_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_BRANCH}" --jq '.sha')"
+          [[ "$CURRENT_BRANCH_SHA" == "$RELEASE_SHA" ]] || {
+            echo "Release branch advanced after CI: ${CURRENT_BRANCH_SHA} != ${RELEASE_SHA}" >&2
+            exit 1
+          }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=v$VERSION" >> "$GITHUB_ENV"
+
+      - name: Validate installer assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/community_installer_v55.py --self-test
+          bash -n setup-linux.sh
+          bash -n setup-linux-arm64.sh
+          bash -n setup-raspberry-pi.sh
+          for asset in setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh; do
+            [[ -s "$asset" ]] || { echo "Missing installer asset: $asset" >&2; exit 1; }
+          done
+
+      - name: Build checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir release-assets
+          cp setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh release-assets/
+          chmod +x release-assets/*.sh
+          (
+            cd release-assets
+            sha256sum setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh > SHA256SUMS.txt
+          )
+          sha256sum -c release-assets/SHA256SUMS.txt --ignore-missing
+
+      - name: Refuse conflicting tag or existing release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
+            EXISTING_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            [[ "$EXISTING_SHA" == "$RELEASE_SHA" ]] || {
+              echo "Refusing to move existing ${TAG}: ${EXISTING_SHA} != ${RELEASE_SHA}" >&2
+              exit 1
+            }
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; refusing to overwrite an immutable stable release." >&2
+            exit 1
+          fi
+
+      - name: Publish immutable community release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$RELEASE_SHA" \
+            --title "Plane Alerts v${VERSION}" \
+            --notes-file docs/releases/v5.5.0.md \
+            release-assets/setup.bat \
+            release-assets/setup-windows.bat \
+            release-assets/setup-windows-arm64.bat \
+            release-assets/setup-linux.sh \
+            release-assets/setup-linux-arm64.sh \
+            release-assets/setup-raspberry-pi.sh \
+            release-assets/SHA256SUMS.txt
+
+      - name: Verify published release immutability and assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          [[ "$TAG_SHA" == "$RELEASE_SHA" ]] || { echo "Published tag points at $TAG_SHA, expected $RELEASE_SHA" >&2; exit 1; }
+          release="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,targetCommitish,assets,url)"
+          [[ "$(jq -r '.isDraft' <<<"$release")" == "false" ]]
+          [[ "$(jq -r '.isPrerelease' <<<"$release")" == "false" ]]
+          [[ "$(jq -r '.targetCommitish' <<<"$release")" == "$RELEASE_SHA" ]]
+          count="$(jq '[.assets[] | select(.name == "setup.bat" or .name == "setup-windows.bat" or .name == "setup-windows-arm64.bat" or .name == "setup-linux.sh" or .name == "setup-linux-arm64.sh" or .name == "setup-raspberry-pi.sh" or .name == "SHA256SUMS.txt")] | length' <<<"$release")"
+          [[ "$count" -eq 7 ]] || { echo "Expected 7 installer assets, found $count" >&2; exit 1; }
+          echo "Community release verified: $(jq -r '.url' <<<"$release")"
