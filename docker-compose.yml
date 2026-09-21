@@ -19,8 +19,12 @@ services:
     env_file:
       - .env
     environment:
+      PLANE_ALERTS_COMMUNITY_SELF_HOST: "true"
+      DATABASE_BACKEND: mongodb
       MONGO_URI: mongodb://mongo:27017
       PORT: "8000"
+      AGY_WORKER_URL: ""
+      AGY_WORKER_TOKEN: ""
     depends_on:
       mongo:
         condition: service_healthy
@@ -32,7 +36,7 @@ services:
       timeout: 5s
       retries: 4
       start_period: 30s
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.community_main_v55:app", "--host", "0.0.0.0", "--port", "8000"]
 
 volumes:
   mongo_data:
