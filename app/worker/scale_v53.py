@@ -9,6 +9,7 @@ authoritative after candidate lookup.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 import math
 from typing import Any
 
@@ -161,6 +162,11 @@ def _dot(ax: float, ay: float, az: float, user: IndexedUser) -> float:
     return ax * user.x + ay * user.y + az * user.z
 
 
+def _aircraft_closeness(ac: Any, user: IndexedUser) -> float:
+    ax, ay, az = _unit_vector(float(ac.latitude), float(ac.longitude))
+    return _dot(ax, ay, az, user)
+
+
 def partition_aircraft_by_user(users: list[dict], aircraft: list[Any]) -> tuple[dict[int, list[Any]], ScaleStats]:
     """Return exact nearby candidate aircraft per user with bounded fan-out.
 
@@ -169,13 +175,17 @@ def partition_aircraft_by_user(users: list[dict], aircraft: list[Any]) -> tuple[
     product threshold ``cos(distance / earth_radius)``. This avoids repeated
     inverse-trigonometric work without approximating the radius boundary.
 
-    If an unusually large feed exceeds the per-user safety cap, the nearest
-    aircraft are retained by spherical dot-product ordering (larger is closer).
-    The cap remains intentionally far above normal regional public-feed counts
-    and is exposed in stats for operator visibility.
+    Normal regional feeds are far below the 4,096 per-user safety cap, so the
+    common path stores aircraft directly and avoids allocating a distance tuple
+    for every candidate pair. If a feed actually exceeds the cap, that user's
+    list is promoted once to a bounded nearest-aircraft heap. This preserves the
+    cap's nearest-first semantics without taxing ordinary cycles.
     """
     index = build_user_spatial_index(users)
-    by_user: dict[int, list[tuple[float, Any]]] = {int(user["user_id"]): [] for user in users}
+    indexed_by_id = {int(user["user_id"]): _indexed_user(user) for user in users}
+    by_user: dict[int, list[Any]] = {uid: [] for uid in indexed_by_id}
+    overflow_heaps: dict[int, list[tuple[float, int, Any]]] = {}
+    sequence = 0
 
     for ac in aircraft:
         lat = getattr(ac, "latitude", None)
@@ -192,23 +202,51 @@ def partition_aircraft_by_user(users: list[dict], aircraft: list[Any]) -> tuple[
         for candidate_group in (indexed_candidates, fallback_candidates):
             for indexed_user in candidate_group:
                 closeness = _dot(ax, ay, az, indexed_user)
-                if closeness + _DOT_EPSILON >= indexed_user.min_dot:
-                    by_user[indexed_user.user_id].append((closeness, ac))
+                if closeness + _DOT_EPSILON < indexed_user.min_dot:
+                    continue
+                uid = indexed_user.user_id
+                heap = overflow_heaps.get(uid)
+                if heap is not None:
+                    sequence += 1
+                    item = (closeness, sequence, ac)
+                    if closeness > heap[0][0]:
+                        heapq.heapreplace(heap, item)
+                    continue
 
-    capped_users = 0
+                bucket = by_user[uid]
+                if len(bucket) < MAX_CANDIDATE_AIRCRAFT_PER_USER:
+                    bucket.append(ac)
+                    continue
+
+                # Rare overflow path: rank the already-retained candidates once,
+                # then maintain only the nearest MAX entries with a min-heap.
+                ranked_heap: list[tuple[float, int, Any]] = []
+                for existing in bucket:
+                    sequence += 1
+                    ranked_heap.append((_aircraft_closeness(existing, indexed_user), sequence, existing))
+                heapq.heapify(ranked_heap)
+                sequence += 1
+                item = (closeness, sequence, ac)
+                if closeness > ranked_heap[0][0]:
+                    heapq.heapreplace(ranked_heap, item)
+                overflow_heaps[uid] = ranked_heap
+                by_user[uid] = []
+
+    capped_users = len(overflow_heaps)
     result: dict[int, list[Any]] = {}
     max_candidates = 0
     candidate_pairs = 0
     for user in users:
         uid = int(user["user_id"])
-        ranked = by_user.get(uid, [])
-        if len(ranked) > MAX_CANDIDATE_AIRCRAFT_PER_USER:
-            ranked.sort(key=lambda pair: pair[0], reverse=True)
-            ranked = ranked[:MAX_CANDIDATE_AIRCRAFT_PER_USER]
-            capped_users += 1
-        result[uid] = [ac for _, ac in ranked]
-        candidate_pairs += len(ranked)
-        max_candidates = max(max_candidates, len(ranked))
+        heap = overflow_heaps.get(uid)
+        if heap is not None:
+            heap.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            chosen = [ac for _, _, ac in heap]
+        else:
+            chosen = by_user.get(uid, [])
+        result[uid] = chosen
+        candidate_pairs += len(chosen)
+        max_candidates = max(max_candidates, len(chosen))
 
     stats = ScaleStats(
         users=len(users),
