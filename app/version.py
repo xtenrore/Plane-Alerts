@@ -4,12 +4,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.1.2"
+VERSION = "5.1.3"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
 # v5.1.2 restores compatibility across the installed v4.6/v5.1 predictor
 # wrapper chain without changing the physical model itself.
+# v5.1.3 completes the same compatibility contract through the older v4.4 and
+# v4.3 wrappers discovered by live production verification.
 PREDICTION_VERSION = "5.1-3d-proximity"
 
 
