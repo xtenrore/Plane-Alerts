@@ -2,6 +2,16 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.3.0 — Multi-Location & Scale
+
+- Added bounded observer-independent aircraft-motion reuse while preserving observer-specific CPA, 3D relevance, confidence, terminal and lifecycle decisions.
+- Shared the authoritative v4.3 midpoint-integrated motion path beneath the established v4.4/v4.6/critical-timing safety wrapper chain.
+- Added exact spatial candidate filtering so each user evaluates only aircraft within the existing `radius + 120 km` monitoring envelope; the spatial grid is acceleration-only and exact Haversine distance remains authoritative.
+- Added a bounded 1,024-entry LRU for base motion and midpoint motion, plus an explicit per-user candidate-work cap with operator-visible scale counters.
+- Reused the existing shared regional ADS-B provider snapshots and enrichment caches; v5.3 does not add duplicate provider requests or a second feed layer.
+- Added multi-user isolation/equivalence regressions and a deterministic 500-user/600-aircraft scale benchmark.
+- Physical prediction version remains `5.1-3d-proximity`; no terminal-arrival threshold, qualification/cancellation rule, alert timing policy or runtime-AI authority changed.
+
 ## v5.2.1 — Release documentation truth patch
 
 - Corrected the v5.2 ETA-evaluation documentation to match the final production implementation.
