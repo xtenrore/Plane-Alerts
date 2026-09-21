@@ -113,6 +113,14 @@ def predict_trajectory_v44(
         step_s=step_s,
     )
 
+    # Direct horizontal presence must not undo stronger authoritative v5.1
+    # evidence: an observed completed pass remains passed, and a trustworthy 3D
+    # exclusion remains excluded when altitude relevance is enabled.
+    if prediction.already_passed or (
+        altitude_relevance and bool(prediction.altitude_relevance_applied)
+    ):
+        return prediction
+
     if not _confirmed_fresh_direct_presence(
         ordered,
         user_lat=user_lat,
