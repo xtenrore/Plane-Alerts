@@ -54,7 +54,6 @@ jobs:
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
-      AGY_SERVICE_ID: 44cdabdc-7c03-4960-b55a-276810841a2b
       WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
@@ -105,13 +104,6 @@ jobs:
             --ci \
             --message "Plane Alerts main ${DEPLOY_SHA}"
 
-      - name: Deploy tested commit to AGY service
-        shell: sh
-        run: |
-          set -eu
-          railway up \
-            --project "$PROJECT_ID" \
-            --service "$AGY_SERVICE_ID" \
-            --environment "$ENVIRONMENT_ID" \
-            --ci \
-            --message "Plane Alerts AGY ${DEPLOY_SHA}"
+      # The AGY service is deliberately excluded from normal Plane Alerts
+      # releases. Restarting it can resume quota-consuming work. AGY must only
+      # be operated separately under the project's explicit quota-safety rules.
