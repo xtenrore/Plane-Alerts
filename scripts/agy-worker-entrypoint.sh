@@ -161,9 +161,15 @@ if enable:
         supervisor['last_force_run_token'] = force_token
         if not quota_hold_active:
             supervisor['next_run_at'] = 0
-    stmp = supervisor_path.with_suffix('.tmp')
-    stmp.write_text(json.dumps(supervisor, indent=2, sort_keys=True))
-    stmp.replace(supervisor_path)
+else:
+    # An explicit operator disable must win over persisted state. Preserve the
+    # quota status/deadline exactly so a maintenance deployment can start the
+    # bridge/API without launching inference, then later re-enable safely.
+    supervisor['enabled'] = False
+
+stmp = supervisor_path.with_suffix('.tmp')
+stmp.write_text(json.dumps(supervisor, indent=2, sort_keys=True))
+stmp.replace(supervisor_path)
 PY
 
 # Parent-side bridge keeps Mongo credentials. AGY itself never receives them.
