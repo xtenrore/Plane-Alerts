@@ -158,7 +158,11 @@ def predict_trajectory_v43(
                 max(0.0, float(cpa_altitude if cpa_altitude is not None else legacy_observer_altitude_m) - legacy_observer_altitude_m) / 1000.0,
             )
 
-    age = max(0.0, effective_now - latest.timestamp)
+    # Match the authoritative base predictor: provider-reported position age is
+    # real observation latency even when the local timestamp is current. Using
+    # wall-clock age alone made midpoint ETA systematically late on delayed
+    # provider samples (AGY seq 140).
+    age = max(float(latest.position_age_s or 0.0), max(0.0, effective_now - latest.timestamp))
     cpa_t = max(0.0, cpa_t - age)
     if entry_t is not None:
         entry_t = max(0.0, entry_t - age)
