@@ -6,8 +6,10 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 
 - Fixed the additional production `TypeError` discovered after v5.1.2 deployment, where the installed v4.4 direct-presence wrapper rejected the v5.1 `altitude_relevance` option.
 - Updated both the v4.4 direct-presence wrapper and v4.3 midpoint wrapper to accept and forward the current v5.1 predictor signature while preserving unknown observer elevation.
+- The v4.3 midpoint wrapper now recomputes v5.1 3D relevance on its actual production path and preserves the v5.1 observed-pass requirement instead of restoring horizontal-only or projected-CPA legacy behavior.
+- The v4.4 direct-presence guard no longer overrides a trustworthy 3D exclusion or an already-observed completed pass.
 - Replaced the shortened compatibility regression with the actual installed chain: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing.
-- Physical prediction version remains `5.1-3d-proximity`; no trajectory thresholds, terminal guards, qualification rules or alert timing policy changed.
+- Physical prediction version remains `5.1-3d-proximity`; no CPA/ETA thresholds, terminal guards, qualification rules or alert timing policy changed.
 
 ## v5.1.2 — Predictor-wrapper production compatibility hotfix
 
