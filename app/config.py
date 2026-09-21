@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "INFO"
 
+    @field_validator("admin_telegram_id", mode="before")
+    @classmethod
+    def _validate_optional_admin_telegram_id(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("local_adsb_receiver_type")
     @classmethod
     def _validate_local_receiver_type(cls, value: str) -> str:
