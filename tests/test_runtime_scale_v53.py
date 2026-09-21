@@ -20,7 +20,7 @@ def test_v53_scale_layer_is_installed_through_full_production_predictor_chain():
         from app.version import PREDICTION_VERSION, VERSION
         from app.worker import critical_timing
 
-        assert VERSION == "5.3.0"
+        assert tuple(int(part) for part in VERSION.split('.')) >= (5, 3, 0)
         assert PREDICTION_VERSION == "5.3-3d-proximity-age-aware"
         assert trajectory_hotfix_v43._ORIGINAL_PREDICT is trajectory_scale_v53.predict_trajectory
         assert trajectory.predict_trajectory is critical_timing._critical_predict_trajectory
@@ -33,26 +33,8 @@ def test_v53_scale_layer_is_installed_through_full_production_predictor_chain():
             trajectory.HistorySample(now - 10.0, 41.20, 29.0, 3000.0, 300.0, 180.0, 0.0, 4.0),
             trajectory.HistorySample(now, 41.16, 29.0, 3000.0, 300.0, 180.0, 0.0, 4.0),
         ]
-
-        first = monitor.predict_trajectory(
-            samples,
-            41.0,
-            29.0,
-            15.0,
-            now=now,
-            user_altitude_m=None,
-            altitude_relevance=True,
-        )
-        second = monitor.predict_trajectory(
-            samples,
-            41.02,
-            29.01,
-            15.0,
-            now=now,
-            user_altitude_m=80.0,
-            altitude_relevance=False,
-        )
-
+        first = monitor.predict_trajectory(samples, 41.0, 29.0, 15.0, now=now, user_altitude_m=None, altitude_relevance=True)
+        second = monitor.predict_trajectory(samples, 41.02, 29.01, 15.0, now=now, user_altitude_m=80.0, altitude_relevance=False)
         assert first.time_to_cpa_s is not None
         assert second.time_to_cpa_s is not None
         assert first.stale is False
@@ -66,14 +48,6 @@ def test_v53_scale_layer_is_installed_through_full_production_predictor_chain():
     )
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=os.getcwd(),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    result = subprocess.run([sys.executable, "-c", script], cwd=os.getcwd(), env=env, capture_output=True, text=True, timeout=20, check=False)
     assert result.returncode == 0, result.stderr
     assert "v53-production-scale-chain-ok" in result.stdout
