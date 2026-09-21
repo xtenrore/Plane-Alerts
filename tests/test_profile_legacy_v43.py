@@ -4,6 +4,7 @@ import pytest
 from telegram.ext import ApplicationHandlerStop
 
 import app.bot.profile_legacy as legacy
+from app.version import VERSION
 
 
 class Message:
@@ -65,4 +66,5 @@ async def test_help_exposes_profiles_and_advanced_preferences():
     text = message.sent[0][0]
     assert "/profiles" in text
     assert "/preferences" in text
-    assert "v4.3" in text
+    assert f"v{VERSION}" in text
+    assert "v4.3" not in text
