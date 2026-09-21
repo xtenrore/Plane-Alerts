@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CANCELLATION_CONFIRMATIONS_REQUIRED = 3
+PHOTO_NOW_EXIT_HYSTERESIS_S = 30.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,59 @@ def decide_lifecycle(prediction, best_start_s: float | None = None, best_end_s: 
     if start <= 300:
         return LifecycleDecision("prepare", True, "shooting window is within five minutes")
     return LifecycleDecision("candidate", False, "trajectory qualifies but preparation is not yet useful")
+
+
+def stabilize_lifecycle_stage(
+    previous_stage: str | None,
+    proposed_stage: str,
+    best_start_s: float | None,
+) -> str:
+    """Prevent PHOTO NOW / CAMERA READY threshold chatter without hiding turns.
+
+    AGY seq142 showed a single live message flipping between these two stages
+    repeatedly as the predicted shooting-window start jittered around zero. A
+    small *exit* band is presentation hysteresis only: physical CPA/ETA is left
+    untouched, and a genuinely moved window (>30 s away) may still fall back to
+    CAMERA READY. Other stage transitions remain unchanged.
+    """
+    previous = str(previous_stage or "")
+    proposed = str(proposed_stage or "")
+    if previous != "photo_now" or proposed != "camera_ready":
+        return proposed
+    try:
+        start = float(best_start_s) if best_start_s is not None else None
+    except (TypeError, ValueError):
+        return proposed
+    if start is not None and 0.0 < start <= PHOTO_NOW_EXIT_HYSTERESIS_S:
+        return "photo_now"
+    return proposed
+
+
+def cancelled_latch_allows_reactivation(
+    previous_stage: str | None,
+    previous_active: bool,
+    prediction,
+    fresh_observation: bool,
+    alert_radius_km: float,
+) -> bool:
+    """Allow cancelled encounters back only on fresh direct physical presence.
+
+    A confirmed cancellation must not be undone by a later predictive qualify
+    cycle. That was the seq143 oscillation class. A permanent strict latch is
+    also unsafe, however: if the earlier cancellation was wrong and a fresh
+    aircraft position is physically inside the user's radius, that observation
+    is stronger evidence and may recover the encounter.
+    """
+    if bool(previous_active) or str(previous_stage or "") != "cancelled":
+        return True
+    if not fresh_observation or bool(getattr(prediction, "stale", False)):
+        return False
+    try:
+        current = float(getattr(prediction, "current_distance_km"))
+        radius = float(alert_radius_km)
+    except (TypeError, ValueError):
+        return False
+    return current <= radius
 
 
 def prediction_changed(previous_cpa_km: float | None, new_cpa_km: float, alert_radius_km: float) -> bool:
@@ -73,9 +127,6 @@ def should_finalize_observed_pass(
     if observed > radius:
         return False
 
-    # Require real separation from the recorded minimum, not ordinary provider
-    # jitter.  The floor is deliberately small so a low/slow nearby aircraft is
-    # not kept active for an excessive period after its closest point.
     receded_km = current - observed
     if receded_km < max(0.15, radius * 0.01):
         return False
@@ -94,13 +145,7 @@ def should_finalize_observed_pass(
 
 
 def should_cancel_active_alert(prediction, previous_cpa_km: float | None, alert_radius_km: float) -> bool:
-    """Return whether *this cycle* contains credible cancellation evidence.
-
-    The caller still has to observe this evidence multiple times. Provider gaps or
-    low-confidence miss samples do not themselves become cancellation evidence.
-    A sustained observed turn-away/moving-away signal is itself cancellation
-    evidence even when that manoeuvre lowers the predictor confidence score.
-    """
+    """Return whether *this cycle* contains credible cancellation evidence."""
     if getattr(prediction, "stale", False):
         return False
     if getattr(prediction, "already_passed", False) or getattr(prediction, "state", "") == "Passed":
@@ -124,10 +169,6 @@ def should_cancel_active_alert(prediction, previous_cpa_km: float | None, alert_
     turning_away = bool(getattr(prediction, "turning_away", False)) or str(getattr(prediction, "state", "")) == "Turning away"
     confidence_score = float(getattr(prediction, "confidence_score", 1.0) if getattr(prediction, "confidence_score", None) is not None else 1.0)
 
-    # Turning aircraft are intentionally penalized by the confidence model. Do
-    # not let that penalty freeze cancellation forever when the physical
-    # evidence already says the aircraft is moving/turning away. The monitor
-    # still requires three independent confirmations before cancelling.
     if moving_away or turning_away:
         return True
 
@@ -150,14 +191,7 @@ def should_cancel_active_alert(prediction, previous_cpa_km: float | None, alert_
 
 
 def advance_cancellation_confirmation(previous_count: int, candidate: bool, *, required: int = CANCELLATION_CONFIRMATIONS_REQUIRED) -> tuple[bool, int]:
-    """Accumulate credible cancellation evidence without provider-gap starvation.
-
-    A non-evidence cycle while the alert is already in the non-qualifying branch is
-    neutral: it neither increments nor erases prior credible evidence. This matters
-    when fresh provider samples alternate with degraded/low-confidence continuity
-    samples. A genuinely qualifying trajectory is handled outside this branch by the
-    monitor and resets the stored cancellation counter when the stable ETA is updated.
-    """
+    """Accumulate credible cancellation evidence without provider-gap starvation."""
     count = max(0, int(previous_count))
     if not candidate:
         return False, count
