@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app import prediction_lab_audit
+from app.shadow_evaluation_v52 import evaluate_snapshot_outcome
 
 
 def _aircraft():
@@ -97,3 +98,35 @@ def test_enqueue_outcome_does_not_claim_timestamp_for_mismatched_distance(monkey
     )
 
     assert "observed_closest_at" not in captured
+
+
+def test_missing_closest_timestamp_keeps_eta_unscored():
+    snapshot = {
+        "_id": "snap",
+        "release_version": "5.2.0",
+        "prediction_version": "5.1-3d-proximity",
+        "captured_at": "2026-09-21T05:00:00+00:00",
+        "aircraft_icao24": "abc123",
+        "user_id": 7,
+        "alert_radius_km": 9.0,
+        "projected_closest_km": 5.0,
+        "time_to_cpa_s": 120.0,
+        "enters_alert_radius": True,
+        "confidence_score": 0.8,
+        "diagnostics": {},
+    }
+    outcome = {
+        "_id": "out",
+        "outcome": "passed",
+        "outcome_basis": "observed_in_radius_pass",
+        "scoreable": True,
+        "captured_at": "2026-09-21T05:04:00+00:00",
+        "observed_closest_km": 4.5,
+    }
+
+    rows = evaluate_snapshot_outcome(snapshot, outcome)
+    assert len(rows) == 1
+    assert rows[0]["cpa_error_km"] == 0.5
+    assert rows[0]["actual_eta_s"] is None
+    assert rows[0]["eta_error_s"] is None
+    assert rows[0]["actual_eta_basis"] == "unavailable"
