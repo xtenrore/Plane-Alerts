@@ -32,12 +32,16 @@ async def resolve_observer_elevation(user_id: int, latitude: float, longitude: f
     """Best-effort terrain elevation lookup and persistence.
 
     This function is intended for the bounded optional-work queue. It must never
-    be awaited by the physical prediction path.
+    be awaited by the physical prediction path. The write is bound to the exact
+    coordinates that initiated the lookup so a late result cannot overwrite a
+    user's newer location.
     """
     timeout_s = max(0.5, min(3.0, float(settings.photography_http_timeout_seconds)))
+    expected_lat = float(latitude)
+    expected_lon = float(longitude)
     params = {
-        "latitude": float(latitude),
-        "longitude": float(longitude),
+        "latitude": expected_lat,
+        "longitude": expected_lon,
         "timezone": "UTC",
         "current": "temperature_2m",
         "forecast_days": 1,
@@ -50,14 +54,26 @@ async def resolve_observer_elevation(user_id: int, latitude: float, longitude: f
         elevation = _valid((response.json() or {}).get("elevation"))
         if elevation is None:
             return None
-        await locations_col().update_one(
-            {"user_id": int(user_id)},
+        result = await locations_col().update_one(
+            {
+                "user_id": int(user_id),
+                "latitude": expected_lat,
+                "longitude": expected_lon,
+            },
             {"$set": {
                 "elevation_m": elevation,
                 "elevation_source": "open-meteo-terrain",
                 "elevation_updated_at": datetime.now(timezone.utc),
             }},
         )
+        # Motor returns UpdateResult. Some lightweight test doubles return None;
+        # only an explicit zero match proves the user moved before persistence.
+        matched = getattr(result, "matched_count", None)
+        if matched is not None and int(matched or 0) <= 0:
+            return None
+        from app.storage_runtime_v48 import storage_runtime
+
+        storage_runtime.invalidate_user_config(int(user_id))
         return elevation
     except Exception:
         return None

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.4.1"
+VERSION = "5.4.2"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -23,6 +23,9 @@ VERSION = "5.4.1"
 # v5.4.1 is an AGY-only reliability patch: durable quota holds, conservative
 # quota-reset parsing, fair Mongo context refresh, authoritative profile input,
 # and lossless findings pagination. Live physical prediction is unchanged.
+# v5.4.2 fixes the remaining general-audit setup, storage, self-hosting,
+# interaction, enrichment and photography correctness issues. Physical
+# prediction/qualification behavior remains unchanged.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 

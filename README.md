@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.4.1**  
+**Current code version: Plane Alerts v5.4.2**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,16 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v5.4.2 general reliability audit fixes
+
+v5.4.2 fixes the remaining non-AGY findings from the verified 2026-09-21 general audit. First-time setup only enables monitoring after a successful coherent profile save; partial profile materialization keeps the previous per-user last-known-good generation and can repair a torn generation from the authoritative active profile after restart.
+
+Self-hosting now accepts a blank optional `ADMIN_TELEGRAM_ID`, sensitive admin APIs fail closed when `ADMIN_PASSWORD` is blank, and rollout/container readiness uses `/ready` rather than liveness-only `/health`. The v4.6 interaction layer is installed explicitly during fresh runtime composition, and cached live-user loading again queues nonblocking observer-elevation enrichment tied to the exact saved coordinates.
+
+Preset Save callbacks are bound to one draft session, historical photography snapshots retain their real elapsed observation age, and untargeted `/photo` selection uses the same canonical aircraft filter as alerts. Effective inherited altitude rules are validated before save, and current help/photography/admin product-version text uses the canonical release identity.
+
+These changes do not intentionally alter trajectory, CPA, ETA, confidence, terminal inference, qualification, cancellation, alert timing or provider polling. The physical prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.4.1 AGY reliability hotfix
 
@@ -141,7 +151,7 @@ MongoDB remains the primary production persistence layer, but it is not treated 
 
 Active location/preferences/admin-control data is loaded as an atomic configuration image. Location and preference documents must share the same `config_revision`; mixed old/new pairs are not published to the live worker.
 
-Successful active-profile materialization invalidates the cached image so it is refreshed promptly. If the refresh fails, Plane Alerts retains the previous verified image rather than replacing it with partial state.
+Successful active-profile materialization invalidates the cached image so it is refreshed promptly. If one write of a new configuration generation fails, the authoritative active profile remains on the previous committed config and a warm worker preserves that user's prior coherent last-known-good image instead of dropping the user. On restart, a torn legacy materialization can be repaired from the authoritative active profile before it is admitted to the cache.
 
 A cold process without a verified configuration does **not** invent monitoring state during a database outage.
 
@@ -184,7 +194,7 @@ Features that require new durable state may be temporarily unavailable or delaye
 
 Telegram settings failures return a clear temporary-unavailability message. The application never pretends a setting was saved when persistence failed.
 
-`/health` and `/ready` distinguish application readiness from database degradation. A warm live worker may remain operational while `database_degraded` is true; a cold process without verified configuration is not marked ready.
+`/health` and `/ready` distinguish application readiness from database degradation. A warm live worker may remain operational while `database_degraded` is true; a cold process without verified configuration is not marked ready. Rollout/container health uses `/ready`.
 
 ### Storage diagnostics
 
@@ -258,7 +268,7 @@ Profile defaults
   -> Aircraft-specific override
 ```
 
-Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle checks.
+v5.4.2 validates the effective inherited altitude range before saving. Selecting an aircraft never bypasses trajectory, CPA, confidence or lifecycle checks.
 
 ## Prediction Lab and Error Museum
 
@@ -269,6 +279,8 @@ Lifecycle cancellation alone is not ground truth for false-positive or cancellat
 ## Photography and contrails
 
 Plane Alerts provides deterministic spotting guidance for camera settings, framing, sun position, atmospheric conditions, upper-air conditions, contrail probability and shooting-window timing.
+
+Untargeted `/photo` selection uses the active profile's canonical aircraft filter. A retained notification snapshot is historical unless fresh live observations replace it; elapsed time since capture is included in its position age and a stale snapshot cannot manufacture a current shooting countdown.
 
 Google Contrails, when configured through `GOOGLE_CONTRAILS_API_KEY`, remains optional enrichment. Its failure or storage cache cannot influence trajectory, CPA, ETA, confidence, airport/runway inference, qualification, cancellation or alert timing.
 
@@ -297,13 +309,14 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial equivalence, fresh-interpreter production-wrapper composition, bounded-memory/work, AGY provider-age/stale-latch regressions, and a 500-user/600-aircraft deterministic scale gate. v5.4 adds six-preset mapping/editability checks, non-destructive setup recovery, navigation/stale-callback recovery, Mini App branding validation, callback-size checks, a deterministic preset/profile micro-benchmark, and fresh-image v5.4 runtime wiring verification. v5.4.1 adds offline AGY quota-hold/parser/tooling-recovery regressions, per-collection Mongo fairness/freshness checks, authoritative-profile context coverage, and lossless findings-pagination coverage without launching AGY inference.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial equivalence, fresh-interpreter production-wrapper composition, bounded-memory/work, AGY provider-age/stale-latch regressions, and a 500-user/600-aircraft deterministic scale gate. v5.4 adds six-preset mapping/editability checks, non-destructive setup recovery, navigation/stale-callback recovery, Mini App branding validation, callback-size checks, a deterministic preset/profile micro-benchmark, and fresh-image v5.4 runtime wiring verification. v5.4.1 adds offline AGY quota-hold/parser/tooling-recovery regressions, per-collection Mongo fairness/freshness checks, authoritative-profile context coverage, and lossless findings-pagination coverage without launching AGY inference. v5.4.2 adds exact regressions for setup activation, torn profile generations, fail-closed admin access, rollout readiness, fresh-import interaction wiring, elevation enrichment, stale preset callbacks, historical photography freshness, canonical photo filtering, inherited altitude validation and canonical product-version displays.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
+pytest -q tests/test_general_audit_fixes_v542.py
 pytest -q tests/test_shadow_evaluation_v52.py
 pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_agy_regressions.py tests/test_v35_shared_polling.py
 pytest -q tests/test_user_experience_v54.py
