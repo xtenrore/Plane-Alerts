@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.2.0**  
+**Current code version: Plane Alerts v5.2.1**  
 **Current prediction version: `5.1-3d-proximity`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -35,6 +35,8 @@ v5.2 makes prediction development data-driven without changing the live physical
 Prediction Lab snapshots now record application release version and shadow feature-flag state. When a later outcome has explicit scoreable ground truth, Plane Alerts can evaluate the production control and shadow candidates side by side for CPA error, ETA error, false-positive/false-negative behavior, alert lead time and confidence calibration. Results are grouped by release and model ID so changes can be compared over time.
 
 Ground truth remains conservative. An observed in-radius pass is scoreable. A lifecycle cancellation is not automatically a successful negative outcome, because the aircraft may later pass nearby. Missing ADS-B coverage is unresolved. If a denominator does not exist, the corresponding rate remains unknown rather than being reported as zero.
+
+ETA error is scored only when the actual closest physical observation has a matched timestamp. If that timestamp is unavailable, CPA/classification evidence may still be scoreable, but ETA remains unavailable rather than substituting lifecycle-resolution time.
 
 Shadow evaluation is isolated in the existing bounded Prediction Lab optional-work path and adds no ADS-B provider request or synchronous operation to the five-second alert-critical calculation. Evaluation records have deterministic IDs, bounded lookup windows and a 14-day TTL.
 
@@ -269,56 +271,18 @@ python -m compileall -q app vercel_runtime worker.py
 python scripts/build_airport_database.py
 python scripts/verify_airport_database.py
 pytest -q
-pytest -q tests/test_shadow_evaluation_v52.py
-python scripts/evaluate_v52_shadow_replay.py
-python scripts/benchmark_v52_shadow_eval.py
-python scripts/benchmark_v51_geometry.py
-python scripts/benchmark_v50_observability.py
+python scripts/benchmark_v42.py
+python scripts/benchmark_v45_provider_path.py
+python scripts/benchmark_v46_prediction.py
+python scripts/benchmark_v46_telegram_latency.py
+python scripts/benchmark_v47_terminal.py
+python scripts/benchmark_v471_airport_lookup.py
+python scripts/benchmark_v472_terminal_hold.py
+python scripts/benchmark_v48_storage.py
 python scripts/benchmark_v49_doctor.py
-docker compose config --quiet
-pip check
+python scripts/benchmark_v50_observability.py
+python scripts/benchmark_v51_geometry.py
+python scripts/benchmark_v52_shadow_eval.py
 ```
 
-All prior release regression and benchmark commands remain enforced in GitHub Actions.
-
-## Deployment
-
-Production runs on Railway. Deployment occurs only after the exact `main` commit passes CI and final engineering review. The deployed build reports its exact commit through runtime metadata; deployment SHAs are not hard-coded in source.
-
-The trusted post-CI deployment gate first verifies on a standard GitHub-hosted runner that the successful workflow came from this repository's `main` push and that the tested SHA is still the current `main` head. Only then does the separate Railway CLI container receive and deploy that exact SHA.
-
-The main service runs Telegram, shared ADS-B polling, deterministic prediction, route history, photography intelligence and Next60. A separate AGY service performs post-outcome investigation and may suggest hypotheses, but it does not control trajectory or notification decisions. Railway AI is not used.
-
-The existing AGY persistent volume and unrelated staged Railway configuration changes are not modified as part of a normal source release.
-
-## Running locally
-
-The supported self-hosting path is Docker Compose:
-
-```bash
-git clone https://github.com/xtenrore/Plane-Alerts.git
-cd Plane-Alerts
-cp .env.example .env
-docker compose build plane-alerts
-docker compose run --rm plane-alerts planealerts doctor --offline
-docker compose up -d
-```
-
-After startup, operators can inspect bounded diagnostics from the same image with `planealerts metrics`, `planealerts diagnostics --aircraft <icao24>`, or `planealerts shadow-eval`.
-
-For native Python and Raspberry Pi/ARM64 instructions, health checks, backups, upgrades and rollback, see [`docs/self-hosting.md`](docs/self-hosting.md).
-
-## Known limitations
-
-- v5.2 can score observed positive passes immediately, but false-positive and cancellation-accuracy rates remain unavailable until a separately validated negative outcome exists; a cancellation by itself is not assumed correct.
-- v5.2 shadow candidates are evaluation-only and cannot be promoted automatically.
-- If observer terrain elevation is initially unavailable, v5.1 uses conservative altitude bounds and falls back to horizontal relevance when the 3D result is ambiguous.
-- ADS-B altitude is treated as uncertain sensor data; malformed or discontinuous altitude cannot safely suppress a horizontally qualifying pass.
-- A cold restart during a complete Mongo outage cannot safely reconstruct configuration or a just-delivered alert that was never durably persisted; readiness remains false rather than fabricating state.
-- Optional analytics can be dropped under prolonged storage pressure and are counted in diagnostics.
-- AGY may temporarily serve last-known-good redacted context while its Atlas bridge circuit is degraded; that state is labeled and is not evidence of a successful or missed prediction.
-- Mutable SQLite persistence is not implemented.
-- The worldwide airport catalogue is community-maintained; maintained Plane Alerts overrides and fresh physical observations take precedence where stronger evidence exists.
-- Broader runway/history suppression remains shadow-only pending representative outcome evidence.
-- Longer-range 30–60-minute prediction evaluation remains shadow-only; missing regional ADS-B coverage is unresolved rather than scored as success or failure.
-- Raspberry Pi validation is automated ARM64 Docker build validation; it is not a claim of testing every physical Pi model, receiver or storage device.
+Release deployment is gated on the exact tested `main` SHA. Tagged release publication verifies that the successful test run came from a same-repository `push` on `main` and that the tested SHA is still the current `main` head before creating the immutable release. Railway deployment applies the same trust conditions before checking out the exact tested SHA and refuses a stale tested commit if `main` has moved. Railway AI is not used.
