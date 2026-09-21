@@ -28,6 +28,7 @@
       "outcome_basis": "observed_in_radius_pass",
       "scoreable": true,
       "captured_at": "2026-09-21T05:02:00+00:00",
+      "observed_closest_at": "2026-09-21T05:02:00+00:00",
       "observed_closest_km": 4.2
     }
   },
@@ -60,6 +61,7 @@
       "outcome_basis": "observed_in_radius_pass",
       "scoreable": true,
       "captured_at": "2026-09-21T05:20:00+00:00",
+      "observed_closest_at": "2026-09-21T05:20:00+00:00",
       "observed_closest_km": 5.0
     }
   },
