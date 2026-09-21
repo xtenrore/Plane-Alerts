@@ -81,10 +81,21 @@ def test_guided_profile_layer_is_explicit_and_before_legacy_handlers():
     main_source = inspect.getsource(main_runtime)
     assert "group = -40" in ux_source
     assert 'CommandHandler("profiles"' in ux_source
+    assert 'CommandHandler("setup"' in ux_source
     assert 'CommandHandler("preferences"' in ux_source
     assert "register_v54_handlers(telegram_app)" in main_source
     assert main_source.index("register_v54_handlers(telegram_app)") < main_source.index("register_profile_handlers(telegram_app)")
+    assert main_source.index("register_v54_handlers(telegram_app)") < main_source.index("register_handlers(telegram_app)")
     assert "install_v54_profile_experience" not in inspect.getsource(ux)
+
+
+def test_setup_command_is_non_destructive_and_reopens_active_profile():
+    source = inspect.getsource(ux.cmd_setup_v54)
+    assert "ensure_default_profile" in source
+    assert "_clear_state" in source
+    assert "_render_detail" in source
+    assert "delete_one" not in source
+    assert "stay active until you save changes or apply a preset" in source
 
 
 def test_profile_navigation_has_quick_custom_back_cancel_close_and_status():
@@ -105,10 +116,13 @@ def test_preferences_command_opens_active_profile_editor_not_aircraft_picker():
 
 def test_restart_commands_recover_profile_state_without_dead_end():
     profiles = inspect.getsource(ux.cmd_profiles_v54)
+    setup = inspect.getsource(ux.cmd_setup_v54)
     preferences = inspect.getsource(ux.cmd_preferences_v54)
     assert "_clear_state" in profiles
+    assert "_clear_state" in setup
     assert "_clear_state" in preferences
     assert "ApplicationHandlerStop" in profiles
+    assert "ApplicationHandlerStop" in setup
     assert "ApplicationHandlerStop" in preferences
 
 
