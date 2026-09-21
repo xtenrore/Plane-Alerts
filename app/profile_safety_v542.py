@@ -2,7 +2,8 @@
 
 This layer is installed explicitly by the Telegram profile registration path.
 It does not alter prediction, CPA, ETA, qualification, cancellation, or alert
-timing. It only tightens profile commit/validation behavior.
+timing. It only tightens profile commit/validation behavior and installs the
+related preset/photography correctness guards.
 """
 from __future__ import annotations
 
@@ -107,4 +108,10 @@ def install_profile_safety_v542() -> None:
 
     legacy._validate_draft = validate_draft_v542
     legacy._save_edit = save_edit_v542
+
+    from app.preset_session_v542 import install_preset_session_v542
+    from app.photography_safety_v542 import install_photography_safety_v542
+
+    install_preset_session_v542()
+    install_photography_safety_v542()
     _INSTALLED = True
