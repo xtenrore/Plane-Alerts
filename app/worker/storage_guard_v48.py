@@ -151,6 +151,29 @@ async def _load_active_users_coherent(db: Any) -> dict[int, dict[str, Any]]:
     return out
 
 
+def _queue_observer_elevation_cached(uid: int, loc: dict[str, Any]) -> None:
+    """Queue at most one terrain lookup per exact persisted location generation."""
+    if loc.get("elevation_m") is not None:
+        return
+    try:
+        lat = float(loc["latitude"])
+        lon = float(loc["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return
+    revision = str(loc.get("config_revision") or "legacy")
+    monitor.enrichment.get(
+        (
+            "observer_elevation_v542",
+            int(uid),
+            revision,
+            round(lat, 6),
+            round(lon, 6),
+        ),
+        lambda: monitor.resolve_observer_elevation(int(uid), lat, lon),
+        ttl=900,
+    )
+
+
 async def _get_active_users_cached() -> list[dict[str, Any]]:
     """Return last-known-good config; only the first cold cycle may warm Mongo."""
     if not storage_runtime.config_loaded:
@@ -161,11 +184,9 @@ async def _get_active_users_cached() -> list[dict[str, Any]]:
             return []
     storage_runtime.start()
     users = storage_runtime.active_users()
-    # Observer terrain is optional work. Queue it from the production cached
-    # path rather than the legacy Mongo getter, never awaiting it here.
     for user in users:
         try:
-            monitor._queue_observer_elevation(int(user["user_id"]), user.get("location") or {})
+            _queue_observer_elevation_cached(int(user["user_id"]), user.get("location") or {})
         except Exception:
             logger.debug("observer_elevation_queue_failed", exc_info=True)
     return users
