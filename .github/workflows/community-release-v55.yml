@@ -78,7 +78,7 @@ jobs:
             [[ -s "$asset" ]] || { echo "Missing installer asset: $asset" >&2; exit 1; }
           done
 
-      - name: Build checksum manifest
+      - name: Build and verify checksum manifest
         shell: bash
         run: |
           set -euo pipefail
@@ -89,8 +89,8 @@ jobs:
           (
             cd release-assets
             sha256sum setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh > SHA256SUMS.txt
+            sha256sum -c SHA256SUMS.txt
           )
-          sha256sum -c release-assets/SHA256SUMS.txt --ignore-missing
 
       - name: Refuse conflicting tag or existing release
         shell: bash
