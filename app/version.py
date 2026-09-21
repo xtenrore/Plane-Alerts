@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.4.2"
+VERSION = "5.5.0"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -26,6 +26,9 @@ VERSION = "5.4.2"
 # v5.4.2 fixes the remaining general-audit setup, storage, self-hosting,
 # interaction, enrichment and photography correctness issues. Physical
 # prediction/qualification behavior remains unchanged.
+# v5.5 adds the community-only guided self-hosting installer, a first-class
+# local SQLite persistence backend, stable-release updater/rollback plumbing,
+# platform installers and diagnostics. Physical prediction is unchanged.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
