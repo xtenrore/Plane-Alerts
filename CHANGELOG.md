@@ -2,6 +2,19 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.4.0 — User Experience & Presets
+
+- Added six editable profile presets: Casual Observer, Aircraft Photographer, Airport-Adjacent, Rare Aircraft Hunter, Military Watcher, and Local SDR Mode.
+- Added a guided profile creation choice between Quick Preset and the existing full Custom Setup flow.
+- Added preset preview/confirmation for existing profiles while preserving saved coordinates and unrelated preferences.
+- Improved `/profiles` navigation with explicit Back, Cancel, Close and Status actions, plus safe recovery from stale/interrupted menus.
+- Changed `/preferences` to open the active profile editor instead of dropping directly into the aircraft picker.
+- Added actionable validation routes for missing location, radius or aircraft selection.
+- Kept Telegram labels/callback payloads compact and within Telegram limits.
+- Updated the existing Next 60 Mini App branding to Plane Alerts without changing forecast semantics.
+- Added dedicated v5.4 UX regressions, fresh-image runtime wiring validation and a deterministic preset/profile micro-benchmark.
+- Physical prediction version remains `5.3-3d-proximity-age-aware`; no trajectory, CPA, ETA, terminal, qualification, cancellation or alert-timing behavior changed.
+
 ## v5.3.0 — Multi-Location & Scale
 
 - Added bounded observer-independent aircraft-motion reuse while preserving observer-specific CPA, 3D relevance, confidence, terminal and lifecycle decisions.
