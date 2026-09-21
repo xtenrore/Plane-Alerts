@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.4.0**  
+**Current code version: Plane Alerts v5.4.1**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,14 @@ ADS-B ingestion
 v4.8 keeps non-critical persistence outside that path. Once a process has loaded a verified active configuration, live monitoring uses bounded in-memory copies of active user/profile configuration and encounter lifecycle state. Mongo refresh and persistence happen on bounded background loops.
 
 A slow analytics write must not turn the five-second monitoring interval into a ten-second interval.
+
+## v5.4.1 AGY reliability hotfix
+
+v5.4.1 is limited to AGY reliability and release identity. It preserves durable AGY quota waits across restarts, deployment/startup overrides, force-run tokens, enable changes and tooling-recovery paths; unknown quota reset text now remains blocked instead of assuming a recovery window, while verified reset times always include the required ten-minute guard.
+
+AGY context refresh now isolates Mongo failures per collection so a timeout in one evidence source cannot starve later inputs. Cached evidence exposes per-collection freshness, profile auditing reads the authoritative `profiles` collection, and `/findings` pagination returns the earliest next bounded page without skipping older unhandled sequences.
+
+These changes do not alter trajectory, CPA, ETA, confidence, terminal inference, qualification, cancellation, alert timing or provider polling. The physical prediction version remains `5.3-3d-proximity-age-aware`. Normal Plane Alerts deployment still excludes the AGY Railway service; AGY deployment is handled separately under the no-paid-credit quota-safety rules.
 
 ## v5.4 user experience and presets
 
@@ -289,7 +297,7 @@ The private `/agy` console is owner-only and does not control live physical pred
 
 CI compiles the application, builds/verifies the pinned airport database, runs the full pytest suite, preserves all inherited Error Museum/provider/Telegram/terminal/storage regressions, and executes deterministic performance gates.
 
-v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial equivalence, fresh-interpreter production-wrapper composition, bounded-memory/work, AGY provider-age/stale-latch regressions, and a 500-user/600-aircraft deterministic scale gate. v5.4 adds six-preset mapping/editability checks, non-destructive setup recovery, navigation/stale-callback recovery, Mini App branding validation, callback-size checks, a deterministic preset/profile micro-benchmark, and fresh-image v5.4 runtime wiring verification.
+v4.9 additionally verifies the exact dependency lock, Docker Compose configuration, `planealerts doctor`, a fresh amd64 image and an ARM64 build path. v5.0 additionally gates operator explainability, AGY Mongo timeout fallback, diagnostics formatting overhead, fresh-image CLI availability and all inherited self-hosting checks. v5.1 additionally gates low/high-altitude geometry, overhead and crossing passes, climb/descent, missing or anomalous altitude, unknown observer elevation, configurable altitude relevance, observed-pass lifecycle semantics and deterministic 3D geometry overhead. v5.1.2 adds predictor-option compatibility coverage for v4.6 and critical timing. v5.1.3 extends that regression to the actual installed production stack: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing. v5.2 adds automatic shadow-evaluation regressions, a replay fixture that refuses unresolved cancellation/missing-coverage scoring, `shadow-eval` fresh-image validation and a deterministic evaluation-overhead benchmark. v5.3 adds multi-user state-isolation, brute-force spatial equivalence, fresh-interpreter production-wrapper composition, bounded-memory/work, AGY provider-age/stale-latch regressions, and a 500-user/600-aircraft deterministic scale gate. v5.4 adds six-preset mapping/editability checks, non-destructive setup recovery, navigation/stale-callback recovery, Mini App branding validation, callback-size checks, a deterministic preset/profile micro-benchmark, and fresh-image v5.4 runtime wiring verification. v5.4.1 adds offline AGY quota-hold/parser/tooling-recovery regressions, per-collection Mongo fairness/freshness checks, authoritative-profile context coverage, and lossless findings-pagination coverage without launching AGY inference.
 
 ```text
 python -m compileall -q app vercel_runtime worker.py
@@ -299,6 +307,7 @@ pytest -q
 pytest -q tests/test_shadow_evaluation_v52.py
 pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_agy_regressions.py tests/test_v35_shared_polling.py
 pytest -q tests/test_user_experience_v54.py
+pytest -q tests/test_agy_audit_fixes.py tests/test_agy_prediction_lab.py tests/test_agy_mongo_resilience_v50.py
 python scripts/evaluate_v52_shadow_replay.py
 python scripts/benchmark_v54_profile_ux.py
 python scripts/benchmark_v53_scale.py
