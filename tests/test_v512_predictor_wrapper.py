@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.intelligence import direct_presence_guard_v44 as v44
+from app.intelligence import midpoint_scale_v53 as midpoint_v53
 from app.intelligence import prediction_v46 as v46
 from app.intelligence import trajectory as trajectory
 from app.intelligence import trajectory_hotfix_v43 as v43
+from app.intelligence import trajectory_scale_v53 as scale_v53
 from app.worker import critical_timing
 
 NOW = 2_000_000_000.0
@@ -172,3 +176,79 @@ def test_full_chain_preserves_observed_in_radius_pass(monkeypatch):
 
     assert pred.already_passed is True
     assert pred.state == "Passed"
+
+
+def _assert_same_prediction(left, right):
+    assert left.state == right.state
+    assert left.confidence == right.confidence
+    assert left.enters_alert_radius == right.enters_alert_radius
+    assert left.already_passed == right.already_passed
+    assert left.turning_away == right.turning_away
+    assert left.altitude_relevance_applied == right.altitude_relevance_applied
+    for field in (
+        "confidence_score",
+        "current_distance_km",
+        "projected_closest_km",
+        "projected_closest_slant_km",
+        "time_to_cpa_s",
+        "radius_entry_s",
+        "projected_closest_3d_km",
+        "projected_closest_3d_lower_bound_km",
+        "time_to_3d_cpa_s",
+    ):
+        a = getattr(left, field)
+        b = getattr(right, field)
+        if a is None or b is None:
+            assert a is b
+        else:
+            assert abs(float(a) - float(b)) < 1e-9
+    assert len(left.path) == len(right.path)
+    for a, b in zip(left.path, right.path):
+        assert a.seconds == b.seconds
+        assert abs(a.latitude - b.latitude) < 1e-12
+        assert abs(a.longitude - b.longitude) < 1e-12
+        assert abs(a.horizontal_km - b.horizontal_km) < 1e-9
+
+
+def test_v53_shared_base_preserves_complete_wrapper_output(monkeypatch):
+    samples = [
+        trajectory.HistorySample(NOW - 15, 41.20, 28.95, 6000.0, 410.0, 173.0, -2.0, 0.0),
+        trajectory.HistorySample(NOW - 10, 41.18, 28.96, 5990.0, 412.0, 176.0, -2.0, 0.0),
+        trajectory.HistorySample(NOW - 5, 41.16, 28.97, 5980.0, 414.0, 179.0, -2.0, 0.0),
+        trajectory.HistorySample(NOW, 41.14, 28.98, 5970.0, 416.0, 182.0, -2.0, 0.0),
+    ]
+
+    scale_v53.reset_motion_cache_for_tests()
+    midpoint_v53.reset_midpoint_cache_for_tests()
+    _install_chain(monkeypatch, core=trajectory.predict_trajectory)
+    expected = critical_timing._critical_predict_trajectory(
+        samples, 41.0, 29.0, 15.0, now=NOW, user_altitude_m=100.0, altitude_relevance=True
+    )
+
+    scale_v53.reset_motion_cache_for_tests()
+    midpoint_v53.reset_midpoint_cache_for_tests()
+    _install_chain(monkeypatch, core=scale_v53.predict_trajectory)
+    actual = critical_timing._critical_predict_trajectory(
+        samples, 41.0, 29.0, 15.0, now=NOW, user_altitude_m=100.0, altitude_relevance=True
+    )
+    _assert_same_prediction(expected, actual)
+
+    # A second observer reuses both absolute paths, while their CPA remains
+    # independently evaluated by the full safety wrapper chain.
+    critical_timing._critical_predict_trajectory(
+        samples, 41.05, 29.05, 15.0, now=NOW, user_altitude_m=80.0, altitude_relevance=True
+    )
+    assert scale_v53.motion_cache_snapshot()["hits"] >= 1
+    assert midpoint_v53.midpoint_cache_snapshot()["hits"] >= 1
+
+
+def test_v53_production_install_order_keeps_safety_wrappers_above_shared_base():
+    worker_init = Path("app/worker/__init__.py").read_text(encoding="utf-8")
+    v35_source = Path("app/worker/v35.py").read_text(encoding="utf-8")
+    shared_install = worker_init.index("_trajectory_core.predict_trajectory = _predict_trajectory_v53")
+    v43_install = worker_init.index("install_trajectory_hotfix_v43()")
+    v44_install = worker_init.index("install_direct_presence_guard_v44()")
+    v46_install = worker_init.index("install_prediction_v46()")
+    critical_install = worker_init.index("install_critical_timing_guards()")
+    assert shared_install < v43_install < v44_install < v46_install < critical_install
+    assert "monitor.predict_trajectory = predict_trajectory_v53" not in v35_source
