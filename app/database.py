@@ -1,24 +1,22 @@
-"""Async MongoDB connection, schema and bounded diagnostics helpers."""
+"""Async storage connection, schema and bounded diagnostics helpers."""
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+import os
+from typing import Any
 from urllib.parse import urlsplit
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import monitoring
 from pymongo.errors import NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout
 
 from app.config import settings
 from app.storage_metrics_v48 import storage_metrics
 
-if TYPE_CHECKING:
-    from motor.motor_asyncio import AsyncIOMotorCollection
-
 logger = logging.getLogger(__name__)
 _client: AsyncIOMotorClient | None = None
-_db: AsyncIOMotorDatabase | None = None
+_db: Any | None = None
 _indexes_ready_for: tuple[str, str] | None = None
 _schema_ready_for: tuple[str, str] | None = None
 
@@ -53,6 +51,15 @@ class _StorageCommandListener(monitoring.CommandListener):
 _COMMAND_LISTENER = _StorageCommandListener()
 
 
+def _storage_backend() -> str:
+    raw = os.getenv("DATABASE_BACKEND", "").strip().lower()
+    if raw in {"local", "sqlite"}:
+        return "sqlite"
+    if raw in {"mongo", "mongodb", ""}:
+        return "mongodb"
+    raise RuntimeError("DATABASE_BACKEND must be mongodb or sqlite")
+
+
 def _mongo_target_label(uri: str) -> str:
     try:
         parsed = urlsplit(uri)
@@ -61,7 +68,28 @@ def _mongo_target_label(uri: str) -> str:
         return "mongodb://configured-host"
 
 
+def _sqlite_path() -> str:
+    raw = os.getenv("SQLITE_PATH", "").strip()
+    if raw:
+        return raw
+    from app.local_database_v55 import default_sqlite_path
+
+    return str(default_sqlite_path())
+
+
+def database_backend_name() -> str:
+    return _storage_backend()
+
+
+def database_target_label() -> str:
+    if _storage_backend() == "sqlite":
+        return "sqlite://local"
+    return _mongo_target_label(settings.mongo_uri)
+
+
 def _index_cache_key() -> tuple[str, str]:
+    if _storage_backend() == "sqlite":
+        return ("sqlite", _sqlite_path())
     return (_mongo_target_label(settings.mongo_uri), settings.database_name)
 
 
@@ -70,13 +98,7 @@ def _is_timeout(exc: BaseException) -> bool:
 
 
 async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
-    """Run v4.8 migrations once for a real Mongo-style database handle.
-
-    Some legacy unit tests intentionally inject opaque sentinel objects to verify
-    connection/index caching. Those objects are not database implementations and
-    cannot support schema operations, so they must not be mistaken for Mongo.
-    Production Motor database objects always implement collection access.
-    """
+    """Run storage migrations once for a real database handle."""
     global _schema_ready_for
     if _schema_ready_for == key:
         return
@@ -89,14 +111,37 @@ async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
     _schema_ready_for = key
 
 
+async def _connect_sqlite(*, ensure_indexes: bool) -> Any:
+    global _db, _indexes_ready_for
+    from app.local_database_v55 import SQLiteDatabase
+
+    path = _sqlite_path()
+    key = ("sqlite", path)
+    storage_metrics.set_state("connecting")
+    if _db is None or not bool(getattr(_db, "is_plane_alerts_sqlite", False)):
+        _db = SQLiteDatabase(path)
+    await _db.command("ping")
+    storage_metrics.set_state("healthy")
+    if ensure_indexes and _indexes_ready_for != key:
+        await _ensure_indexes(_db)
+        _indexes_ready_for = key
+    if ensure_indexes:
+        await _ensure_schema(_db, key)
+    logger.info("SQLite storage ready")
+    return _db
+
+
 async def connect_db(
     max_retries: int = 5,
     retry_delay: float = 2.0,
     timeout_ms: int = 10000,
     *,
     ensure_indexes: bool = True,
-) -> AsyncIOMotorDatabase:
+) -> Any:
     global _client, _db, _indexes_ready_for
+    if _storage_backend() == "sqlite":
+        return await _connect_sqlite(ensure_indexes=ensure_indexes)
+
     key = _index_cache_key()
     if _client is not None and _db is not None:
         if ensure_indexes and _indexes_ready_for != key:
@@ -122,7 +167,7 @@ async def connect_db(
                 maxPoolSize=5,
                 minPoolSize=0,
                 maxIdleTimeMS=60000,
-                appname="plane-alerts-v4.8",
+                appname="plane-alerts-v5.5",
                 event_listeners=[_COMMAND_LISTENER],
             )
             _db = _client[settings.database_name]
@@ -148,15 +193,13 @@ async def connect_db(
             if attempt < max_retries:
                 logger.warning(
                     "Failed to connect to MongoDB (%s). Retrying in %.1fs...",
-                    type(exc).__name__,
-                    retry_delay,
+                    type(exc).__name__, retry_delay,
                 )
                 await asyncio.sleep(retry_delay)
             else:
                 logger.error(
                     "Could not connect to MongoDB after %d attempts: %s",
-                    max_retries,
-                    type(exc).__name__,
+                    max_retries, type(exc).__name__,
                 )
                 raise
 
@@ -177,36 +220,41 @@ async def ping_db(*, timeout_s: float = 1.0) -> bool:
 
 
 async def close_db() -> None:
-    global _client, _db
+    global _client, _db, _indexes_ready_for, _schema_ready_for
+    if _db is not None and bool(getattr(_db, "is_plane_alerts_sqlite", False)):
+        await _db.close()
+        _db = None
     if _client is not None:
         _client.close()
         _client = None
         _db = None
-        storage_metrics.set_state("closed")
-        logger.info("MongoDB connection closed.")
+    _indexes_ready_for = None
+    _schema_ready_for = None
+    storage_metrics.set_state("closed")
+    logger.info("Database connection closed.")
 
 
-def get_db() -> AsyncIOMotorDatabase:
+def get_db() -> Any:
     if _db is None:
         raise RuntimeError("Database not initialised – call connect_db() first.")
     return _db
 
 
-def users_col() -> AsyncIOMotorCollection: return get_db()["users"]
-def locations_col() -> AsyncIOMotorCollection: return get_db()["locations"]
-def preferences_col() -> AsyncIOMotorCollection: return get_db()["preferences"]
-def profiles_col() -> AsyncIOMotorCollection: return get_db()["profiles"]
-def notification_history_col() -> AsyncIOMotorCollection: return get_db()["notification_history"]
-def user_state_col() -> AsyncIOMotorCollection: return get_db()["user_state"]
-def provider_learning_col() -> AsyncIOMotorCollection: return get_db()["provider_learning"]
-def ai_usage_col() -> AsyncIOMotorCollection: return get_db()["ai_usage"]
-def feedback_col() -> AsyncIOMotorCollection: return get_db()["feedback"]
-def camera_profiles_col() -> AsyncIOMotorCollection: return get_db()["camera_profiles"]
-def system_status_col() -> AsyncIOMotorCollection: return get_db()["system_status"]
-def admin_audit_col() -> AsyncIOMotorCollection: return get_db()["admin_audit"]
+def users_col() -> Any: return get_db()["users"]
+def locations_col() -> Any: return get_db()["locations"]
+def preferences_col() -> Any: return get_db()["preferences"]
+def profiles_col() -> Any: return get_db()["profiles"]
+def notification_history_col() -> Any: return get_db()["notification_history"]
+def user_state_col() -> Any: return get_db()["user_state"]
+def provider_learning_col() -> Any: return get_db()["provider_learning"]
+def ai_usage_col() -> Any: return get_db()["ai_usage"]
+def feedback_col() -> Any: return get_db()["feedback"]
+def camera_profiles_col() -> Any: return get_db()["camera_profiles"]
+def system_status_col() -> Any: return get_db()["system_status"]
+def admin_audit_col() -> Any: return get_db()["admin_audit"]
 
 
-async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
+async def _ensure_indexes(db: Any) -> None:
     logger.info("Ensuring database indexes …")
     await db["users"].create_index("user_id", unique=True)
     await db["users"].create_index("username")
