@@ -31,6 +31,13 @@ _SNAPSHOT_INTERVAL_S = 60.0
 _MAX_THROTTLE_KEYS = 4096
 _last_snapshot: dict[tuple[int, str], float] = {}
 
+# ETA evaluation needs the timestamp of the actually observed closest point,
+# not the later lifecycle-resolution time. Track this cheaply in memory on every
+# monitor call to enqueue_snapshot; persistence remains rate-limited separately.
+_MAX_CLOSEST_KEYS = 4096
+_CLOSEST_RESET_S = 1800.0
+_closest_observation: dict[tuple[int, str], tuple[float, datetime, float]] = {}
+
 
 def _prune_throttle(now: float) -> None:
     if len(_last_snapshot) <= _MAX_THROTTLE_KEYS:
@@ -64,6 +71,43 @@ def _safe_float(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _track_closest_observation(
+    user_id: int,
+    icao: str,
+    current_distance_km: Any,
+    diagnostics: dict | None,
+) -> None:
+    """Track the closest fresh observation timestamp without touching alert decisions."""
+    distance = _safe_float(current_distance_km)
+    observed_epoch = _safe_float((diagnostics or {}).get("last_observation_at"))
+    if distance is None or distance < 0 or observed_epoch is None or observed_epoch <= 0:
+        return
+    try:
+        observed_at = datetime.fromtimestamp(observed_epoch, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return
+
+    now_mono = time.monotonic()
+    key = (int(user_id), str(icao).lower().strip())
+    previous = _closest_observation.get(key)
+    if previous is None or now_mono - previous[2] > _CLOSEST_RESET_S or distance <= previous[0]:
+        _closest_observation[key] = (distance, observed_at, now_mono)
+    else:
+        # Preserve the closest distance/timestamp but refresh recency so an
+        # active encounter is not mistaken for an old one.
+        _closest_observation[key] = (previous[0], previous[1], now_mono)
+
+    if len(_closest_observation) > _MAX_CLOSEST_KEYS:
+        stale_cutoff = now_mono - _CLOSEST_RESET_S
+        for old_key, (_, _, seen) in list(_closest_observation.items()):
+            if seen < stale_cutoff:
+                _closest_observation.pop(old_key, None)
+        if len(_closest_observation) > _MAX_CLOSEST_KEYS:
+            oldest = sorted(_closest_observation.items(), key=lambda item: item[1][2])[: len(_closest_observation) - _MAX_CLOSEST_KEYS]
+            for old_key, _ in oldest:
+                _closest_observation.pop(old_key, None)
 
 
 def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | None) -> dict:
@@ -200,6 +244,7 @@ async def record_prediction_outcome(
     outcome: str,
     observed_closest_km: float,
     final_prediction: Any,
+    observed_closest_at: datetime | None = None,
     previous_projected_closest_km: float | None = None,
     route_suppressed: bool = False,
     route_reason: str = "",
@@ -225,6 +270,7 @@ async def record_prediction_outcome(
         "aircraft_type": str(getattr(aircraft, "aircraft_type", "") or getattr(aircraft, "display_type", "") or ""),
         "outcome": str(outcome),
         "observed_closest_km": float(observed_closest_km),
+        "observed_closest_at": observed_closest_at,
         "previous_projected_closest_km": previous_cpa,
         "final_projected_closest_km": float(getattr(final_prediction, "projected_closest_km", 0.0) or 0.0),
         "final_projected_closest_3d_km": _safe_float(getattr(final_prediction, "projected_closest_3d_km", None)),
@@ -251,6 +297,12 @@ async def record_prediction_outcome(
 
 
 def enqueue_snapshot(*, user_id, aircraft, prediction, alert_radius_km, qualifies, route_suppressed, route_reason="", diagnostics=None):
+    # Track the true closest observation timestamp on every live call. The
+    # database snapshot remains independently throttled to one per minute.
+    icao = str(getattr(aircraft, "icao24", "") or "").lower().strip()
+    if icao:
+        _track_closest_observation(user_id, icao, getattr(prediction, "current_distance_km", None), diagnostics)
+
     # Capture diagnostics before replacing the live prediction object with a
     # scalar-only copy. This keeps shadow evidence bounded and joinable to the
     # existing Prediction Lab record without retaining projected paths.
@@ -269,5 +321,12 @@ def enqueue_snapshot(*, user_id, aircraft, prediction, alert_radius_km, qualifie
 
 def enqueue_outcome(**kwargs):
     aircraft = kwargs["aircraft"]
+    key = (int(kwargs["user_id"]), str(aircraft.icao24).lower().strip())
+    tracked = _closest_observation.pop(key, None)
+    if tracked is not None:
+        observed_closest = _safe_float(kwargs.get("observed_closest_km"))
+        tolerance_km = max(0.05, (observed_closest or 0.0) * 0.01)
+        if observed_closest is not None and abs(tracked[0] - observed_closest) <= tolerance_km:
+            kwargs = {**kwargs, "observed_closest_at": tracked[1]}
     audit_work.get(("outcome", kwargs["user_id"], aircraft.icao24, kwargs["outcome"]),
                    lambda: record_prediction_outcome(**kwargs), ttl=30)
