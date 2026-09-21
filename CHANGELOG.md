@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.1.3 — Complete v5.1 wrapper-chain compatibility hotfix
+
+- Fixed the additional production `TypeError` discovered after v5.1.2 deployment, where the installed v4.4 direct-presence wrapper rejected the v5.1 `altitude_relevance` option.
+- Updated both the v4.4 direct-presence wrapper and v4.3 midpoint wrapper to accept and forward the current v5.1 predictor signature while preserving unknown observer elevation.
+- Replaced the shortened compatibility regression with the actual installed chain: core v5.1 trajectory -> v4.3 midpoint -> v4.4 direct presence -> v4.6 confidence -> critical timing.
+- Physical prediction version remains `5.1-3d-proximity`; no trajectory thresholds, terminal guards, qualification rules or alert timing policy changed.
+
 ## v5.1.2 — Predictor-wrapper production compatibility hotfix
 
 - Fixed the production `TypeError` that prevented v5.1 3D predictions from running through the installed v4.6 confidence and critical-timing wrapper chain.
