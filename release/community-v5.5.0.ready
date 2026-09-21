@@ -1,0 +1,6 @@
+Plane Alerts v5.5.0 community release candidate
+
+release_branch=release/community-self-hosting-v5.5
+railway_deployment=excluded
+agy_runtime=excluded
+prediction_version=5.3-3d-proximity-age-aware
