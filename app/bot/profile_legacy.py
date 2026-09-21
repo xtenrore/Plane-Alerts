@@ -263,15 +263,17 @@ async def quick_location_message(update: Update, context: ContextTypes.DEFAULT_T
     raise ApplicationHandlerStop
 
 
+# Explicit runtime composition: app.main imports this module only after the
+# profile/Next60 modules exist. Install here so a fresh interpreter import of
+# app.main cannot depend on incidental app.worker import order.
+from app.profile_safety_v542 import install_profile_safety_v542
+from app.bot.interaction_v46 import install_interaction_v46
+
+install_profile_safety_v542()
+install_interaction_v46()
+
+
 def register_profile_legacy_handlers(app: Application) -> None:
-    # Explicitly install runtime composition fixes after the required bot modules
-    # are loaded and before any handler objects capture their callback functions.
-    from app.profile_safety_v542 import install_profile_safety_v542
-    from app.bot.interaction_v46 import install_interaction_v46
-
-    install_profile_safety_v542()
-    install_interaction_v46()
-
     group = -31
     app.add_handler(CommandHandler("setup", cmd_setup_profiled), group=group)
     app.add_handler(CommandHandler("location", cmd_location_profiled), group=group)
