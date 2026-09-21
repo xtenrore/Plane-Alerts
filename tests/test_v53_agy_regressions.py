@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +8,7 @@ from app.intelligence import trajectory as trajectory
 from app.intelligence.requalification_guard_v43 import CancellationLatch, _apply_latch
 from app.intelligence.route_guard_v42 import RouteGateResultV42
 from app.intelligence.trajectory_hotfix_v43 import predict_trajectory_v43
-from app.version import VERSION
+from app.version import PREDICTION_VERSION, VERSION
 
 
 def _samples(*, position_age_s: float):
@@ -22,6 +21,7 @@ def _samples(*, position_age_s: float):
 
 def test_v53_release_identity():
     assert VERSION == "5.3.0"
+    assert PREDICTION_VERSION == "5.3-3d-proximity-age-aware"
 
 
 def test_midpoint_eta_preserves_provider_position_age():
