@@ -13,6 +13,7 @@ import time
 from typing import Iterable
 
 from app.intelligence import trajectory as t
+from app.intelligence.midpoint_scale_v53 import shared_midpoint_motion
 
 _ORIGINAL_PREDICT = t.predict_trajectory
 _INSTALLED = False
@@ -91,12 +92,19 @@ def predict_trajectory_v43(
     speed_km_s = float(speed) * t.KNOTS_TO_KM_S
     dynamic = int(base.current_distance_km / max(speed_km_s, 1e-6) * 1.30 + 45)
     horizon = min(max_horizon_s, max(180, dynamic))
-    vr = latest.vertical_rate_mps or 0.0
-    curr_lat = latest.latitude
-    curr_lon = latest.longitude
-    curr_heading = float(heading) % 360.0
-    projected_speed = float(speed)
-    altitude = latest.altitude_m
+
+    # v5.3 shares only the absolute midpoint-integrated motion path. The
+    # observer-specific distance/CPA/slant/3D calculations below remain per-user
+    # and therefore preserve every established v4.3+ safety rule.
+    motion_points = shared_midpoint_motion(
+        raw_samples,
+        speed_kts=float(speed),
+        heading_deg=float(heading),
+        acceleration_kts_s=base.acceleration_kts_s,
+        turn_rate_deg_s=base.turn_rate_deg_s,
+        max_horizon_s=max_horizon_s,
+        step_s=step_s,
+    )
 
     path: list[t.ProjectedPoint] = []
     closest_h = base.current_distance_km
@@ -104,67 +112,35 @@ def predict_trajectory_v43(
     cpa_t = 0.0
     entry_t: float | None = 0.0 if base.current_distance_km <= alert_radius_km else None
 
-    for seconds in range(0, horizon + 1, step_s):
-        if seconds > 0:
-            accel_factor = max(
-                0.0,
-                1.0 - (seconds - step_s) / t._ACCEL_DECAY_S,
-            )
-            turn_factor = max(
-                0.0,
-                1.0 - (seconds - step_s) / t._TURN_DECAY_S,
-            )
-            (
-                next_speed,
-                next_heading,
-                midpoint_speed,
-                midpoint_heading,
-            ) = _midpoint_motion_step(
-                projected_speed,
-                curr_heading,
-                acceleration_kts_s=base.acceleration_kts_s,
-                turn_rate_deg_s=base.turn_rate_deg_s,
-                acceleration_factor=accel_factor,
-                turn_factor=turn_factor,
-                step_s=step_s,
-            )
-            curr_lat, curr_lon = t.project_point(
-                curr_lat,
-                curr_lon,
-                midpoint_speed * t.KNOTS_TO_KM_S * step_s,
-                midpoint_heading,
-            )
-            projected_speed = next_speed
-            curr_heading = next_heading
-            if altitude is not None:
-                altitude = max(0.0, altitude + vr * step_s)
-
-        horizontal = t.haversine_km(curr_lat, curr_lon, user_lat, user_lon)
+    for point in motion_points:
+        if point.seconds > horizon:
+            break
+        horizontal = t.haversine_km(point.latitude, point.longitude, user_lat, user_lon)
         slant = (
             math.hypot(
                 horizontal,
-                max(0.0, altitude - legacy_observer_altitude_m) / 1000.0,
+                max(0.0, float(point.altitude_m) - legacy_observer_altitude_m) / 1000.0,
             )
-            if altitude is not None
+            if point.altitude_m is not None
             else horizontal
         )
         path.append(
             t.ProjectedPoint(
-                float(seconds),
-                curr_lat,
-                curr_lon,
+                point.seconds,
+                point.latitude,
+                point.longitude,
                 horizontal,
                 slant,
-                altitude,
-                curr_heading,
+                point.altitude_m,
+                point.heading_deg,
             )
         )
         if horizontal < closest_h:
             closest_h = horizontal
             closest_slant = slant
-            cpa_t = float(seconds)
+            cpa_t = point.seconds
         if entry_t is None and horizontal <= alert_radius_km:
-            entry_t = float(seconds)
+            entry_t = point.seconds
 
     idx = min(range(len(path)), key=lambda index: path[index].horizontal_km)
     if 0 < idx < len(path) - 1:
@@ -182,7 +158,11 @@ def predict_trajectory_v43(
                 max(0.0, float(cpa_altitude if cpa_altitude is not None else legacy_observer_altitude_m) - legacy_observer_altitude_m) / 1000.0,
             )
 
-    age = max(0.0, effective_now - latest.timestamp)
+    # Match the authoritative base predictor: provider-reported position age is
+    # real observation latency even when the local timestamp is current. Using
+    # wall-clock age alone made midpoint ETA systematically late on delayed
+    # provider samples (AGY seq 140).
+    age = max(float(latest.position_age_s or 0.0), max(0.0, effective_now - latest.timestamp))
     cpa_t = max(0.0, cpa_t - age)
     if entry_t is not None:
         entry_t = max(0.0, entry_t - age)

@@ -26,9 +26,13 @@ def _cases():
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
-def test_v52_identity_keeps_physical_predictor_unchanged():
-    assert VERSION in {"5.2.0", "5.2.1"}
-    assert PREDICTION_VERSION == "5.1-3d-proximity"
+def test_v52_identity_keeps_historical_predictor_and_v53_advances_current_identity():
+    major, minor, patch = (int(part) for part in VERSION.split("."))
+    assert (major, minor, patch) >= (5, 2, 0)
+    if (major, minor) >= (5, 3):
+        assert PREDICTION_VERSION == "5.3-3d-proximity-age-aware"
+    else:
+        assert PREDICTION_VERSION == "5.1-3d-proximity"
 
 
 def test_shadow_feature_flags_default_to_shadow_only_enabled(monkeypatch):

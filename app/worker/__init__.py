@@ -9,6 +9,15 @@ if "pytest" not in sys.modules:
 
     install_reliability_guards()
 
+    # v5.3 changes only the observer-independent base motion projection. Install
+    # it before every established trajectory safety wrapper is imported so the
+    # wrapper chain remains: shared base -> v4.3 -> v4.4 -> v4.6 -> critical
+    # timing. Never replace monitor.predict_trajectory after that chain binds.
+    from app.intelligence import trajectory as _trajectory_core
+    from app.intelligence.trajectory_scale_v53 import predict_trajectory as _predict_trajectory_v53
+
+    _trajectory_core.predict_trajectory = _predict_trajectory_v53
+
     # Keep the robust trajectory predictor but remove systematic full-step
     # acceleration/turn integration bias.
     from app.intelligence.trajectory_hotfix_v43 import install_trajectory_hotfix_v43

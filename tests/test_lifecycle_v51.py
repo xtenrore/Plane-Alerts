@@ -29,9 +29,12 @@ def _sample(lat, *, heading=0.0, t=NOW, alt=1200.0):
     return HistorySample(t, lat, 29.0, alt, 360.0, heading, 0.0, 0.0)
 
 
-def test_v513_keeps_v51_physical_prediction_identity():
+def test_v51_or_later_keeps_3d_proximity_prediction_family():
     assert tuple(int(part) for part in VERSION.split(".")) >= (5, 1, 3)
-    assert PREDICTION_VERSION == "5.1-3d-proximity"
+    assert PREDICTION_VERSION in {
+        "5.1-3d-proximity",
+        "5.3-3d-proximity-age-aware",
+    }
 
 
 def test_observed_radius_entry_that_is_now_receding_finishes_as_passed():
