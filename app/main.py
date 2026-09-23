@@ -22,7 +22,6 @@ from telegram.ext import Application
 from app.admin.auth import DelegatedAdminMiddleware
 from app.admin.routes import router as admin_router
 from app.admin.v36_routes import router as admin_v36_router
-from app.agy_console import register_agy_console_handlers
 from app.aircraft.api_keys import opensky_key_manager
 from app.aircraft.providers import close_http_client
 from app.bot.handlers import register_handlers
@@ -150,7 +149,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             telegram_app = Application.builder().token(bot_token).update_queue(asyncio.Queue(maxsize=256)).concurrent_updates(False).build()
             register_storage_failure_handler(telegram_app)
-            register_agy_console_handlers(telegram_app)
             register_profile_legacy_handlers(telegram_app)
             register_v54_handlers(telegram_app)
             register_profile_handlers(telegram_app)
@@ -174,7 +172,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         BotCommand("photo", "Get live best-shot camera settings"),
                         BotCommand("conditions", "Show weather / sun / haze conditions"),
                         BotCommand("spotting", "Open Spotting Mode"),
-                        BotCommand("agy", "Open private Antigravity console"),
                         BotCommand("help", "Show all commands"),
                     ]
                 )

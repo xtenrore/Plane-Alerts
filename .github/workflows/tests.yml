@@ -77,8 +77,8 @@ jobs:
       - name: Run v4.9 self-hosting, doctor and release-publish suite
         run: pytest -q tests/test_self_hosting_v49.py tests/test_release_publish_v49.py
 
-      - name: Run v5.0 observability and AGY Mongo resilience suite
-        run: pytest -q tests/test_observability_v50.py tests/test_agy_mongo_resilience_v50.py tests/test_agy_prediction_bridge.py
+      - name: Run v5.0 observability suite
+        run: pytest -q tests/test_observability_v50.py
 
       - name: Run v5.1 3D proximity and observed-pass lifecycle suite
         run: pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py tests/test_v512_predictor_wrapper.py
@@ -89,8 +89,8 @@ jobs:
       - name: Replay v5.2 shadow evaluation fixtures
         run: python scripts/evaluate_v52_shadow_replay.py
 
-      - name: Run v5.3 multi-user scale, production-chain and AGY regression suite
-        run: pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_agy_regressions.py tests/test_v35_shared_polling.py
+      - name: Run v5.3 multi-user scale and production-chain regression suite
+        run: pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_prediction_regressions.py tests/test_v35_shared_polling.py
 
       - name: Run v5.4 presets, navigation, recovery and Mini App UX suite
         run: pytest -q tests/test_user_experience_v54.py
