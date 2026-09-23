@@ -2,6 +2,15 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.4.3 — AGY Removal
+
+- Permanently removed the retired AGY/Antigravity Railway service and persistent state volume.
+- Removed the `/agy` Telegram command, command-menu entry and handler registration.
+- Removed AGY runtime modules, Docker/dependency files, helper scripts, environment settings and AGY-only test suites.
+- Removed AGY-specific CI stages and the standalone quota snapshot file.
+- Preserved the useful v5.3 provider-age and stale-cancellation prediction regressions under a neutral test name.
+- Physical prediction version remains `5.3-3d-proximity-age-aware`; live trajectory, CPA, ETA, terminal, qualification, cancellation and alert-timing behavior are unchanged.
+
 ## v5.4.2 — General Reliability Audit Fixes
 
 - Fixed first-time setup so monitoring is enabled only after a successful coherent profile save.
@@ -48,9 +57,9 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - Added exact spatial candidate filtering so each user evaluates only aircraft within the existing `radius + 120 km` monitoring envelope; the spatial grid is acceleration-only and exact spherical membership remains authoritative.
 - Added bounded 1,024-entry LRUs for base motion and midpoint motion, plus an explicit per-user candidate-work cap with operator-visible scale counters.
 - Reused the existing shared regional ADS-B provider snapshots and enrichment caches; v5.3 does not add duplicate provider requests or a second feed layer.
-- Fixed the midpoint ETA/entry path to account for provider-reported ADS-B position age, resolving the reproducible late-ETA bias identified by AGY seq140.
+- Fixed the midpoint ETA/entry path to account for provider-reported ADS-B position age, resolving a reproducible late-ETA bias found in production evidence.
 - Prevented stale in-radius observations from clearing a cancellation latch; fresh direct physical presence can still recover a cancelled encounter.
-- Added multi-user isolation/equivalence regressions, a fresh-interpreter production-wrapper composition regression, AGY regressions and a deterministic 500-user/600-aircraft scale benchmark.
+- Added multi-user isolation/equivalence regressions, a fresh-interpreter production-wrapper composition regression, prediction regressions and a deterministic 500-user/600-aircraft scale benchmark.
 - Physical prediction version is `5.3-3d-proximity-age-aware`; no terminal-arrival threshold, qualification threshold, alert-delivery timing policy or runtime-AI authority changed.
 
 ## v5.2.1 — Release documentation truth patch
@@ -111,8 +120,7 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - Added `planealerts metrics` for persisted provider, timing, storage, queue and notification diagnostics.
 - Persisted provider request/error/timeout counts, latency percentiles, last success, stale rate and circuit state through the existing monitor heartbeat.
 - Added deterministic diagnostics-overhead benchmark and v5.0 regression gates.
-- Fixed AGY Atlas read-timeout storms with bounded reads, a cooldown circuit and last-known-good redacted context fallback.
-- Preserved independent `CHATGPT_HANDOFF_JSON` delivery when Mongo is degraded.
+- The retired external-agent bridge previously received storage-resilience work in this release; that integration was fully removed in v5.4.3.
 - Physical prediction version remains `4.7.3-terminal-delivery-landing-path`.
 
 ## v4.9.0 — Project Maturity & Self-Hosting

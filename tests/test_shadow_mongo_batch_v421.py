@@ -59,13 +59,6 @@ def test_collection_proxy_preserves_non_find_methods_and_query_arguments():
     assert collection.marker is raw.marker
 
 
-def test_bridge_uses_v421_batched_shadow_entrypoints():
-    source = Path("scripts/agy_bridge_daemon.py").read_text()
-    assert "from app.shadow_mongo_batch_v421 import update_next_hour_shadow, update_sentinel_shadow" in source
-    assert "from app.next_hour_shadow_v43 import update_next_hour_shadow" not in source
-    assert "from app.sentinel_shadow import update_sentinel_shadow" not in source
-
-
 def test_v421_wrapper_keeps_shadow_logic_modules_unchanged():
     source = Path("app/shadow_mongo_batch_v421.py").read_text()
     assert "next_hour_quality.update_next_hour_shadow" in source

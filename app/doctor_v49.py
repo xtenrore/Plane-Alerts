@@ -132,8 +132,6 @@ def static_checks(config: Settings) -> list[DoctorCheck]:
         contradictions.append("WEBHOOK_URL requires TELEGRAM_BOT_TOKEN")
     if str(config.local_adsb_auth_header or "").strip() and not local_url:
         contradictions.append("LOCAL_ADSB_AUTH_HEADER requires LOCAL_ADSB_URL")
-    if str(config.agy_worker_token or "").strip() and not str(config.agy_worker_url or "").strip():
-        contradictions.append("AGY_WORKER_TOKEN requires AGY_WORKER_URL")
     checks.append(
         DoctorCheck(
             "configuration-contradictions",

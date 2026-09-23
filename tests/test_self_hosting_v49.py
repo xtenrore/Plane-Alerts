@@ -19,8 +19,6 @@ def _config(**overrides: object) -> Settings:
         "poll_interval_seconds": 5,
         "local_adsb_url": "",
         "local_adsb_auth_header": "",
-        "agy_worker_url": "",
-        "agy_worker_token": "",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -98,16 +96,12 @@ def test_doctor_reports_configuration_contradictions_without_secret_values() -> 
         _config(
             local_adsb_url="",
             local_adsb_auth_header=secret,
-            agy_worker_url="",
-            agy_worker_token="worker-secret",
         )
     )
     contradiction = next(check for check in checks if check.name == "configuration-contradictions")
     assert contradiction.status == "fail"
     assert "LOCAL_ADSB_AUTH_HEADER requires LOCAL_ADSB_URL" in contradiction.detail
-    assert "AGY_WORKER_TOKEN requires AGY_WORKER_URL" in contradiction.detail
     assert secret not in contradiction.detail
-    assert "worker-secret" not in contradiction.detail
 
 
 def test_doctor_warns_when_monitor_interval_differs_from_production_baseline() -> None:

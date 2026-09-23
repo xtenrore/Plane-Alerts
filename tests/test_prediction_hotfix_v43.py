@@ -314,18 +314,6 @@ def test_next_hour_shadow_rejects_single_day_and_ambiguous_history():
     assert _history_quality_reason(2, 900.0) == ""
 
 
-def test_agy_headless_permissions_cover_supported_audit_commands_without_shell_bypass():
-    entrypoint = Path("scripts/agy-worker-entrypoint.sh").read_text()
-    for rule in ("command(python3)", "command(grep)", "command(ls)"):
-        assert f"    '{rule}'," in entrypoint
-    # The startup migrator may mention jq in order to remove an old persisted
-    # permission, but jq must not be present as an allowlist entry.
-    assert "    'command(jq)'," not in entrypoint
-    assert "[HEADLESS_TOOLING_RULES]" in entrypoint
-    assert "Do not use jq, sed, cat/heredocs" in entrypoint
-    assert "--dangerously-skip-permissions" not in entrypoint
-
-
 def test_worker_installs_direct_presence_and_bounded_route_writes_before_monitor_imports():
     worker_init = Path("app/worker/__init__.py").read_text()
     assert "install_direct_presence_guard_v44()" in worker_init

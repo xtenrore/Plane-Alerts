@@ -103,7 +103,3 @@ jobs:
             --environment "$ENVIRONMENT_ID" \
             --ci \
             --message "Plane Alerts main ${DEPLOY_SHA}"
-
-      # The AGY service is deliberately excluded from normal Plane Alerts
-      # releases. Restarting it can resume quota-consuming work. AGY must only
-      # be operated separately under the project's explicit quota-safety rules.

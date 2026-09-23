@@ -34,7 +34,7 @@ def _base() -> dict:
 
 
 def test_release_identity_and_physical_predictor_are_pinned():
-    assert VERSION == "5.4.2"
+    assert VERSION == "5.4.3"
     assert PREDICTION_VERSION == "5.3-3d-proximity-age-aware"
 
 

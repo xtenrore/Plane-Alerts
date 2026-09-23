@@ -1,6 +1,6 @@
 # Self-hosting Plane Alerts
 
-Plane Alerts v5.4.2 supports reproducible self-hosting on x86-64 and ARM64 Linux, including Raspberry Pi 4/5-class systems running a 64-bit OS. The alert-critical prediction path is the same deterministic/statistical code used in production.
+Plane Alerts v5.4.3 supports reproducible self-hosting on x86-64 and ARM64 Linux, including Raspberry Pi 4/5-class systems running a 64-bit OS. The alert-critical prediction path is the same deterministic/statistical code used in production.
 
 ## Recommended: Docker Compose
 
@@ -108,7 +108,7 @@ docker compose up -d
 
 Keep the previously verified Git tag/commit before upgrading. To roll back application code, check out that exact tag/commit and rebuild only the Plane Alerts image. Do not delete the Mongo volume. If a future release documents a destructive/non-backward-compatible migration, follow that release's migration notes and restore a compatible database backup rather than forcing older code against a newer schema.
 
-For v5.4.2, the immediate application rollback target is the verified v5.4.1 main commit `8e8b802dc15debe4353e846c7905c21b9a3d74fb`. Normal application rollback does not restart or alter the separate AGY service.
+For v5.4.3, the immediate application rollback target is the verified v5.4.2 main commit `dda3f132cfafa54c82831abcc8196ac8b3897788`.
 
 ## Reporting a problem
 

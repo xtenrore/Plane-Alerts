@@ -71,8 +71,6 @@ class Settings(BaseSettings):
     relearn_plane_count: int = 25
     admin_telegram_id: int | None = None
     admin_password: str = ""
-    agy_worker_url: str = ""
-    agy_worker_token: str = ""
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"

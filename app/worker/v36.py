@@ -16,7 +16,6 @@ import logging
 import time
 from typing import Any
 
-from app.agy_state import is_agy_console_active
 from app.config import settings
 from app.database import system_status_col, users_col
 from app.observability_v50 import _provider_status_safe
@@ -33,14 +32,10 @@ _last_user_processed_mono: dict[int, float] = {}
 
 def _control(user: dict[str, Any]) -> dict[str, Any]:
     raw = user.get("admin_control") or {}
-    # Opening the private /agy console temporarily mutes aircraft notifications
-    # without changing the user's saved notification preference. The in-memory
-    # flag automatically clears on /agy stop, console exit, or bot restart.
-    agy_muted = is_agy_console_active(int(user.get("user_id", 0) or 0))
     return {
         "priority_enabled": bool(raw.get("priority_enabled", False)),
         "delay_seconds": max(5.0, min(120.0, float(raw.get("delay_seconds", settings.poll_interval_seconds)))),
-        "notifications_enabled": bool(raw.get("notifications_enabled", True)) and not agy_muted,
+        "notifications_enabled": bool(raw.get("notifications_enabled", True)),
     }
 
 
