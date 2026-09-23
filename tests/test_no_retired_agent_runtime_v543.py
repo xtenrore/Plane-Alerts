@@ -44,3 +44,22 @@ def test_normal_ci_has_no_retired_agent_jobs():
     workflow = (ROOT / ".github/workflows/tests.yml").read_text(encoding="utf-8")
     assert "test_agy_" not in workflow
     assert "test_v53_agy_regressions.py" not in workflow
+
+
+def test_active_runtime_tree_has_no_retired_agent_references():
+    """Historical release notes may describe removal; executable/config code may not."""
+    roots = [ROOT / "app", ROOT / "scripts", ROOT / ".github"]
+    standalone = [ROOT / ".env.example", ROOT / "Dockerfile", ROOT / "requirements.txt"]
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.extend(path for path in root.rglob("*") if path.is_file())
+    candidates.extend(path for path in standalone if path.exists())
+
+    hits: list[str] = []
+    for path in candidates:
+        if path.suffix == ".pyc" or "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        if "agy" in text or "antigravity" in text:
+            hits.append(str(path.relative_to(ROOT)))
+    assert hits == []
