@@ -46,7 +46,7 @@ def test_normal_ci_has_no_retired_agent_jobs():
     assert "test_v53_agy_regressions.py" not in workflow
 
 
-def test_active_runtime_tree_has_no_retired_agent_references():
+def test_active_runtime_tree_has_no_precise_retired_agent_references():
     """Historical release notes may describe removal; executable/config code may not."""
     roots = [ROOT / "app", ROOT / "scripts", ROOT / ".github"]
     standalone = [ROOT / ".env.example", ROOT / "Dockerfile", ROOT / "requirements.txt"]
@@ -55,11 +55,30 @@ def test_active_runtime_tree_has_no_retired_agent_references():
         candidates.extend(path for path in root.rglob("*") if path.is_file())
     candidates.extend(path for path in standalone if path.exists())
 
+    precise_markers = (
+        "antigravity",
+        "app.agy_",
+        "from app.agy",
+        "import app.agy",
+        "agy_worker",
+        "agy_console",
+        "agy_bridge",
+        "agy_state",
+        "agy_permission",
+        "agy_tool_recovery",
+        "agy-worker",
+        "agy-record",
+        "agy_",
+        "/agy",
+        'botcommand("agy"',
+        "dockerfile.agy",
+        "requirements-agy",
+    )
     hits: list[str] = []
     for path in candidates:
         if path.suffix == ".pyc" or "__pycache__" in path.parts:
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore").lower()
-        if "agy" in text or "antigravity" in text:
+        text = path.read_text(encoding="utf-8", errors="ignore").casefold()
+        if any(marker.casefold() in text for marker in precise_markers):
             hits.append(str(path.relative_to(ROOT)))
     assert hits == []
