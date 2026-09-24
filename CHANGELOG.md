@@ -2,6 +2,12 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.6 — Retired Integration Cleanup
+
+- Removed remaining retired external-agent names and hand-off labels from active source comments, tests and historical documentation.
+- Removed the final stale retired-agent production token from Railway and added a repository-wide regression preventing those names from returning.
+- No live prediction, destination-path, provider, storage, Telegram or alert-timing behavior changed; prediction version remains `5.3-3d-proximity-age-aware`.
+
 ## v5.5.4 — Provider-First Destination Path Guard
 
 - Replaced the stacked route-history, expected-turn and runway/terminal live alert-veto chain with one cached provider-first destination/path qualification layer.
@@ -45,11 +51,11 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - Kept that public tag immutable; it was deliberately separate from the owner's Railway production deployment path.
 - Physical prediction version remained `5.3-3d-proximity-age-aware`.
 
-## v5.4.3 — AGY Removal
+## v5.4.3 — retired external agent Removal
 
-- Permanently removed the retired AGY/Antigravity Railway service and persistent state volume.
-- Removed the `/agy` Telegram command, command-menu entry and handler registration.
-- Removed AGY runtime modules, Docker/dependency files, helper scripts, environment settings and AGY-only test suites.
+- Permanently removed the retired retired external agent/retired external agent Railway service and persistent state volume.
+- Removed the `/retired_agent` Telegram command, command-menu entry and handler registration.
+- Removed retired external agent runtime modules, Docker/dependency files, helper scripts, environment settings and retired external agent-only test suites.
 - Preserved useful provider-age and stale-cancellation regressions under neutral prediction test names.
 - Physical prediction version remained `5.3-3d-proximity-age-aware`.
 

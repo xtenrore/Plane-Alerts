@@ -1,13 +1,13 @@
 """Deterministic next-hour spotting expectation-vs-reality shadow audit.
 
-This runs only inside the private AGY parent worker. It never sends alerts and
+This runs only inside the private retired external agent parent worker. It never sends alerts and
 never influences the production predictor. Expectations are inferred from the
 same flight-number's recent route timing (last three UTC days) and are later
 resolved against today's actually observed route.
 
 Missing today's route is explicitly *unresolved coverage*, never scored as a
 correct prediction or as a miss. Exact observer coordinates never leave this
-parent process; the AGY context bridge redacts user identity/location.
+parent process; the retired external agent context bridge redacts user identity/location.
 """
 from __future__ import annotations
 

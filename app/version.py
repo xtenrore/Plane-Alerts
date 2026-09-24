@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.5.4"
+VERSION = "5.6"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -36,6 +36,8 @@ VERSION = "5.5.4"
 # v5.5.4 replaces stacked route-history/runway arrival vetoes with one cached,
 # provider-first destination/path qualification guard. The underlying motion/3D
 # predictor is unchanged; only destination-aware alert qualification changes.
+# v5.6 removes all remaining retired external-agent names/hand-off residue from
+# active source, tests and documentation. Prediction behavior is unchanged.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 

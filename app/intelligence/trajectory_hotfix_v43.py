@@ -161,7 +161,7 @@ def predict_trajectory_v43(
     # Match the authoritative base predictor: provider-reported position age is
     # real observation latency even when the local timestamp is current. Using
     # wall-clock age alone made midpoint ETA systematically late on delayed
-    # provider samples (AGY seq 140).
+    # provider samples (retired external agent seq 140).
     age = max(float(latest.position_age_s or 0.0), max(0.0, effective_now - latest.timestamp))
     cpa_t = max(0.0, cpa_t - age)
     if entry_t is not None:

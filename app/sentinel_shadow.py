@@ -1,6 +1,6 @@
 """Deterministic Europe/adversarial Prediction Lab shadow evaluator.
 
-Runs in the parent AGY service with MongoDB access. It consumes the low-rate
+Runs in the parent retired external agent service with MongoDB access. It consumes the low-rate
 Europe sentinel route traces collected by the production service and creates two
 kinds of evidence:
 

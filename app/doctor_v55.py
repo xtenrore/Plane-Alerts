@@ -1,6 +1,6 @@
 """Plane Alerts v5.5 community self-hosting diagnostics.
 
-This doctor is read-only and deliberately excludes AGY. It validates either the
+This doctor is read-only and deliberately excludes retired external agent. It validates either the
 first-class local SQLite backend or MongoDB, then performs bounded Telegram and
 provider probes without printing credentials or exact private coordinates.
 """
@@ -200,9 +200,9 @@ def static_checks(config: Settings) -> list[DoctorCheck]:
     )
     checks.append(
         DoctorCheck(
-            "agy-exclusion",
+            "retired_agent-exclusion",
             "ok",
-            "Community installer and doctor do not configure, start, call or authenticate AGY",
+            "Community installer and doctor do not configure, start, call or authenticate retired external agent",
         )
     )
     checks.append(
