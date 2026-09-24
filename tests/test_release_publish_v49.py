@@ -69,14 +69,14 @@ def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     assert "Benchmark v5.5.4 non-blocking destination path gate" in workflow
 
 
-def test_long_community_matrix_is_weekly_or_manual_not_every_main_push():
+def test_community_matrix_is_manual_and_owned_by_chatgpt_weekly_task():
     workflow = _community_workflow_text()
     trigger_block = workflow.split("\npermissions:", 1)[0]
-    assert "schedule:" in trigger_block
-    assert 'cron: "30 2 * * 1"' in trigger_block
     assert "workflow_dispatch:" in trigger_block
-    assert "pull_request:" in trigger_block
+    assert "schedule:" not in trigger_block
     assert "push:" not in trigger_block
+    assert "pull_request:" not in trigger_block
+    assert "Weekly Community Release scheduled task" in trigger_block
     assert "windows-arm64:" in workflow
     assert "linux-arm64:" in workflow
     assert "raspberry-pi-arm64-emulation:" in workflow
