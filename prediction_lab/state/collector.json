@@ -1,0 +1,9 @@
+{
+  "schema": "plane-alerts-pipeline-checkpoint-v1",
+  "task": "collector",
+  "last_success_at": null,
+  "last_case_id": null,
+  "last_event_id": null,
+  "processed_count": 0,
+  "notes": "Update only after the corresponding task step is durably committed."
+}
