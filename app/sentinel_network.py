@@ -17,6 +17,7 @@ from typing import Any
 
 from app.database import connect_db, get_db, system_status_col
 from app.intelligence.route_history import normalize_flight_key
+from app.next60_outcomes_v55 import resolve_next60_outcomes
 from app.prediction_lab_files_v55 import append_evidence, migrate_prediction_lab_mongo, migration_verified, observer_ref, prune_synced, spool_snapshot
 from app.worker import monitor
 from app.worker.geo import haversine
@@ -187,7 +188,7 @@ async def run_sentinel_network() -> None:
     region_cursor = 0; provider_cursor = 0
     await asyncio.sleep(12.0)
     migration_done = await _ensure_migration()
-    last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0
+    last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0; last_next60_resolution = 0.0
     while True:
         started = time.monotonic()
         if not migration_done and started - last_migration_attempt >= 60.0:
@@ -197,6 +198,16 @@ async def run_sentinel_network() -> None:
             if removed:
                 logger.info("prediction_lab_spool_cleanup removed=%d", removed)
             last_spool_cleanup = started
+        if started - last_next60_resolution >= 60.0:
+            try:
+                outcome_counts = await resolve_next60_outcomes(get_db())
+                if outcome_counts.get("resolved"):
+                    logger.info("prediction_next60_outcomes %s", outcome_counts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("prediction_next60_outcome_resolution_failed", exc_info=True)
+            last_next60_resolution = started
         dynamic = await _refresh_admin_regions(started)
         regions = EUROPE_SENTINELS + dynamic
         region = regions[region_cursor % len(regions)]; provider = PUBLIC_PROVIDERS[provider_cursor % len(PUBLIC_PROVIDERS)]

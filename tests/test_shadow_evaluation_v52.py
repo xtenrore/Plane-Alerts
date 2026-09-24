@@ -258,28 +258,15 @@ async def test_live_evaluation_uses_one_bounded_bulk_write():
 
 
 @pytest.mark.asyncio
-async def test_prediction_lab_marks_pass_scoreable_but_cancellation_unresolved(monkeypatch):
-    inserted = []
-    evaluated = []
+async def test_prediction_lab_marks_pass_scoreable_but_cancellation_unresolved(monkeypatch, tmp_path):
+    written = []
 
-    class _Result:
-        inserted_id = "outcome-id"
+    async def _append(doc, **_kwargs):
+        written.append(dict(doc))
+        return tmp_path / "evidence.json"
 
-    class _Collection:
-        async def insert_one(self, doc):
-            inserted.append(dict(doc))
-            return _Result()
-
-    class _DB:
-        def __getitem__(self, _name):
-            return _Collection()
-
-    async def _evaluate(_db, doc):
-        evaluated.append(dict(doc))
-        return 1
-
-    monkeypatch.setattr(prediction_lab_audit, "get_db", lambda: _DB())
-    monkeypatch.setattr(prediction_lab_audit, "evaluate_live_outcome", _evaluate)
+    monkeypatch.setattr(prediction_lab_audit, "append_evidence", _append)
+    monkeypatch.setattr(prediction_lab_audit, "migration_verified", lambda: True)
     aircraft = SimpleNamespace(icao24="abc123", callsign="TEST1", aircraft_type="A320")
     prediction = SimpleNamespace(
         projected_closest_km=4.0,
@@ -291,34 +278,24 @@ async def test_prediction_lab_marks_pass_scoreable_but_cancellation_unresolved(m
         confidence="High",
         altitude_relevance_applied=False,
     )
+    await prediction_lab_audit.record_prediction_outcome(user_id=1, aircraft=aircraft, outcome="passed", observed_closest_km=4.1, final_prediction=prediction)
+    passed = next(doc for doc in written if doc.get("kind") == "outcome")
+    assert passed["scoreable"] is True
+    assert passed["outcome_basis"] == "observed_in_radius_pass"
 
-    await prediction_lab_audit.record_prediction_outcome(
-        user_id=1,
-        aircraft=aircraft,
-        outcome="passed",
-        observed_closest_km=4.1,
-        final_prediction=prediction,
-    )
-    assert inserted[-1]["scoreable"] is True
-    assert inserted[-1]["outcome_basis"] == "observed_in_radius_pass"
-    assert len(evaluated) == 1
-
-    await prediction_lab_audit.record_prediction_outcome(
-        user_id=1,
-        aircraft=aircraft,
-        outcome="cancelled",
-        observed_closest_km=12.0,
-        final_prediction=prediction,
-    )
-    assert inserted[-1]["scoreable"] is False
-    assert inserted[-1]["outcome_basis"] == "lifecycle_transition_only"
-    assert len(evaluated) == 1
+    written.clear()
+    await prediction_lab_audit.record_prediction_outcome(user_id=1, aircraft=aircraft, outcome="cancelled", observed_closest_km=12.0, final_prediction=prediction)
+    cancelled = next(doc for doc in written if doc.get("kind") == "outcome")
+    assert cancelled["scoreable"] is False
+    assert cancelled["outcome_basis"] == "lifecycle_transition_only"
 
 
-def test_database_declares_bounded_shadow_indexes():
+def test_database_retires_high_volume_prediction_lab_indexes():
     source = Path("app/database.py").read_text(encoding="utf-8")
-    assert 'db["prediction_shadow_evaluations"].create_index("evaluation_id", unique=True)' in source
-    assert 'db["prediction_shadow_evaluations"].create_index("expires_at", expireAfterSeconds=0)' in source
+    assert 'db["prediction_lab_audit"].create_index' not in source
+    assert 'db["prediction_shadow_evaluations"].create_index' not in source
+    assert 'db["prediction_sentinel_routes"].create_index' not in source
+    assert 'db["users"].create_index("user_id", unique=True)' in source
 
 
 def test_operator_cli_routes_shadow_eval_without_touching_doctor():
