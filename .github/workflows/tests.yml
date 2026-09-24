@@ -180,8 +180,8 @@ jobs:
           docker run --rm --entrypoint planealerts plane-alerts:v55 diagnostics --help
           docker run --rm --entrypoint planealerts plane-alerts:v55 shadow-eval --help
 
-      - name: Verify v5.5.1 runtime wiring in fresh image
-        run: docker run --rm plane-alerts:v55 python -c "from app.prediction_lab_files_v55 import DEFAULT_ROOT, LAB_COLLECTIONS; from app.version import VERSION; assert VERSION == '5.5.1'; assert DEFAULT_ROOT == '/data/prediction_lab'; assert len(LAB_COLLECTIONS) == 3"
+      - name: Verify v5.5.2 runtime wiring in fresh image
+        run: docker run --rm plane-alerts:v55 python -c "from app.prediction_lab_files_v55 import DEFAULT_ROOT, LAB_COLLECTIONS; from app.version import VERSION; assert VERSION == '5.5.2'; assert DEFAULT_ROOT == '/data/prediction_lab'; assert len(LAB_COLLECTIONS) == 3"
 
       - name: Build ARM64 image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .
