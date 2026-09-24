@@ -19,6 +19,7 @@ services:
     env_file:
       - .env
     environment:
+      DATABASE_BACKEND: mongodb
       MONGO_URI: mongodb://mongo:27017
       PORT: "8000"
       PREDICTION_LAB_ROOT: /data/prediction_lab
