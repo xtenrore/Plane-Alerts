@@ -80,7 +80,7 @@ async def main() -> None:
     destination_resolver.clear()
     original_refresh = destination_resolver._refresh
 
-    async def slow_refresh(key: str, latitude: float, longitude: float) -> None:
+    async def slow_refresh(key: str, latitude: float, longitude: float, **kwargs) -> None:
         await asyncio.sleep(0.5)
         destination_resolver._put(key, None, "unavailable", 30.0)
 
