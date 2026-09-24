@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import monitoring
-from pymongo.errors import NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout
+from pymongo.errors import NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout, OperationFailure
 
 from app.config import settings
 from app.storage_metrics_v48 import storage_metrics
@@ -25,29 +25,16 @@ _schema_ready_for: tuple[str, str] | None = None
 
 class _StorageCommandListener(monitoring.CommandListener):
     """Collect latency/failure distributions without retaining commands/documents."""
-
     def started(self, event: Any) -> None:
         return None
 
     def succeeded(self, event: Any) -> None:
-        storage_metrics.record_command(
-            str(getattr(event, "command_name", "") or ""),
-            float(getattr(event, "duration_micros", 0.0) or 0.0) / 1000.0,
-            True,
-        )
+        storage_metrics.record_command(str(getattr(event, "command_name", "") or ""), float(getattr(event, "duration_micros", 0.0) or 0.0) / 1000.0, True)
 
     def failed(self, event: Any) -> None:
         failure = getattr(event, "failure", None)
-        timed_out = isinstance(
-            failure,
-            (NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout, asyncio.TimeoutError),
-        )
-        storage_metrics.record_command(
-            str(getattr(event, "command_name", "") or ""),
-            float(getattr(event, "duration_micros", 0.0) or 0.0) / 1000.0,
-            False,
-            timeout=timed_out,
-        )
+        timed_out = isinstance(failure, (NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout, asyncio.TimeoutError))
+        storage_metrics.record_command(str(getattr(event, "command_name", "") or ""), float(getattr(event, "duration_micros", 0.0) or 0.0) / 1000.0, False, timeout=timed_out)
 
 
 _COMMAND_LISTENER = _StorageCommandListener()
@@ -69,14 +56,31 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.TimeoutError, NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout))
 
 
-async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
-    """Run v4.8 migrations once for a real Mongo-style database handle.
+def _is_atlas_space_quota(exc: BaseException) -> bool:
+    if not isinstance(exc, OperationFailure):
+        return False
+    if getattr(exc, "code", None) == 8000 and "space quota" in str(exc).lower():
+        return True
+    return "over your space quota" in str(exc).lower()
 
-    Some legacy unit tests intentionally inject opaque sentinel objects to verify
-    connection/index caching. Those objects are not database implementations and
-    cannot support schema operations, so they must not be mistaken for Mongo.
-    Production Motor database objects always implement collection access.
-    """
+
+async def _ensure_indexes_with_quota_bridge(db: Any, key: tuple[str, str]) -> bool:
+    """Keep a readable quota-full Atlas DB alive only long enough for the v5.5 archive migration."""
+    global _indexes_ready_for
+    if _indexes_ready_for == key:
+        return True
+    try:
+        await _ensure_indexes(db)
+    except OperationFailure as exc:
+        if not _is_atlas_space_quota(exc):
+            raise
+        logger.warning("MongoDB is at storage quota; deferring normal index maintenance until Prediction Lab migration frees space.")
+        return False
+    _indexes_ready_for = key
+    return True
+
+
+async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
     global _schema_ready_for
     if _schema_ready_for == key:
         return
@@ -84,25 +88,16 @@ async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
         logger.debug("Skipping schema migration for non-database test double")
         return
     from app.storage_migrations_v48 import run_migrations
-
     await run_migrations(db)
     _schema_ready_for = key
 
 
-async def connect_db(
-    max_retries: int = 5,
-    retry_delay: float = 2.0,
-    timeout_ms: int = 10000,
-    *,
-    ensure_indexes: bool = True,
-) -> AsyncIOMotorDatabase:
+async def connect_db(max_retries: int = 5, retry_delay: float = 2.0, timeout_ms: int = 10000, *, ensure_indexes: bool = True) -> AsyncIOMotorDatabase:
     global _client, _db, _indexes_ready_for
     key = _index_cache_key()
     if _client is not None and _db is not None:
-        if ensure_indexes and _indexes_ready_for != key:
-            await _ensure_indexes(_db)
-            _indexes_ready_for = key
         if ensure_indexes:
+            await _ensure_indexes_with_quota_bridge(_db, key)
             await _ensure_schema(_db, key)
         return _db
 
@@ -114,27 +109,15 @@ async def connect_db(
             storage_metrics.record_retry()
         try:
             logger.info("Connecting to MongoDB at %s (attempt %d/%d) …", target, attempt, max_retries)
-            _client = AsyncIOMotorClient(
-                settings.mongo_uri,
-                serverSelectionTimeoutMS=timeout_ms,
-                connectTimeoutMS=timeout_ms,
-                socketTimeoutMS=max(timeout_ms, 2000),
-                maxPoolSize=5,
-                minPoolSize=0,
-                maxIdleTimeMS=60000,
-                appname="plane-alerts-v4.8",
-                event_listeners=[_COMMAND_LISTENER],
-            )
+            _client = AsyncIOMotorClient(settings.mongo_uri, serverSelectionTimeoutMS=timeout_ms, connectTimeoutMS=timeout_ms, socketTimeoutMS=max(timeout_ms, 2000), maxPoolSize=5, minPoolSize=0, maxIdleTimeMS=60000, appname="plane-alerts-v5.5", event_listeners=[_COMMAND_LISTENER])
             _db = _client[settings.database_name]
             await _client.admin.command("ping")
             if had_failure:
                 storage_metrics.record_reconnect()
             storage_metrics.set_state("healthy")
             logger.info("MongoDB connection established – database: %s", settings.database_name)
-            if ensure_indexes and _indexes_ready_for != key:
-                await _ensure_indexes(_db)
-                _indexes_ready_for = key
             if ensure_indexes:
+                await _ensure_indexes_with_quota_bridge(_db, key)
                 await _ensure_schema(_db, key)
             return _db
         except Exception as exc:
@@ -146,23 +129,14 @@ async def connect_db(
                 _client = None
                 _db = None
             if attempt < max_retries:
-                logger.warning(
-                    "Failed to connect to MongoDB (%s). Retrying in %.1fs...",
-                    type(exc).__name__,
-                    retry_delay,
-                )
+                logger.warning("Failed to connect to MongoDB (%s). Retrying in %.1fs...", type(exc).__name__, retry_delay)
                 await asyncio.sleep(retry_delay)
             else:
-                logger.error(
-                    "Could not connect to MongoDB after %d attempts: %s",
-                    max_retries,
-                    type(exc).__name__,
-                )
+                logger.error("Could not connect to MongoDB after %d attempts: %s", max_retries, type(exc).__name__)
                 raise
 
 
 async def ping_db(*, timeout_s: float = 1.0) -> bool:
-    """Bounded database liveness probe used for diagnostics, never alert gating."""
     if _db is None:
         storage_metrics.set_state("unavailable")
         return False
@@ -207,6 +181,7 @@ def admin_audit_col() -> AsyncIOMotorCollection: return get_db()["admin_audit"]
 
 
 async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
+    """Ensure indexes for normal application state only; Prediction Lab Mongo is retired by v5.5."""
     logger.info("Ensuring database indexes …")
     await db["users"].create_index("user_id", unique=True)
     await db["users"].create_index("username")
@@ -235,15 +210,6 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db["flight_route_samples"].create_index("utc_date")
     await db["flight_route_samples"].create_index("expires_at", expireAfterSeconds=0)
     await db["flight_route_samples"].create_index("updated_at")
-    await db["prediction_lab_audit"].create_index([("kind", 1), ("status", 1), ("utc_date", 1)])
-    await db["prediction_lab_audit"].create_index([("kind", 1), ("status", 1), ("window_end", 1)])
-    await db["prediction_lab_audit"].create_index([("kind", 1), ("user_id", 1), ("aircraft_icao24", 1), ("captured_at", -1)])
-    await db["prediction_lab_audit"].create_index("expires_at", expireAfterSeconds=0)
-    await db["prediction_shadow_evaluations"].create_index("evaluation_id", unique=True)
-    await db["prediction_shadow_evaluations"].create_index([("release_version", 1), ("model_id", 1), ("evaluated_at", -1)])
-    await db["prediction_shadow_evaluations"].create_index([("aircraft_icao24", 1), ("outcome_at", -1)])
-    await db["prediction_shadow_evaluations"].create_index("expires_at", expireAfterSeconds=0)
-    await db["prediction_sentinel_routes"].create_index("utc_date")
     await db["system_status"].create_index("updated_at")
     await db["admin_audit"].create_index("created_at")
     await db["admin_audit"].create_index("target_user_id")
