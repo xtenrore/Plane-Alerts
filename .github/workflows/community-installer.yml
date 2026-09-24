@@ -3,7 +3,8 @@ name: community-installer
 on:
   push:
     branches:
-      - "release/community-self-hosting-v5.5"
+      - main
+      - "release/**"
       - "fix/community-installer/**"
   pull_request:
     paths:
