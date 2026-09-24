@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import time
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from app.prediction_lab_files_v55 import write_evidence
 
