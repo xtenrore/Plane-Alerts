@@ -30,7 +30,7 @@ def _config(**overrides: object) -> Settings:
 
 
 def test_v55_is_sequential_community_release() -> None:
-    assert VERSION == "5.5.0"
+    assert VERSION == "5.5.1"
 
 
 def test_community_runtime_stubs_private_agy_before_loading_main() -> None:
