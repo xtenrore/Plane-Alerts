@@ -1,6 +1,6 @@
 # Self-hosting Plane Alerts
 
-Plane Alerts v5.4.3 supports reproducible self-hosting on x86-64 and ARM64 Linux, including Raspberry Pi 4/5-class systems running a 64-bit OS. The alert-critical prediction path is the same deterministic/statistical code used in production.
+Plane Alerts v5.5.0 supports reproducible self-hosting on x86-64 and ARM64 Linux, including Raspberry Pi 4/5-class systems running a 64-bit OS. The alert-critical prediction path is the same deterministic/statistical code used in production.
 
 ## Recommended: Docker Compose
 
@@ -25,7 +25,14 @@ docker compose up -d
 docker compose ps
 ```
 
-The app is exposed on port `8000` by default. Set `PLANE_ALERTS_PORT` before `docker compose up` to choose a different host port. Mongo data is stored in the named `mongo_data` volume and survives normal container replacement/restarts.
+The app is exposed on port `8000` by default. Set `PLANE_ALERTS_PORT` before `docker compose up` to choose a different host port.
+
+Two named volumes are persistent:
+
+- `mongo_data:/data/db` — normal Plane Alerts application/user/configuration data.
+- `prediction_lab_data:/data/prediction_lab` — v5.5 Prediction Lab audit/shadow evidence and migration archive.
+
+Both survive normal container replacement/restarts. Do not place either volume inside an updater-replaced source directory.
 
 Once running, validate the installation without revealing secrets:
 
@@ -35,6 +42,16 @@ docker compose exec plane-alerts planealerts doctor --json
 ```
 
 `planealerts doctor` checks Python/version compatibility, required configuration, contradictory settings, MongoDB reachability, stored coordinate ranges without printing coordinates, Telegram authentication, public ADS-B provider reachability, and the optional local receiver. A failed optional provider probe is reported as a warning; required configuration or database/Telegram failures are failures.
+
+## Prediction Lab persistence
+
+v5.5.0 removes new high-volume Prediction Lab audit/evaluation writes from MongoDB. Evidence is written asynchronously to `PREDICTION_LAB_ROOT`, which is `/data/prediction_lab` in the supplied Compose configuration.
+
+For a single self-hosted instance, keeping the persistent volume is sufficient for runtime durability. The repository's Railway-to-Git synchronization workflow is production-operations tooling and is not required for ordinary self-hosting.
+
+The historical Mongo collections `prediction_lab_audit`, `prediction_shadow_evaluations` and `prediction_sentinel_routes` are exported and integrity-checked before retirement. Normal application collections and `flight_route_samples` remain in MongoDB.
+
+When backing up an installation, preserve both `mongo_data` and `prediction_lab_data` if Prediction Lab evidence/history matters to you.
 
 ## Raspberry Pi / ARM64
 
@@ -52,9 +69,11 @@ python3.11 -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 python scripts/build_airport_database.py
-TELEGRAM_BOT_TOKEN='your-token' MONGO_URI='mongodb://127.0.0.1:27017' python scripts/planealerts doctor
+TELEGRAM_BOT_TOKEN='your-token' MONGO_URI='mongodb://127.0.0.1:27017' PREDICTION_LAB_ROOT='/var/lib/plane-alerts/prediction_lab' python scripts/planealerts doctor
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+For native installs, create the Prediction Lab root on persistent local storage and grant the service account read/write access. Do not use `/tmp` for production evidence.
 
 The bare `planealerts` executable is installed inside the project Docker image. From a native source checkout use `python scripts/planealerts doctor` or `python -m app.doctor_v49 doctor`; optionally place your own symlink to `scripts/planealerts` on `PATH`.
 
@@ -70,6 +89,7 @@ Plane Alerts validates typed settings at startup. Important rules include:
 - `LOCAL_ADSB_URL`, when present, must be a valid HTTP(S) receiver URL; credentials belong in `LOCAL_ADSB_AUTH_HEADER`, not in the URL.
 - `LOCAL_ADSB_AUTH_HEADER` without `LOCAL_ADSB_URL` is contradictory.
 - exact observer coordinates are never printed by the doctor command.
+- `PREDICTION_LAB_ROOT`, when overridden, should be a persistent writable path and must not contain credentials in its pathname.
 
 The optional Google Contrails integration continues to use `GOOGLE_CONTRAILS_API_KEY` where configured. It is enrichment only and must not control prediction or alert timing.
 
@@ -92,7 +112,9 @@ Do not interpret missing ADS-B coverage as proof that a route did or did not occ
 
 ## Backup and migration
 
-Before a version upgrade, back up MongoDB or use the repository's allow-listed Plane Alerts export tooling. Keep the `.env` file and local receiver configuration separately; do not put secrets into backups intended for sharing. Schema migrations are versioned and must remain idempotent/additive unless a release explicitly documents otherwise.
+Before a version upgrade, back up MongoDB and persistent local data. Keep the `.env` file and local receiver configuration separately; do not put secrets into backups intended for sharing.
+
+For v5.5.0 specifically, keep the pre-upgrade Mongo backup until the Prediction Lab migration reports verified export counts and the application is production-healthy. The file archive is additive evidence; normal application data remains in MongoDB.
 
 Upgrade one release at a time when crossing documented migration boundaries:
 
@@ -106,12 +128,14 @@ docker compose up -d
 
 ## Rollback
 
-Keep the previously verified Git tag/commit before upgrading. To roll back application code, check out that exact tag/commit and rebuild only the Plane Alerts image. Do not delete the Mongo volume. If a future release documents a destructive/non-backward-compatible migration, follow that release's migration notes and restore a compatible database backup rather than forcing older code against a newer schema.
+Keep the previously verified Git tag/commit before upgrading. To roll back application code, check out that exact tag/commit and rebuild only the Plane Alerts image. Do not delete `mongo_data` or `prediction_lab_data`.
 
-For v5.4.3, the immediate application rollback target is the verified v5.4.2 main commit `dda3f132cfafa54c82831abcc8196ac8b3897788`.
+For v5.5.0, the immediate application rollback target is v5.4.3 commit `2546e0ff854ce32511b4c358ba162e842397ff66`.
+
+If the v5.5 migration has already retired the old Prediction Lab Mongo collections, v5.4.3 can still use normal application Mongo data, but the migrated historical Lab evidence is not automatically imported back into MongoDB. Restore a pre-upgrade backup only if you specifically need the old Mongo-backed Lab storage while testing a rollback; do not overwrite newer normal user/configuration data casually.
 
 ## Reporting a problem
 
 Use the repository issue tracker: https://github.com/xtenrore/Plane-Alerts/issues/new/choose
 
-Include Plane Alerts version, prediction version, platform/architecture, `planealerts doctor --json` output, and relevant redacted logs. Never attach Telegram tokens, API keys, Mongo credentials, local ADS-B auth headers, exact private observer coordinates, or other secrets.
+Include Plane Alerts version, prediction version, platform/architecture, `planealerts doctor --json` output, and relevant redacted logs. Never attach Telegram tokens, API keys, Mongo credentials, local ADS-B auth headers, exact private observer coordinates, Prediction Lab privacy salts, or other secrets.
