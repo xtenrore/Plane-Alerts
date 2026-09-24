@@ -30,7 +30,7 @@ def _config(**overrides: object) -> Settings:
 
 
 def test_v55_is_sequential_community_release() -> None:
-    assert VERSION == "5.5.2"
+    assert VERSION == "5.5.3"
 
 
 def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:
