@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.5.0**  
+**Current code version: Plane Alerts v5.5.1**
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -26,9 +26,9 @@ ADS-B ingestion
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
 
-## v5.5.0 — File-Backed Prediction Lab
+## v5.5.1 — File-Backed Prediction Lab
 
-v5.5.0 moves high-volume Prediction Lab audit, shadow-evaluation and sentinel evidence out of MongoDB and into a bounded persistent file spool. Railway uses `/data/prediction_lab`; Docker Compose uses the same path on a dedicated persistent volume.
+v5.5.1 moves high-volume Prediction Lab audit, shadow-evaluation and sentinel evidence out of MongoDB and into a bounded persistent file spool. Railway uses `/data/prediction_lab`; Docker Compose uses the same path on a dedicated persistent volume.
 
 Historical `prediction_lab_audit`, `prediction_shadow_evaluations` and `prediction_sentinel_routes` records are exported to verified NDJSON chunks with count and SHA-256 integrity checks before those legacy collections are retired. Normal application MongoDB data remains in place.
 
@@ -63,7 +63,7 @@ The scale path does not create a second ADS-B feed layer or multiply provider re
 
 ## Storage resilience
 
-MongoDB remains application persistence for users, configuration and normal product state. Prediction Lab high-volume audit/evaluation telemetry is file-backed in v5.5.0.
+MongoDB remains application persistence for users, configuration and normal product state. Prediction Lab high-volume audit/evaluation telemetry is file-backed in v5.5.1.
 
 A verified last-known-good active configuration can continue to drive live monitoring during a temporary MongoDB outage. A cold process without verified configuration does not invent state. Encounter persistence uses bounded queues and delayed writes cannot silently overwrite newer lifecycle records.
 

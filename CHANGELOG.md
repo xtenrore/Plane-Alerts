@@ -2,7 +2,7 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
-## v5.5.0 — File-Backed Prediction Lab & Automated Evidence Pipeline
+## v5.5.1 — File-Backed Prediction Lab & Automated Evidence Pipeline
 
 - Moved high-volume Prediction Lab audit, shadow-evaluation and sentinel evidence from MongoDB to an atomic persistent file spool.
 - Added verified export/retirement of `prediction_lab_audit`, `prediction_shadow_evaluations` and `prediction_sentinel_routes` while preserving normal application MongoDB data.
@@ -13,6 +13,13 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - Added quota-full Atlas recovery narrowly for the verified Prediction Lab migration, plus restart/conflict/privacy/cadence/migration regressions and a persistence benchmark.
 - Added persistent `prediction_lab_data` self-host storage and matching backup/rollback documentation.
 - Physical prediction version remains `5.3-3d-proximity-age-aware`; trajectory, CPA, ETA, terminal, qualification, cancellation and alert timing are unchanged.
+
+
+## v5.5.0 — Guided Community Self-Hosting
+
+- Published the guided community self-hosting installer and stable cross-platform installer assets.
+- Kept that public tag immutable; it was deliberately separate from the owner's Railway production deployment path.
+- Physical prediction version remained `5.3-3d-proximity-age-aware`.
 
 ## v5.4.3 — AGY Removal
 
