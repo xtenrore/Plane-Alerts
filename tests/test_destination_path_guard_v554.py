@@ -25,6 +25,10 @@ LTBA = route_mod.AirportInfo(
     icao="LTBA", iata="ISL", name="Istanbul Ataturk Airport",
     latitude=40.9769, longitude=28.8146,
 )
+SJJ = route_mod.AirportInfo(
+    icao="LQSA", iata="SJJ", name="Sarajevo International Airport",
+    latitude=43.8246, longitude=18.3315,
+)
 ORIGIN = route_mod.AirportInfo(
     icao="LTAI", iata="AYT", name="Antalya Airport",
     latitude=36.8987, longitude=30.8005,
@@ -91,18 +95,22 @@ def history(*rows):
     ]
 
 
-def resolved(callsign: str, airport, source="adsb.lol+adsbdb"):
+def route(callsign: str, airport):
     key = route_mod.normalize_flight_key(callsign)
-    route = route_mod.FlightRouteInfo(
+    return route_mod.FlightRouteInfo(
         callsign=key,
         airport_codes=f"AYT-{airport.code}",
         plausible=True,
         origin=ORIGIN,
         destination=airport,
     )
+
+
+def resolved(callsign: str, airport, source="adsb.lol+adsbdb"):
+    key = route_mod.normalize_flight_key(callsign)
     destination_resolver._cache[key] = CacheEntry(
         resolution=DestinationResolution(
-            route=route,
+            route=route(callsign, airport),
             source=source,
             authority="provider-agreement" if "+" in source else "single-provider",
         ),
@@ -118,7 +126,16 @@ def clean_global_resolver():
     destination_resolver.clear()
 
 
-async def gate(ac, pred, samples=(), *, user_lat=41.1, user_lon=29.1, radius=10.0, sent=False):
+async def gate(
+    ac,
+    pred,
+    samples=(),
+    *,
+    user_lat=41.1,
+    user_lon=29.1,
+    radius=10.0,
+    sent=False,
+):
     return await evaluate_destination_path(
         None,
         ac,
@@ -133,7 +150,10 @@ async def gate(ac, pred, samples=(), *, user_lat=41.1, user_lon=29.1, radius=10.
 
 @pytest.mark.asyncio
 async def test_ist_arrival_points_toward_user_then_turns_no_initial_alert():
-    ac = aircraft("THY2GN", 41.10, 28.95, heading=90, altitude=3200, vertical_rate=-4.5)
+    ac = aircraft(
+        "THY2GN", 41.10, 28.95,
+        heading=90, altitude=3200, vertical_rate=-4.5,
+    )
     resolved(ac.callsign, LTFM)
     pred = prediction(
         current=18, cpa=3.5, cpa_time=130, entry=105,
@@ -144,9 +164,14 @@ async def test_ist_arrival_points_toward_user_then_turns_no_initial_alert():
         ],
     )
     result = await gate(
-        ac, pred,
-        history((0, 41.10, 28.93, 3400, 90, -4), (12, 41.10, 28.95, 3200, 90, -4.5)),
-        user_lat=41.10, user_lon=29.22,
+        ac,
+        pred,
+        history(
+            (0, 41.10, 28.93, 3400, 90, -4),
+            (12, 41.10, 28.95, 3200, 90, -4.5),
+        ),
+        user_lat=41.10,
+        user_lon=29.22,
     )
     assert result.suppress_alert
     assert result.destination_code == "IST"
@@ -155,7 +180,10 @@ async def test_ist_arrival_points_toward_user_then_turns_no_initial_alert():
 
 @pytest.mark.asyncio
 async def test_ltba_alignment_lands_before_user_no_initial_alert():
-    ac = aircraft("MNB313", 40.90, 28.73, heading=42, altitude=1800, vertical_rate=-5)
+    ac = aircraft(
+        "MNB313", 40.90, 28.73,
+        heading=42, altitude=1800, vertical_rate=-5,
+    )
     resolved(ac.callsign, LTBA)
     pred = prediction(
         current=23, cpa=2, cpa_time=150, entry=125,
@@ -167,9 +195,14 @@ async def test_ltba_alignment_lands_before_user_no_initial_alert():
         ],
     )
     result = await gate(
-        ac, pred,
-        history((0, 40.885, 28.715, 2100, 42, -4.5), (12, 40.90, 28.73, 1800, 42, -5)),
-        user_lat=41.07, user_lon=28.92,
+        ac,
+        pred,
+        history(
+            (0, 40.885, 28.715, 2100, 42, -4.5),
+            (12, 40.90, 28.73, 1800, 42, -5),
+        ),
+        user_lat=41.07,
+        user_lon=28.92,
     )
     assert result.suppress_alert
     assert "before" in result.reason.lower()
@@ -177,7 +210,10 @@ async def test_ltba_alignment_lands_before_user_no_initial_alert():
 
 @pytest.mark.asyncio
 async def test_destination_ist_but_user_really_lies_before_airport_alerts():
-    ac = aircraft("THY321", 41.00, 28.60, heading=25, altitude=3600, vertical_rate=-2.5)
+    ac = aircraft(
+        "THY321", 41.00, 28.60,
+        heading=25, altitude=3600, vertical_rate=-2.5,
+    )
     resolved(ac.callsign, LTFM)
     pred = prediction(
         current=18, cpa=1.5, cpa_time=75, entry=55,
@@ -189,9 +225,15 @@ async def test_destination_ist_but_user_really_lies_before_airport_alerts():
         ],
     )
     result = await gate(
-        ac, pred,
-        history((0, 40.98, 28.59, 3800, 25, -2), (12, 41.00, 28.60, 3600, 25, -2.5)),
-        user_lat=41.12, user_lon=28.67, radius=8,
+        ac,
+        pred,
+        history(
+            (0, 40.98, 28.59, 3800, 25, -2),
+            (12, 41.00, 28.60, 3600, 25, -2.5),
+        ),
+        user_lat=41.12,
+        user_lon=28.67,
+        radius=8,
     )
     assert not result.suppress_alert
     assert "genuine observer pass" in result.reason
@@ -199,14 +241,27 @@ async def test_destination_ist_but_user_really_lies_before_airport_alerts():
 
 @pytest.mark.asyncio
 async def test_wrong_destination_releases_when_live_track_diverges():
-    ac = aircraft("THY777", 41.00, 29.20, heading=90, altitude=4200, vertical_rate=2.5)
+    ac = aircraft(
+        "THY777", 41.00, 29.20,
+        heading=90, altitude=4200, vertical_rate=2.5,
+    )
     resolved(ac.callsign, LTFM, source="adsbdb")
     result = await gate(
         ac,
-        prediction(current=14, cpa=2, cpa_time=80, entry=55,
-                   path=[projected(0, 41.00, 29.20), projected(80, 41.00, 29.38)]),
-        history((0, 41.00, 29.14, 4000, 90, 2), (15, 41.00, 29.20, 4200, 90, 2.5)),
-        user_lat=41.00, user_lon=29.38, radius=8,
+        prediction(
+            current=14, cpa=2, cpa_time=80, entry=55,
+            path=[
+                projected(0, 41.00, 29.20),
+                projected(80, 41.00, 29.38),
+            ],
+        ),
+        history(
+            (0, 41.00, 29.14, 4000, 90, 2),
+            (15, 41.00, 29.20, 4200, 90, 2.5),
+        ),
+        user_lat=41.00,
+        user_lon=29.38,
+        radius=8,
     )
     assert not result.suppress_alert
     assert "regained authority" in result.reason
@@ -216,7 +271,9 @@ async def test_wrong_destination_releases_when_live_track_diverges():
 async def test_destination_provider_unavailable_normal_live_behavior_continues():
     ac = aircraft("THY404")
     key = route_mod.normalize_flight_key(ac.callsign)
-    destination_resolver._cache[key] = CacheEntry(None, "unavailable", time.monotonic() + 30)
+    destination_resolver._cache[key] = CacheEntry(
+        None, "unavailable", time.monotonic() + 30
+    )
     result = await gate(ac, prediction())
     assert not result.suppress_alert
     assert "live trajectory authoritative" in result.reason
@@ -225,13 +282,10 @@ async def test_destination_provider_unavailable_normal_live_behavior_continues()
 @pytest.mark.asyncio
 async def test_adsbdb_unavailable_but_adsb_lol_source_works(monkeypatch):
     resolver = DestinationResolver()
-    route = route_mod.FlightRouteInfo(
-        callsign="THY123", airport_codes="AYT-IST", plausible=True,
-        origin=ORIGIN, destination=LTFM,
-    )
+    expected = route("THY123", LTFM)
 
     async def lol(*args):
-        return route
+        return expected
 
     async def db(*args):
         return None
@@ -261,7 +315,7 @@ async def test_all_destination_sources_unavailable_monitoring_still_works(monkey
 async def test_slow_destination_lookup_does_not_delay_monitor_cycle(monkeypatch):
     ac = aircraft("THY888")
 
-    async def slow_refresh(key, lat, lon):
+    async def slow_refresh(key, lat, lon, **kwargs):
         await asyncio.sleep(0.5)
         destination_resolver._put(key, None, "unavailable", 30)
 
@@ -278,34 +332,115 @@ async def test_slow_destination_lookup_does_not_delay_monitor_cycle(monkeypatch)
 async def test_aircraft_physically_inside_radius_always_wins():
     ac = aircraft("THY999")
     resolved(ac.callsign, LTFM)
-    result = await gate(ac, prediction(current=7.5), radius=10)
+    result = await gate(
+        ac,
+        prediction(current=99.0),
+        user_lat=41.10,
+        user_lon=29.02,
+        radius=10,
+    )
     assert not result.suppress_alert
     assert "physical presence" in result.reason
 
 
 @pytest.mark.asyncio
+async def test_destination_airport_inside_radius_fails_open_for_real_future_entry():
+    ac = aircraft(
+        "THY333", 40.80, 28.65,
+        heading=40, altitude=1600, vertical_rate=-4,
+    )
+    resolved(ac.callsign, LTBA)
+    result = await gate(
+        ac,
+        prediction(
+            current=25,
+            cpa=1,
+            cpa_time=140,
+            entry=110,
+            path=[
+                projected(60, 40.90, 28.73),
+                projected(120, 40.9769, 28.8146),
+            ],
+        ),
+        user_lat=40.99,
+        user_lon=28.82,
+        radius=10,
+    )
+    assert not result.suppress_alert
+    assert "airport lies inside observer radius" in result.reason
+
+
+@pytest.mark.asyncio
 async def test_go_around_or_diversion_releases_and_does_not_latch():
-    ac = aircraft("THY555", 41.30, 28.70, heading=315, altitude=1900, vertical_rate=4)
+    ac = aircraft(
+        "THY555", 41.30, 28.70,
+        heading=315, altitude=1900, vertical_rate=4,
+    )
     resolved(ac.callsign, LTFM)
     pred = prediction(
         current=16, cpa=2, cpa_time=90, entry=65,
-        path=[projected(0, 41.30, 28.70), projected(90, 41.40, 28.58)],
+        path=[
+            projected(0, 41.30, 28.70),
+            projected(90, 41.40, 28.58),
+        ],
     )
     samples = history(
         (0, 41.26, 28.74, 1400, 315, 3),
         (12, 41.30, 28.70, 1900, 315, 4),
     )
-    first = await gate(ac, pred, samples, user_lat=41.40, user_lon=28.58)
-    second = await gate(ac, pred, samples, user_lat=41.40, user_lon=28.58)
+    first = await gate(
+        ac, pred, samples,
+        user_lat=41.40, user_lon=28.58,
+    )
+    second = await gate(
+        ac, pred, samples,
+        user_lat=41.40, user_lon=28.58,
+    )
     assert not first.suppress_alert and not second.suppress_alert
     assert "regained authority" in first.reason
+
+
+def test_provider_conflict_nearby_terminal_destination_can_be_resolved_physically():
+    resolver = DestinationResolver()
+    resolution, state = resolver.choose(
+        "THY2GN",
+        route("THY2GN", LTFM),
+        route("THY2GN", SJJ),
+        latitude=41.10,
+        longitude=28.95,
+        altitude_m=3200,
+        vertical_rate_mps=-4.5,
+        velocity_mps=220,
+    )
+    assert state == "resolved"
+    assert resolution is not None
+    assert resolution.route.destination.code == "IST"
+    assert resolution.authority == "live-terminal-conflict-resolution"
+
+
+def test_genuinely_ambiguous_provider_conflict_fails_open():
+    resolver = DestinationResolver()
+    resolution, state = resolver.choose(
+        "THY111",
+        route("THY111", LTFM),
+        route("THY111", LTBA),
+        latitude=41.08,
+        longitude=28.92,
+        altitude_m=2500,
+        vertical_rate_mps=-2,
+        velocity_mps=190,
+    )
+    assert resolution is None
+    assert state == "conflict"
 
 
 @pytest.mark.asyncio
 async def test_provider_destination_conflict_fails_open():
     ac = aircraft("THY111")
     key = route_mod.normalize_flight_key(ac.callsign)
-    destination_resolver._cache[key] = CacheEntry(None, "conflict", time.monotonic() + 60)
+    destination_resolver._cache[key] = CacheEntry(
+        None, "conflict", time.monotonic() + 60
+    )
     result = await gate(ac, prediction())
     assert not result.suppress_alert
     assert "disagree" in result.reason
@@ -315,7 +450,7 @@ async def test_provider_destination_conflict_fails_open():
 async def test_active_alert_not_cancelled_only_because_lookup_pending(monkeypatch):
     ac = aircraft("THY222")
 
-    async def slow_refresh(key, lat, lon):
+    async def slow_refresh(key, lat, lon, **kwargs):
         await asyncio.sleep(0.5)
 
     monkeypatch.setattr(destination_resolver, "_refresh", slow_refresh)
@@ -334,3 +469,6 @@ def test_production_runtime_installs_only_clean_destination_arrival_authority():
         "install_route_guard_v47()",
     ):
         assert obsolete not in text
+
+    intelligence_init = Path("app/intelligence/__init__.py").read_text()
+    assert "arrival_guard_hotfix" not in intelligence_init
