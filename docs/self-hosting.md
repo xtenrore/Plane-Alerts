@@ -156,7 +156,7 @@ curl -fsS http://127.0.0.1:${PLANE_ALERTS_PORT:-8000}/ready
 
 Do not interpret missing ADS-B coverage as proof that a route did or did not occur.
 
-## Backup, update and rollback
+## Backup, update and Rollback
 
 Before a version upgrade, back up normal application storage and persistent local data. Keep `.env` and local receiver configuration separately; do not put secrets into backups intended for sharing.
 
