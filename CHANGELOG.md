@@ -7,10 +7,10 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - Replaced the stacked route-history, expected-turn and runway/terminal live alert-veto chain with one cached provider-first destination/path qualification layer.
 - Uses existing ADSB.lol destination data plus ADSBDB as an independent additional/fallback source, with bounded background lookups that never block the five-second monitor path.
 - Added deterministic airport-before-observer, landing-area-before-observer and destination-path conflict checks while preserving fresh physical entry as authoritative.
-- Destination conflicts/outages fail open to live trajectory; sustained divergence and climbing go-around/diversion evidence release destination suppression.
+- Provider outages and genuinely ambiguous conflicts fail open to live trajectory; a disagreement can be resolved only when live terminal geometry clearly supports one nearby destination over a materially farther alternative. Sustained divergence and climbing go-around/diversion evidence release destination suppression.
 - Route history and airport/runway inference remain available for Prediction Lab, analytics and diagnostics but are no longer live alert authorities.
 - Added exact IST/LTFM, LTBA, genuine-pass, bad-destination, outage, slow-provider, physical-entry and go-around regressions plus a non-blocking destination-path benchmark.
-- Separated Railway production CI/deployment from community release publication so an ordinary Railway patch cannot automatically publish a community-stable tag or installer assets.
+- Separated Railway production CI/deployment from community release publication and the long weekly community platform matrix, so an ordinary Railway patch cannot automatically publish a community-stable tag or run the full ARM64/Raspberry Pi installer matrix.
 - Underlying trajectory/3D prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.5.3 — Startup Migration Isolation
