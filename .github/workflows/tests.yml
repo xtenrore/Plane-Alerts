@@ -2,9 +2,12 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "fix/**"
+      - "release/**"
+      - "hotfix/**"
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -12,7 +15,7 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,89 +23,98 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
 
       - name: Install locked dependencies
-        run: pip install -r requirements.lock
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
 
       - name: Compile application and Vercel runtime
-        run: python -m compileall -q app api
+        run: python -m compileall -q app vercel_runtime worker.py
 
       - name: Build pinned global airport database
-        run: python scripts/build_airport_data_v471.py
+        run: python scripts/build_airport_database.py
 
       - name: Verify global airport database coverage and overrides
-        run: python scripts/verify_airport_data_v471.py
+        run: python scripts/verify_airport_database.py
 
       - name: Run full test suite
+        env:
+          TELEGRAM_BOT_TOKEN: ""
+          GEMINI_API_KEY: ""
+          GROQ_API_KEY: ""
+          OPENSKY_CREDENTIALS_JSON: ""
+          LOCAL_ADSB_URL: ""
         run: pytest -q
 
       - name: Run Error Museum and lifecycle replay suite
-        run: pytest -q tests/test_prediction_replay.py tests/test_prediction_lab.py tests/test_v42_prediction_replay.py tests/test_v42_lifecycle_replay.py
+        run: pytest -q tests/test_error_museum_v42.py tests/test_v44_monitor_reliability_replay.py tests/test_eta_stability_hotfix.py
 
       - name: Run provider regression suite
-        run: pytest -q tests/test_provider_manager_v45.py tests/test_v45_provider_regressions.py
+        run: pytest -q tests/test_v45_provider_resilience.py tests/test_v45_local_provider_area_recovery.py
 
       - name: Run Telegram interaction latency regression suite
         run: pytest -q tests/test_interaction_v46.py
 
       - name: Run v4.7 airport, runway and Error Museum suite
-        run: pytest -q tests/test_airport_intelligence_v47.py tests/test_v47_airport_regressions.py
+        run: pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
 
       - name: Run v4.7.1 global airport data suite
-        run: pytest -q tests/test_global_airports_v471.py
+        run: pytest -q tests/test_global_airport_data_v471.py
 
       - name: Run v4.7.2 LTBA/ISL terminal-arrival hold suite
         run: pytest -q tests/test_terminal_arrival_hold_v472.py
 
       - name: Run v4.7.3 arrival delivery and landing-path regressions
-        run: pytest -q tests/test_v473_arrival_delivery_guard.py tests/test_v473_landing_path_regressions.py
+        run: pytest -q tests/test_terminal_lifecycle_v473.py
 
       - name: Run v4.8 storage outage, restart, migration, backup, lifecycle-ID and Telegram failure suite
-        run: pytest -q tests/test_storage_v48.py tests/test_storage_regressions_v48.py tests/test_storage_migrations_v48.py tests/test_storage_backup_v48.py tests/test_lifecycle_ids_v48.py tests/test_telegram_failure_v48.py
+        run: pytest -q tests/test_storage_v48.py tests/test_storage_guard_v48.py tests/test_storage_failure_v48.py tests/test_database_atlas.py
 
       - name: Run v4.9 self-hosting, doctor and release-publish suite
-        run: pytest -q tests/test_self_hosting_v49.py tests/test_doctor_v49.py tests/test_release_publish_v49.py
+        run: pytest -q tests/test_self_hosting_v49.py tests/test_release_publish_v49.py
 
       - name: Run v5.0 observability suite
         run: pytest -q tests/test_observability_v50.py
 
       - name: Run v5.1 3D proximity and observed-pass lifecycle suite
-        run: pytest -q tests/test_proximity_3d_v51.py tests/test_v51_prediction_replay.py tests/test_v51_lifecycle_replay.py
+        run: pytest -q tests/test_geometry_v51.py tests/test_lifecycle_v51.py tests/test_v512_predictor_wrapper.py
 
       - name: Run v5.2 shadow evaluation and promotion-safety suite
-        run: pytest -q tests/test_shadow_eval_v52.py tests/test_v52_prediction_replay.py tests/test_v52_promotion_safety.py
+        run: pytest -q tests/test_shadow_evaluation_v52.py
 
       - name: Replay v5.2 shadow evaluation fixtures
-        run: python scripts/replay_shadow_eval_v52.py
+        run: python scripts/evaluate_v52_shadow_replay.py
 
       - name: Run v5.3 multi-user scale and production-chain regression suite
-        run: pytest -q tests/test_multi_location_v53.py tests/test_prediction_regressions_v53.py tests/test_v53_production_chain.py
+        run: pytest -q tests/test_scale_v53.py tests/test_runtime_scale_v53.py tests/test_v53_prediction_regressions.py tests/test_v35_shared_polling.py
 
       - name: Run v5.4 presets, navigation, recovery and Mini App UX suite
         run: pytest -q tests/test_user_experience_v54.py
 
       - name: Run v5.5 file-backed Prediction Lab, migration, pipeline and cadence suite
-        run: pytest -q tests/test_prediction_lab_files_v55.py tests/test_prediction_lab_pipeline_v55.py tests/test_prediction_lab_runtime_v55.py tests/test_startup_storage_maintenance_v553.py
+        run: pytest -q tests/test_prediction_lab_files_v55.py tests/test_prediction_lab_pipeline_v55.py tests/test_next60_file_history_v55.py tests/test_prediction_lab_cadence_v55.py tests/test_next60_outcomes_v55.py tests/test_startup_storage_maintenance_v553.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
-        run: python scripts/benchmark_v42_terminal_arrival.py
+        run: python scripts/benchmark_v42.py
 
       - name: Benchmark v4.5 provider critical path
-        run: python scripts/benchmark_provider_v45.py
+        run: python scripts/benchmark_v45_provider_resilience.py
 
       - name: Benchmark v4.6 prediction intelligence
-        run: python scripts/benchmark_prediction_v46.py
+        run: python scripts/benchmark_v46_prediction.py
 
       - name: Benchmark v4.6 Telegram callback latency
-        run: python scripts/benchmark_interaction_v46.py
+        run: python scripts/benchmark_v46_interaction.py
 
       - name: Benchmark v4.7 terminal intelligence
-        run: python scripts/benchmark_airport_v47.py
+        run: python scripts/benchmark_v47_terminal.py
 
       - name: Benchmark v4.7.1 global airport lookup
-        run: python scripts/benchmark_airport_v471.py
+        run: python scripts/benchmark_v471_airport_lookup.py
 
       - name: Benchmark v4.7.2 terminal-arrival initial hold
         run: python scripts/benchmark_v472_terminal_hold.py
