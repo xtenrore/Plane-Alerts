@@ -17,7 +17,9 @@ replace(
 )
 
 p = Path("README.md")
-p.write_text(p.read_text(encoding="utf-8").replace("v5.5.0", "v5.5.1"), encoding="utf-8")
+readme = p.read_text(encoding="utf-8").replace("v5.5.0", "v5.5.1")
+readme = readme.replace("**Current code version: Plane Alerts v5.5.1**  \n", "**Current code version: Plane Alerts v5.5.1**\n")
+p.write_text(readme, encoding="utf-8")
 
 p = Path("CHANGELOG.md")
 text = p.read_text(encoding="utf-8").replace(
