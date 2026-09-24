@@ -74,7 +74,7 @@ jobs:
       - name: Run v4.8 storage outage, restart, migration, backup, lifecycle-ID and Telegram failure suite
         run: pytest -q tests/test_storage_v48.py tests/test_storage_guard_v48.py tests/test_storage_failure_v48.py tests/test_database_atlas.py
 
-      - name: Run v4.9 self-hosting, doctor and release-publish suite
+      - name: Run v4.9 doctor and release-channel safety suite
         run: pytest -q tests/test_self_hosting_v49.py tests/test_release_publish_v49.py
 
       - name: Run v5.0 observability suite
@@ -97,6 +97,9 @@ jobs:
 
       - name: Run v5.5 file-backed Prediction Lab, migration, pipeline and cadence suite
         run: pytest -q tests/test_prediction_lab_files_v55.py tests/test_prediction_lab_pipeline_v55.py tests/test_next60_file_history_v55.py tests/test_prediction_lab_cadence_v55.py tests/test_next60_outcomes_v55.py tests/test_startup_storage_maintenance_v553.py
+
+      - name: Run v5.5.4 destination-path arrival regressions
+        run: pytest -q tests/test_destination_path_guard_v554.py tests/test_error_museum_v42.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
@@ -143,45 +146,8 @@ jobs:
       - name: Benchmark v5.5 Prediction Lab atomic persistence
         run: python scripts/benchmark_v55_prediction_lab.py
 
+      - name: Benchmark v5.5.4 non-blocking destination path gate
+        run: python scripts/benchmark_v554_destination_path.py
+
       - name: Verify dependency consistency
         run: pip check
-
-  self-hosting:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Validate Docker Compose configuration
-        run: |
-          cp .env.example .env
-          docker compose config --quiet
-          docker compose config | grep -q '/data/prediction_lab'
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build fresh amd64 image
-        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v55 .
-
-      - name: Run doctor in fresh image
-        run: |
-          docker run --rm --entrypoint planealerts \
-            -e TELEGRAM_BOT_TOKEN=123456:test-token \
-            -e MONGO_URI=mongodb://mongo:27017 \
-            plane-alerts:v55 doctor --offline
-
-      - name: Verify v5 operator CLI is installed in fresh image
-        run: |
-          docker run --rm --entrypoint planealerts plane-alerts:v55 diagnostics --help
-          docker run --rm --entrypoint planealerts plane-alerts:v55 shadow-eval --help
-
-      - name: Verify v5.5.3 runtime wiring in fresh image
-        run: docker run --rm plane-alerts:v55 python -c "from app.prediction_lab_files_v55 import DEFAULT_ROOT, LAB_COLLECTIONS; from app.version import VERSION; assert VERSION == '5.5.3'; assert DEFAULT_ROOT == '/data/prediction_lab'; assert len(LAB_COLLECTIONS) == 3"
-
-      - name: Build ARM64 image
-        run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .

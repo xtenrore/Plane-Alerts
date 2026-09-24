@@ -2,6 +2,17 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.5.4 — Provider-First Destination Path Guard
+
+- Replaced the stacked route-history, expected-turn and runway/terminal live alert-veto chain with one cached provider-first destination/path qualification layer.
+- Uses existing ADSB.lol destination data plus ADSBDB as an independent additional/fallback source, with bounded background lookups that never block the five-second monitor path.
+- Added deterministic airport-before-observer, landing-area-before-observer and destination-path conflict checks while preserving fresh physical entry as authoritative.
+- Destination conflicts/outages fail open to live trajectory; sustained divergence and climbing go-around/diversion evidence release destination suppression.
+- Route history and airport/runway inference remain available for Prediction Lab, analytics and diagnostics but are no longer live alert authorities.
+- Added exact IST/LTFM, LTBA, genuine-pass, bad-destination, outage, slow-provider, physical-entry and go-around regressions plus a non-blocking destination-path benchmark.
+- Separated Railway production CI/deployment from community release publication so an ordinary Railway patch cannot automatically publish a community-stable tag or installer assets.
+- Underlying trajectory/3D prediction version remains `5.3-3d-proximity-age-aware`.
+
 ## v5.5.3 — Startup Migration Isolation
 
 - Fixed the v5.5.2 Railway readiness failure where historical Prediction Lab migration plus Mongo index/schema maintenance blocked FastAPI startup after MongoDB had already connected.
@@ -27,7 +38,6 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 - Added quota-full Atlas recovery narrowly for the verified Prediction Lab migration, plus restart/conflict/privacy/cadence/migration regressions and a persistence benchmark.
 - Added persistent `prediction_lab_data` self-host storage and matching backup/rollback documentation.
 - Physical prediction version remains `5.3-3d-proximity-age-aware`; trajectory, CPA, ETA, terminal, qualification, cancellation and alert timing are unchanged.
-
 
 ## v5.5.0 — Guided Community Self-Hosting
 
