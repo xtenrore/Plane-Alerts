@@ -39,19 +39,19 @@ def test_installer_self_test_and_stable_semver_parser():
     assert result.returncode == 0, result.stderr
     assert "AGY=excluded" in result.stdout
     installer = _installer()
-    assert installer.semver("v5.5.0") == (5, 5, 0)
+    assert installer.semver("v5.5.1") == (5, 5, 1)
     with pytest.raises(ValueError):
-        installer.semver("v5.5.0-rc1")
+        installer.semver("v5.5.1-rc1")
     with pytest.raises(ValueError):
         installer.semver("main")
 
 
 def test_latest_release_parser_refuses_prerelease_and_draft(monkeypatch):
     installer = _installer()
-    monkeypatch.setattr(installer, "api_json", lambda *_a, **_k: {"tag_name": "v5.5.0", "prerelease": True, "draft": False})
+    monkeypatch.setattr(installer, "api_json", lambda *_a, **_k: {"tag_name": "v5.5.1", "prerelease": True, "draft": False})
     with pytest.raises(RuntimeError):
         installer.latest_stable_release()
-    monkeypatch.setattr(installer, "api_json", lambda *_a, **_k: {"tag_name": "v5.5.0", "prerelease": False, "draft": True})
+    monkeypatch.setattr(installer, "api_json", lambda *_a, **_k: {"tag_name": "v5.5.1", "prerelease": False, "draft": True})
     with pytest.raises(RuntimeError):
         installer.latest_stable_release()
 
@@ -75,6 +75,7 @@ def test_community_env_defaults_to_real_sqlite_and_keeps_receiver_location_separ
     assert "LOCAL_ADSB_RECEIVER_LATITUDE=" in text
     assert "LOCAL_ADSB_RECEIVER_LONGITUDE=" in text
     assert "LOCAL_ADSB_RECEIVER_COVERAGE_KM=" in text
+    assert "PREDICTION_LAB_ROOT=./.community/prediction_lab" in text
     assert "AGY_WORKER_URL=" not in text
     assert "AGY_WORKER_TOKEN=" not in text
 
@@ -90,10 +91,11 @@ def test_community_runtime_and_installer_cannot_start_agy():
     assert "from app.agy" not in installer
     assert "import app.agy" not in installer
     assert "agy_enabled\": False" in installer
-    assert "app.community_main_v55:app" in compose
+    assert "app.main:app" in compose
     assert "DATABASE_BACKEND: mongodb" in compose
-    assert 'AGY_WORKER_URL: ""' in compose
-    assert 'AGY_WORKER_TOKEN: ""' in compose
+    assert "PREDICTION_LAB_ROOT: /data/prediction_lab" in compose
+    assert "AGY_WORKER_URL" not in compose
+    assert "AGY_WORKER_TOKEN" not in compose
 
 
 def test_updater_has_backup_validation_and_rollback_gates():
@@ -129,6 +131,6 @@ def test_shell_entrypoints_parse_and_are_agy_free():
 
 def test_raspberry_pi_platform_guard_can_be_exercised_without_spoofing_normal_runs():
     text = (ROOT / "setup-raspberry-pi.sh").read_text(encoding="utf-8")
-    assert 'PLANE_ALERTS_INSTALLER_TEST' in text
-    assert 'Raspberry Pi 4' in text and 'Raspberry Pi 5' in text
-    assert '64-bit' in text
+    assert "PLANE_ALERTS_INSTALLER_TEST" in text
+    assert "Raspberry Pi 4" in text and "Raspberry Pi 5" in text
+    assert "64-bit" in text
