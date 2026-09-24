@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.5.3 — Startup Migration Isolation
+
+- Fixed the v5.5.2 Railway readiness failure where historical Prediction Lab migration plus Mongo index/schema maintenance blocked FastAPI startup after MongoDB had already connected.
+- Railway now runs that low-priority storage maintenance in a retrying background task so the live monitoring runtime can start without waiting for historical archive work.
+- Preserved the existing verified export/count/SHA-256-before-drop migration semantics and normal application MongoDB data.
+- Added startup-isolation and maintenance-retry regression coverage; physical prediction behavior remains unchanged at `5.3-3d-proximity-age-aware`.
+
 ## v5.5.2 — Railway Volume CLI Compatibility Patch
 
 - Corrected Railway CLI target-selector ordering in the production deployment workflow so the persistent `/data/prediction_lab` volume can be discovered or created before deployment.
