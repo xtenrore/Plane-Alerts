@@ -1,14 +1,15 @@
-"""Async MongoDB connection, schema and bounded diagnostics helpers."""
+"""Async storage connection, v5.5 migration, schema and bounded diagnostics helpers."""
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import monitoring
-from pymongo.errors import NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout
+from pymongo.errors import NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout, OperationFailure
 
 from app.config import settings
 from app.storage_metrics_v48 import storage_metrics
@@ -18,9 +19,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _client: AsyncIOMotorClient | None = None
-_db: AsyncIOMotorDatabase | None = None
+_db: Any | None = None
 _indexes_ready_for: tuple[str, str] | None = None
 _schema_ready_for: tuple[str, str] | None = None
+_prediction_lab_migration_ready_for: tuple[str, str] | None = None
 
 
 class _StorageCommandListener(monitoring.CommandListener):
@@ -53,6 +55,15 @@ class _StorageCommandListener(monitoring.CommandListener):
 _COMMAND_LISTENER = _StorageCommandListener()
 
 
+def _storage_backend() -> str:
+    raw = os.getenv("DATABASE_BACKEND", "").strip().lower()
+    if raw in {"local", "sqlite"}:
+        return "sqlite"
+    if raw in {"mongo", "mongodb", ""}:
+        return "mongodb"
+    raise RuntimeError("DATABASE_BACKEND must be mongodb or sqlite")
+
+
 def _mongo_target_label(uri: str) -> str:
     try:
         parsed = urlsplit(uri)
@@ -61,7 +72,28 @@ def _mongo_target_label(uri: str) -> str:
         return "mongodb://configured-host"
 
 
+def _sqlite_path() -> str:
+    raw = os.getenv("SQLITE_PATH", "").strip()
+    if raw:
+        return raw
+    from app.local_database_v55 import default_sqlite_path
+
+    return str(default_sqlite_path())
+
+
+def database_backend_name() -> str:
+    return _storage_backend()
+
+
+def database_target_label() -> str:
+    if _storage_backend() == "sqlite":
+        return "sqlite://local"
+    return _mongo_target_label(settings.mongo_uri)
+
+
 def _index_cache_key() -> tuple[str, str]:
+    if _storage_backend() == "sqlite":
+        return ("sqlite", _sqlite_path())
     return (_mongo_target_label(settings.mongo_uri), settings.database_name)
 
 
@@ -69,14 +101,33 @@ def _is_timeout(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.TimeoutError, NetworkTimeout, ServerSelectionTimeoutError, ExecutionTimeout))
 
 
-async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
-    """Run v4.8 migrations once for a real Mongo-style database handle.
+def _is_atlas_space_quota(exc: BaseException) -> bool:
+    if not isinstance(exc, OperationFailure):
+        return False
+    if getattr(exc, "code", None) == 8000 and "space quota" in str(exc).lower():
+        return True
+    return "over your space quota" in str(exc).lower()
 
-    Some legacy unit tests intentionally inject opaque sentinel objects to verify
-    connection/index caching. Those objects are not database implementations and
-    cannot support schema operations, so they must not be mistaken for Mongo.
-    Production Motor database objects always implement collection access.
-    """
+
+async def _ensure_indexes_with_quota_bridge(db: Any, key: tuple[str, str]) -> bool:
+    """Keep a readable quota-full Atlas DB alive only long enough for the v5.5 archive migration."""
+    global _indexes_ready_for
+    if _indexes_ready_for == key:
+        return True
+    try:
+        await _ensure_indexes(db)
+    except OperationFailure as exc:
+        if not _is_atlas_space_quota(exc):
+            raise
+        logger.warning(
+            "MongoDB is at storage quota; deferring normal index maintenance until Prediction Lab migration frees space."
+        )
+        return False
+    _indexes_ready_for = key
+    return True
+
+
+async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
     global _schema_ready_for
     if _schema_ready_for == key:
         return
@@ -89,21 +140,81 @@ async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
     _schema_ready_for = key
 
 
+async def _ensure_prediction_lab_migration(db: Any, key: tuple[str, str]) -> None:
+    """Export and retire only legacy Prediction Lab Mongo collections before normal Mongo startup."""
+    global _prediction_lab_migration_ready_for
+    if _prediction_lab_migration_ready_for == key:
+        return
+    if key[0] == "sqlite":
+        # Fresh/self-host SQLite never contained the legacy high-volume Mongo
+        # collections. File-backed Prediction Lab evidence is already native.
+        _prediction_lab_migration_ready_for = key
+        return
+    if not callable(getattr(db, "__getitem__", None)):
+        logger.debug("Skipping Prediction Lab migration for non-database test double")
+        return
+
+    from app.prediction_lab_files_v55 import migrate_prediction_lab_mongo
+
+    manifest = await migrate_prediction_lab_mongo(db)
+    if not bool(manifest.get("verified")) or not bool(manifest.get("legacy_collections_dropped")):
+        raise RuntimeError("Prediction Lab Mongo migration did not verify and retire all legacy Lab collections")
+
+    _prediction_lab_migration_ready_for = key
+    counts = {
+        name: int((details or {}).get("exported_count", 0) or 0)
+        for name, details in (manifest.get("collections") or {}).items()
+    }
+    logger.info("Prediction Lab Mongo migration ready before storage warm: counts=%s", counts)
+
+
+async def _prepare_connected_database(db: Any, key: tuple[str, str]) -> None:
+    """Complete the v5.5 Mongo migration gate, then require normal application indexes/schema."""
+    await _ensure_prediction_lab_migration(db, key)
+    indexes_ready = await _ensure_indexes_with_quota_bridge(db, key)
+    if not indexes_ready:
+        # The quota bridge exists only to permit the Prediction Lab export/drop.
+        # At this point migration already succeeded, so silently starting without
+        # normal application indexes would hide a real storage release-gate failure.
+        raise RuntimeError("MongoDB remains over storage quota after verified Prediction Lab migration")
+    await _ensure_schema(db, key)
+
+
+async def _connect_sqlite(*, ensure_indexes: bool) -> Any:
+    global _db, _indexes_ready_for
+    from app.local_database_v55 import SQLiteDatabase
+
+    path = _sqlite_path()
+    key = ("sqlite", path)
+    storage_metrics.set_state("connecting")
+    if _db is None or not bool(getattr(_db, "is_plane_alerts_sqlite", False)):
+        _db = SQLiteDatabase(path)
+    await _db.command("ping")
+    storage_metrics.set_state("healthy")
+    if ensure_indexes and _indexes_ready_for != key:
+        await _ensure_indexes(_db)
+        _indexes_ready_for = key
+    if ensure_indexes:
+        await _ensure_schema(_db, key)
+    logger.info("SQLite storage ready")
+    return _db
+
+
 async def connect_db(
     max_retries: int = 5,
     retry_delay: float = 2.0,
     timeout_ms: int = 10000,
     *,
     ensure_indexes: bool = True,
-) -> AsyncIOMotorDatabase:
-    global _client, _db, _indexes_ready_for
+) -> Any:
+    global _client, _db
+    if _storage_backend() == "sqlite":
+        return await _connect_sqlite(ensure_indexes=ensure_indexes)
+
     key = _index_cache_key()
     if _client is not None and _db is not None:
-        if ensure_indexes and _indexes_ready_for != key:
-            await _ensure_indexes(_db)
-            _indexes_ready_for = key
         if ensure_indexes:
-            await _ensure_schema(_db, key)
+            await _prepare_connected_database(_db, key)
         return _db
 
     target = _mongo_target_label(settings.mongo_uri)
@@ -122,7 +233,7 @@ async def connect_db(
                 maxPoolSize=5,
                 minPoolSize=0,
                 maxIdleTimeMS=60000,
-                appname="plane-alerts-v4.8",
+                appname="plane-alerts-v5.5",
                 event_listeners=[_COMMAND_LISTENER],
             )
             _db = _client[settings.database_name]
@@ -131,11 +242,8 @@ async def connect_db(
                 storage_metrics.record_reconnect()
             storage_metrics.set_state("healthy")
             logger.info("MongoDB connection established – database: %s", settings.database_name)
-            if ensure_indexes and _indexes_ready_for != key:
-                await _ensure_indexes(_db)
-                _indexes_ready_for = key
             if ensure_indexes:
-                await _ensure_schema(_db, key)
+                await _prepare_connected_database(_db, key)
             return _db
         except Exception as exc:
             had_failure = True
@@ -148,8 +256,7 @@ async def connect_db(
             if attempt < max_retries:
                 logger.warning(
                     "Failed to connect to MongoDB (%s). Retrying in %.1fs...",
-                    type(exc).__name__,
-                    retry_delay,
+                    type(exc).__name__, retry_delay,
                 )
                 await asyncio.sleep(retry_delay)
             else:
@@ -162,7 +269,6 @@ async def connect_db(
 
 
 async def ping_db(*, timeout_s: float = 1.0) -> bool:
-    """Bounded database liveness probe used for diagnostics, never alert gating."""
     if _db is None:
         storage_metrics.set_state("unavailable")
         return False
@@ -177,36 +283,43 @@ async def ping_db(*, timeout_s: float = 1.0) -> bool:
 
 
 async def close_db() -> None:
-    global _client, _db
+    global _client, _db, _indexes_ready_for, _schema_ready_for, _prediction_lab_migration_ready_for
+    if _db is not None and bool(getattr(_db, "is_plane_alerts_sqlite", False)):
+        await _db.close()
+        _db = None
     if _client is not None:
         _client.close()
         _client = None
         _db = None
-        storage_metrics.set_state("closed")
-        logger.info("MongoDB connection closed.")
+    _indexes_ready_for = None
+    _schema_ready_for = None
+    _prediction_lab_migration_ready_for = None
+    storage_metrics.set_state("closed")
+    logger.info("Database connection closed.")
 
 
-def get_db() -> AsyncIOMotorDatabase:
+def get_db() -> Any:
     if _db is None:
         raise RuntimeError("Database not initialised – call connect_db() first.")
     return _db
 
 
-def users_col() -> AsyncIOMotorCollection: return get_db()["users"]
-def locations_col() -> AsyncIOMotorCollection: return get_db()["locations"]
-def preferences_col() -> AsyncIOMotorCollection: return get_db()["preferences"]
-def profiles_col() -> AsyncIOMotorCollection: return get_db()["profiles"]
-def notification_history_col() -> AsyncIOMotorCollection: return get_db()["notification_history"]
-def user_state_col() -> AsyncIOMotorCollection: return get_db()["user_state"]
-def provider_learning_col() -> AsyncIOMotorCollection: return get_db()["provider_learning"]
-def ai_usage_col() -> AsyncIOMotorCollection: return get_db()["ai_usage"]
-def feedback_col() -> AsyncIOMotorCollection: return get_db()["feedback"]
-def camera_profiles_col() -> AsyncIOMotorCollection: return get_db()["camera_profiles"]
-def system_status_col() -> AsyncIOMotorCollection: return get_db()["system_status"]
-def admin_audit_col() -> AsyncIOMotorCollection: return get_db()["admin_audit"]
+def users_col() -> Any: return get_db()["users"]
+def locations_col() -> Any: return get_db()["locations"]
+def preferences_col() -> Any: return get_db()["preferences"]
+def profiles_col() -> Any: return get_db()["profiles"]
+def notification_history_col() -> Any: return get_db()["notification_history"]
+def user_state_col() -> Any: return get_db()["user_state"]
+def provider_learning_col() -> Any: return get_db()["provider_learning"]
+def ai_usage_col() -> Any: return get_db()["ai_usage"]
+def feedback_col() -> Any: return get_db()["feedback"]
+def camera_profiles_col() -> Any: return get_db()["camera_profiles"]
+def system_status_col() -> Any: return get_db()["system_status"]
+def admin_audit_col() -> Any: return get_db()["admin_audit"]
 
 
-async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
+async def _ensure_indexes(db: Any) -> None:
+    """Ensure indexes for normal application state only; Prediction Lab Mongo is retired by v5.5."""
     logger.info("Ensuring database indexes …")
     await db["users"].create_index("user_id", unique=True)
     await db["users"].create_index("username")
@@ -235,15 +348,6 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db["flight_route_samples"].create_index("utc_date")
     await db["flight_route_samples"].create_index("expires_at", expireAfterSeconds=0)
     await db["flight_route_samples"].create_index("updated_at")
-    await db["prediction_lab_audit"].create_index([("kind", 1), ("status", 1), ("utc_date", 1)])
-    await db["prediction_lab_audit"].create_index([("kind", 1), ("status", 1), ("window_end", 1)])
-    await db["prediction_lab_audit"].create_index([("kind", 1), ("user_id", 1), ("aircraft_icao24", 1), ("captured_at", -1)])
-    await db["prediction_lab_audit"].create_index("expires_at", expireAfterSeconds=0)
-    await db["prediction_shadow_evaluations"].create_index("evaluation_id", unique=True)
-    await db["prediction_shadow_evaluations"].create_index([("release_version", 1), ("model_id", 1), ("evaluated_at", -1)])
-    await db["prediction_shadow_evaluations"].create_index([("aircraft_icao24", 1), ("outcome_at", -1)])
-    await db["prediction_shadow_evaluations"].create_index("expires_at", expireAfterSeconds=0)
-    await db["prediction_sentinel_routes"].create_index("utc_date")
     await db["system_status"].create_index("updated_at")
     await db["admin_audit"].create_index("created_at")
     await db["admin_audit"].create_index("target_user_id")

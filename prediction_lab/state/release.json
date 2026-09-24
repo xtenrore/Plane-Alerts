@@ -1,0 +1,9 @@
+{
+  "schema": "plane-alerts-pipeline-checkpoint-v1",
+  "task": "release",
+  "last_success_at": null,
+  "last_case_id": null,
+  "last_event_id": null,
+  "processed_count": 0,
+  "notes": "Advance only after candidate verification, release gates, deployment and production verification succeed."
+}

@@ -1,6 +1,5 @@
-# Plane Alerts v4.9 production dependency lock
-# Generated from the verified Python 3.11 CI environment used by v4.8.1.
-# Runtime images and CI install this exact set through requirements.txt.
+# Plane Alerts v5.5.1 production/community dependency lock
+# Exact versions remain pinned; uvloop is POSIX-only and is excluded on Windows.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
@@ -37,6 +36,6 @@ typing_extensions==4.16.0
 typing-inspection==0.4.4
 tzlocal==5.4.4
 uvicorn==0.53.0
-uvloop==0.22.1
+uvloop==0.22.1; platform_system != "Windows"
 watchfiles==1.2.0
 websockets==17.1

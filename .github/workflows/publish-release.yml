@@ -22,7 +22,7 @@ jobs:
           github.event.workflow_run.head_branch == 'main' &&
           github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout exact tested main commit
         uses: actions/checkout@v4
@@ -65,6 +65,27 @@ jobs:
           echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
           echo "notes=${NOTES}" >> "${GITHUB_OUTPUT}"
 
+      - name: Validate guided installer assets
+        if: steps.head.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          python scripts/community_installer_v55.py --self-test
+          bash -n setup-linux.sh
+          bash -n setup-linux-arm64.sh
+          bash -n setup-raspberry-pi.sh
+          for asset in setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh; do
+            [[ -s "$asset" ]] || { echo "Missing installer asset: $asset" >&2; exit 1; }
+          done
+          rm -rf release-assets
+          mkdir release-assets
+          cp setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh release-assets/
+          chmod +x release-assets/*.sh
+          (
+            cd release-assets
+            sha256sum setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh > SHA256SUMS.txt
+            sha256sum -c SHA256SUMS.txt
+          )
+
       - name: Validate existing tag and release state
         if: steps.head.outputs.publish == 'true'
         id: existing
@@ -105,21 +126,32 @@ jobs:
           TAG_EXISTS: ${{ steps.existing.outputs.tag_exists }}
         run: |
           set -euo pipefail
+          assets=(
+            release-assets/setup.bat
+            release-assets/setup-windows.bat
+            release-assets/setup-windows-arm64.bat
+            release-assets/setup-linux.sh
+            release-assets/setup-linux-arm64.sh
+            release-assets/setup-raspberry-pi.sh
+            release-assets/SHA256SUMS.txt
+          )
           if [[ "${TAG_EXISTS}" == "true" ]]; then
             gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               --verify-tag \
               --title "Plane Alerts v${VERSION}" \
-              --notes-file "${NOTES}"
+              --notes-file "${NOTES}" \
+              "${assets[@]}"
           else
             gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${TESTED_SHA}" \
               --title "Plane Alerts v${VERSION}" \
-              --notes-file "${NOTES}"
+              --notes-file "${NOTES}" \
+              "${assets[@]}"
           fi
 
-      - name: Verify published tag points to tested commit
+      - name: Verify published tag and installer assets
         if: steps.head.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -133,4 +165,9 @@ jobs:
             echo "Published tag does not point to the tested commit." >&2
             exit 1
           fi
-          gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,url >/dev/null
+          release="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,targetCommitish,assets,url)"
+          [[ "$(jq -r '.isDraft' <<<"$release")" == "false" ]]
+          [[ "$(jq -r '.isPrerelease' <<<"$release")" == "false" ]]
+          count="$(jq '[.assets[] | select(.name == "setup.bat" or .name == "setup-windows.bat" or .name == "setup-windows-arm64.bat" or .name == "setup-linux.sh" or .name == "setup-linux-arm64.sh" or .name == "setup-raspberry-pi.sh" or .name == "SHA256SUMS.txt")] | length' <<<"$release")"
+          [[ "$count" -eq 7 ]] || { echo "Expected 7 installer assets, found $count" >&2; exit 1; }
+          echo "Release verified: $(jq -r '.url' <<<"$release")"

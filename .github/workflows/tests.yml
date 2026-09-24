@@ -95,6 +95,9 @@ jobs:
       - name: Run v5.4 presets, navigation, recovery and Mini App UX suite
         run: pytest -q tests/test_user_experience_v54.py
 
+      - name: Run v5.5 file-backed Prediction Lab, migration, pipeline and cadence suite
+        run: pytest -q tests/test_prediction_lab_files_v55.py tests/test_prediction_lab_pipeline_v55.py tests/test_next60_file_history_v55.py tests/test_prediction_lab_cadence_v55.py tests/test_next60_outcomes_v55.py
+
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
 
@@ -137,6 +140,9 @@ jobs:
       - name: Benchmark v5.4 preset/profile UX path
         run: python scripts/benchmark_v54_profile_ux.py
 
+      - name: Benchmark v5.5 Prediction Lab atomic persistence
+        run: python scripts/benchmark_v55_prediction_lab.py
+
       - name: Verify dependency consistency
         run: pip check
 
@@ -151,6 +157,7 @@ jobs:
         run: |
           cp .env.example .env
           docker compose config --quiet
+          docker compose config | grep -q '/data/prediction_lab'
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -159,22 +166,22 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build fresh amd64 image
-        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v54 .
+        run: docker buildx build --platform linux/amd64 --build-arg TARGETARCH=amd64 --load -t plane-alerts:v55 .
 
       - name: Run doctor in fresh image
         run: |
           docker run --rm --entrypoint planealerts \
             -e TELEGRAM_BOT_TOKEN=123456:test-token \
             -e MONGO_URI=mongodb://mongo:27017 \
-            plane-alerts:v54 doctor --offline
+            plane-alerts:v55 doctor --offline
 
       - name: Verify v5 operator CLI is installed in fresh image
         run: |
-          docker run --rm --entrypoint planealerts plane-alerts:v54 diagnostics --help
-          docker run --rm --entrypoint planealerts plane-alerts:v54 shadow-eval --help
+          docker run --rm --entrypoint planealerts plane-alerts:v55 diagnostics --help
+          docker run --rm --entrypoint planealerts plane-alerts:v55 shadow-eval --help
 
-      - name: Verify v5.4 runtime wiring in fresh image
-        run: docker run --rm plane-alerts:v54 python -c "from app.profile_presets_v54 import PRESETS; from app.main import NEXT60_HTML; assert len(PRESETS) == 6; assert 'Plane Alerts · Next 60' in NEXT60_HTML"
+      - name: Verify v5.5.1 runtime wiring in fresh image
+        run: docker run --rm plane-alerts:v55 python -c "from app.prediction_lab_files_v55 import DEFAULT_ROOT, LAB_COLLECTIONS; from app.version import VERSION; assert VERSION == '5.5.1'; assert DEFAULT_ROOT == '/data/prediction_lab'; assert len(LAB_COLLECTIONS) == 3"
 
       - name: Build ARM64 image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .

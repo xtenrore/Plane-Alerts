@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xtenrore/Plane-Alerts/prediction_lab/schemas/evidence-v1.schema.json",
+  "title": "Plane Alerts Prediction Lab Evidence v1",
+  "type": "object",
+  "required": ["schema", "case_id", "event_id", "kind", "captured_at"],
+  "properties": {
+    "schema": {"const": "plane-alerts-prediction-evidence-v1"},
+    "case_id": {"type": "string", "minLength": 1},
+    "event_id": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "captured_at": {"type": "string", "minLength": 10},
+    "prediction_version": {"type": ["string", "null"]},
+    "release_version": {"type": ["string", "null"]},
+    "observer_ref": {"type": ["string", "null"]},
+    "coverage_missing": {"type": ["boolean", "null"]},
+    "coverage_resolution": {"enum": ["observed", "inconclusive", null]},
+    "shadow_only": {"type": ["boolean", "null"]}
+  },
+  "additionalProperties": true
+}
