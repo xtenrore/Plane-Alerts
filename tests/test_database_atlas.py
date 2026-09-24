@@ -59,6 +59,66 @@ async def test_index_scan_is_cached_for_warm_connection(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prediction_lab_migration_precedes_normal_indexes_and_schema(monkeypatch):
+    import app.prediction_lab_files_v55 as prediction_lab_files
+
+    class FakeDB:
+        def __getitem__(self, name):
+            return name
+
+    db = FakeDB()
+    key = database._index_cache_key()
+    events = []
+    monkeypatch.setattr(database, "_client", object())
+    monkeypatch.setattr(database, "_db", db)
+    monkeypatch.setattr(database, "_prediction_lab_migration_ready_for", None)
+    monkeypatch.setattr(database, "_indexes_ready_for", None)
+    monkeypatch.setattr(database, "_schema_ready_for", None)
+
+    async def migrate(candidate):
+        assert candidate is db
+        events.append("migration")
+        return {"verified": True, "legacy_collections_dropped": True, "collections": {}}
+
+    async def indexes(candidate):
+        assert candidate is db
+        events.append("indexes")
+
+    async def schema(candidate, candidate_key):
+        assert candidate is db and candidate_key == key
+        events.append("schema")
+
+    monkeypatch.setattr(prediction_lab_files, "migrate_prediction_lab_mongo", migrate)
+    monkeypatch.setattr(database, "_ensure_indexes", indexes)
+    monkeypatch.setattr(database, "_ensure_schema", schema)
+
+    result = await database.connect_db(ensure_indexes=True)
+    assert result is db
+    assert events == ["migration", "indexes", "schema"]
+
+
+@pytest.mark.asyncio
+async def test_unverified_prediction_lab_migration_blocks_storage_startup(monkeypatch):
+    import app.prediction_lab_files_v55 as prediction_lab_files
+
+    class FakeDB:
+        def __getitem__(self, name):
+            return name
+
+    db = FakeDB()
+    key = database._index_cache_key()
+    monkeypatch.setattr(database, "_prediction_lab_migration_ready_for", None)
+
+    async def migrate(candidate):
+        assert candidate is db
+        return {"verified": False, "legacy_collections_dropped": False, "collections": {}}
+
+    monkeypatch.setattr(prediction_lab_files, "migrate_prediction_lab_mongo", migrate)
+    with pytest.raises(RuntimeError, match="did not verify"):
+        await database._ensure_prediction_lab_migration(db, key)
+
+
+@pytest.mark.asyncio
 async def test_quota_full_index_failure_is_deferred_only_for_prediction_lab_migration(monkeypatch):
     db = object()
     key = ("mongodb+srv://cluster.example.mongodb.net", "plane_alerts")
@@ -71,6 +131,24 @@ async def test_quota_full_index_failure_is_deferred_only_for_prediction_lab_migr
     monkeypatch.setattr(database, "_ensure_indexes", quota_failure)
     assert await database._ensure_indexes_with_quota_bridge(db, key) is False
     assert database._indexes_ready_for is None
+
+
+@pytest.mark.asyncio
+async def test_post_migration_quota_failure_is_fatal(monkeypatch):
+    db = object()
+    key = ("mongodb+srv://cluster.example.mongodb.net", "plane_alerts")
+
+    async def migration(candidate, candidate_key):
+        assert candidate is db and candidate_key == key
+
+    async def quota_bridge(candidate, candidate_key):
+        assert candidate is db and candidate_key == key
+        return False
+
+    monkeypatch.setattr(database, "_ensure_prediction_lab_migration", migration)
+    monkeypatch.setattr(database, "_ensure_indexes_with_quota_bridge", quota_bridge)
+    with pytest.raises(RuntimeError, match="remains over storage quota"):
+        await database._prepare_connected_database(db, key)
 
 
 @pytest.mark.asyncio
