@@ -33,24 +33,22 @@ def test_v55_is_sequential_community_release() -> None:
     assert VERSION == "5.5.1"
 
 
-def test_community_runtime_stubs_private_agy_before_loading_main() -> None:
+def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:
     text = (ROOT / "app" / "community_main_v55.py").read_text(encoding="utf-8")
-    stub_pos = text.index('sys.modules["app.agy_console"] = _stub')
+    guard_pos = text.index("install_local_receiver_coverage_guard()")
     main_pos = text.index("from app.main import app")
-    assert stub_pos < main_pos
-    assert '!= "agy"' in text
-    assert "agy_worker_url" not in text.lower()
-    assert "agy_worker_token" not in text.lower()
+    assert guard_pos < main_pos
 
 
-def test_community_doctor_has_explicit_agy_exclusion_and_no_private_config_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_community_doctor_has_safe_local_storage_and_five_second_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
     checks = static_checks(_config())
-    exclusion = next(check for check in checks if check.name == "agy-exclusion")
-    assert exclusion.status == "ok"
-    rendered = "\n".join(check.detail for check in checks).lower()
-    assert "worker token" not in rendered
-    assert "worker url" not in rendered
+    assert next(check for check in checks if check.name == "database-config").status == "ok"
+    cadence = next(check for check in checks if check.name == "monitor-cadence")
+    assert cadence.status == "ok"
+    assert "Five-second" in cadence.detail
+    contradictions = next(check for check in checks if check.name == "configuration-contradictions")
+    assert contradictions.status == "ok"
 
 
 def test_doctor_accepts_current_opensky_slot_formats(monkeypatch: pytest.MonkeyPatch) -> None:
