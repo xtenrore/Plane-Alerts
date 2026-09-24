@@ -52,7 +52,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          railway volume list --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" --json > /tmp/volumes.json
+          # Railway CLI v4 defines target selectors on the `volume` parent
+          # command, so they must precede list/files subcommands.
+          railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json > /tmp/volumes.json
           VOLUME_ID="$(python - <<'PY'
           import json
           data=json.load(open('/tmp/volumes.json'))
@@ -92,7 +94,7 @@ jobs:
           max_files=int(os.environ['MAX_FILES']); max_bytes=int(os.environ['MAX_BYTES']); root=pathlib.Path('/tmp/prediction-lab-incoming')
           chosen=[]; total=0
           def cmd(*args):
-              return ['railway','volume','files','--volume',volume,*args,'--project',project,'--environment',environment,'--service',service]
+              return ['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,*args]
           def list_dir(remote):
               try: data=json.loads(subprocess.check_output(cmd('list',remote,'--json'), text=True))
               except subprocess.CalledProcessError: return []
@@ -124,6 +126,7 @@ jobs:
                       if is_dir or ('.' not in pathlib.PurePosixPath(path).name and path.count('/') <= 5):
                           stack.append(path.rstrip('/')); continue
                       if not (path.endswith('.json') or path.endswith('.ndjson')): continue
+                      if path.endswith('.synced'): continue
                       chosen.append((path,size))
                       if len(chosen)>=max_files: break
           collect_tree('/archive/mongo-import')
@@ -206,6 +209,6 @@ jobs:
           volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
           for item in accepted:
               old=item['remote']; new=old+'.synced'
-              subprocess.check_call(['railway','volume','files','--volume',volume,'rename',old,new,'--json','--project',project,'--environment',environment,'--service',service])
+              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'rename',old,new,'--json'])
           print(f'acknowledged files={len(accepted)}')
           PY
