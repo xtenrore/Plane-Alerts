@@ -92,12 +92,14 @@ jobs:
         shell: sh
         run: |
           set -eu
-          VOLUMES="$(railway volume list --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --json)"
+          # Railway CLI v4 parses project/service/environment as `volume`
+          # parent options, before the list/add subcommand.
+          VOLUMES="$(railway volume --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" list --json)"
           if printf '%s' "$VOLUMES" | grep -q '/data/prediction_lab'; then
             echo "Prediction Lab persistent volume already attached."
           else
             echo "Creating Prediction Lab persistent volume at /data/prediction_lab."
-            railway volume add --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --mount-path /data/prediction_lab --json
+            railway volume --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" add --mount-path /data/prediction_lab --json
           fi
 
       - name: Deploy tested commit to main service
