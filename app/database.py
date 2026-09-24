@@ -21,6 +21,7 @@ _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
 _indexes_ready_for: tuple[str, str] | None = None
 _schema_ready_for: tuple[str, str] | None = None
+_prediction_lab_migration_ready_for: tuple[str, str] | None = None
 
 
 class _StorageCommandListener(monitoring.CommandListener):
@@ -92,13 +93,47 @@ async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
     _schema_ready_for = key
 
 
+async def _ensure_prediction_lab_migration(db: Any, key: tuple[str, str]) -> None:
+    """Export and retire only legacy Prediction Lab Mongo collections before normal startup."""
+    global _prediction_lab_migration_ready_for
+    if _prediction_lab_migration_ready_for == key:
+        return
+    if not callable(getattr(db, "__getitem__", None)):
+        logger.debug("Skipping Prediction Lab migration for non-database test double")
+        return
+
+    from app.prediction_lab_files_v55 import migrate_prediction_lab_mongo
+
+    manifest = await migrate_prediction_lab_mongo(db)
+    if not bool(manifest.get("verified")) or not bool(manifest.get("legacy_collections_dropped")):
+        raise RuntimeError("Prediction Lab Mongo migration did not verify and retire all legacy Lab collections")
+
+    _prediction_lab_migration_ready_for = key
+    counts = {
+        name: int((details or {}).get("exported_count", 0) or 0)
+        for name, details in (manifest.get("collections") or {}).items()
+    }
+    logger.info("Prediction Lab Mongo migration ready before storage warm: counts=%s", counts)
+
+
+async def _prepare_connected_database(db: Any, key: tuple[str, str]) -> None:
+    """Complete the v5.5 migration gate, then require normal application indexes/schema."""
+    await _ensure_prediction_lab_migration(db, key)
+    indexes_ready = await _ensure_indexes_with_quota_bridge(db, key)
+    if not indexes_ready:
+        # The quota bridge exists only to permit the Prediction Lab export/drop.
+        # At this point migration already succeeded, so silently starting without
+        # normal application indexes would hide a real storage release-gate failure.
+        raise RuntimeError("MongoDB remains over storage quota after verified Prediction Lab migration")
+    await _ensure_schema(db, key)
+
+
 async def connect_db(max_retries: int = 5, retry_delay: float = 2.0, timeout_ms: int = 10000, *, ensure_indexes: bool = True) -> AsyncIOMotorDatabase:
     global _client, _db, _indexes_ready_for
     key = _index_cache_key()
     if _client is not None and _db is not None:
         if ensure_indexes:
-            await _ensure_indexes_with_quota_bridge(_db, key)
-            await _ensure_schema(_db, key)
+            await _prepare_connected_database(_db, key)
         return _db
 
     target = _mongo_target_label(settings.mongo_uri)
@@ -117,8 +152,7 @@ async def connect_db(max_retries: int = 5, retry_delay: float = 2.0, timeout_ms:
             storage_metrics.set_state("healthy")
             logger.info("MongoDB connection established – database: %s", settings.database_name)
             if ensure_indexes:
-                await _ensure_indexes_with_quota_bridge(_db, key)
-                await _ensure_schema(_db, key)
+                await _prepare_connected_database(_db, key)
             return _db
         except Exception as exc:
             had_failure = True
