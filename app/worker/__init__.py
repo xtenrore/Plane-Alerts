@@ -36,38 +36,22 @@ if "pytest" not in sys.modules:
 
     install_prediction_v46()
 
-    # Route resolver/read caches are installed before the bounded writer so the
-    # route persistence target retains the newer 35-day v4.6 behavior.
-    from app.intelligence.route_guard import install_route_guard
-    from app.intelligence.route_guard_v2 import install_route_guard_v2
-
-    install_route_guard()
-    install_route_guard_v2()
-
+    # Keep bounded route-history collection for Prediction Lab/analytics, but it
+    # is no longer an alert authority. The destination/path guard below is the
+    # only live arrival/destination qualification layer.
     from app.intelligence.route_intelligence_v46 import install_route_intelligence_v46
 
     install_route_intelligence_v46()
 
     from app.intelligence.route_observe_guard_v44 import install_route_observe_guard_v44
-    from app.intelligence.route_guard_v42 import install_route_guard_v42
-    from app.intelligence.requalification_guard_v43 import install_requalification_guard_v43
 
     install_route_observe_guard_v44()
-    install_route_guard_v42()
-    install_requalification_guard_v43()
 
-    # Maintain current LTFM runway data before terminal/runway inference.
-    from app.intelligence.runway_data_v47 import install_current_runway_data_v47
+    from app.intelligence.destination_path_guard_v554 import install_destination_path_guard
 
-    install_current_runway_data_v47()
+    install_destination_path_guard()
 
-    # v4.7 terminal/runway evidence and the narrow v4.7.2 initial hold remain
-    # authoritative exactly as before this storage-only release.
-    from app.intelligence.route_guard_v47 import install_route_guard_v47
-
-    install_route_guard_v47()
-
-    # Cap individual provider latency and prevent stale ADS-B positions from
+    # Cap individual ADS-B provider latency and prevent stale observations from
     # creating brand-new approach alerts.
     from app.worker.critical_timing import install_critical_timing_guards
 
@@ -91,8 +75,8 @@ if "pytest" not in sys.modules:
     install_cadence_due_guard_v424()
 
     # v4.8 installs last so it can replace only the remaining storage-facing
-    # hooks from v4.2.3/v4.4. Prediction, route and notification semantics are
-    # deliberately left untouched.
+    # hooks from v4.2.3/v4.4. Prediction, destination/path and notification
+    # semantics are deliberately left untouched.
     from app.worker.storage_guard_v48 import install_storage_guard_v48
 
     install_storage_guard_v48()
