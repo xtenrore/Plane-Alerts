@@ -1,0 +1,211 @@
+name: Sync Prediction Lab evidence
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prediction-lab-data-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      MAX_FILES: "80"
+      MAX_BYTES: "26214400"
+    steps:
+      - name: Checkout evidence branch
+        uses: actions/checkout@v4
+        with:
+          ref: prediction-lab-data
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli
+
+      - name: Resolve Railway authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
+          if [[ -z "${RAILWAY_API_TOKEN:-}" ]]; then
+            echo "::error::Missing Railway authentication secret."
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN=${RAILWAY_API_TOKEN}" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+
+      - name: Find Prediction Lab volume
+        id: volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          railway volume list --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" --json > /tmp/volumes.json
+          VOLUME_ID="$(python - <<'PY'
+          import json
+          data=json.load(open('/tmp/volumes.json'))
+          matches=[]
+          def walk(value):
+              if isinstance(value, dict):
+                  text=' '.join(str(value.get(k,'')) for k in ('mountPath','mount_path','path'))
+                  if '/data/prediction_lab' in text:
+                      ident=value.get('id') or value.get('volumeId') or value.get('volume_id') or value.get('name')
+                      if ident: matches.append(str(ident))
+                  for child in value.values(): walk(child)
+              elif isinstance(value, list):
+                  for child in value: walk(child)
+          walk(data)
+          print(matches[0] if matches else '')
+          PY
+          )"
+          if [[ -z "$VOLUME_ID" ]]; then
+            echo "Prediction Lab volume is not attached yet; nothing to sync."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "id=$VOLUME_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download bounded evidence batch
+        if: steps.volume.outputs.available == 'true'
+        shell: bash
+        env:
+          VOLUME_ID: ${{ steps.volume.outputs.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/prediction-lab-incoming
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
+          max_files=int(os.environ['MAX_FILES']); max_bytes=int(os.environ['MAX_BYTES']); root=pathlib.Path('/tmp/prediction-lab-incoming')
+          chosen=[]; total=0
+          def cmd(*args):
+              return ['railway','volume','files','--volume',volume,*args,'--project',project,'--environment',environment,'--service',service]
+          def list_dir(remote):
+              try: data=json.loads(subprocess.check_output(cmd('list',remote,'--json'), text=True))
+              except subprocess.CalledProcessError: return []
+              entries=[]; seen=set()
+              def walk(value):
+                  if isinstance(value, dict):
+                      path=value.get('path') or value.get('remotePath') or value.get('name')
+                      if isinstance(path,str) and path not in seen:
+                          name=value.get('name') or pathlib.PurePosixPath(path).name
+                          kind=str(value.get('type') or value.get('kind') or '').lower()
+                          is_dir=bool(value.get('isDirectory') or value.get('is_dir') or kind in {'dir','directory','folder'})
+                          size=value.get('size') or value.get('bytes') or 0
+                          try: size=int(size or 0)
+                          except (TypeError,ValueError): size=0
+                          if not str(path).startswith('/'): path=str(pathlib.PurePosixPath(remote) / str(name))
+                          entries.append((str(path),is_dir,size)); seen.add(str(path))
+                      for child in value.values(): walk(child)
+                  elif isinstance(value,list):
+                      for child in value: walk(child)
+              walk(data); return entries
+          def collect_tree(start):
+              stack=[start]; visited=set()
+              while stack and len(chosen)<max_files:
+                  current=stack.pop(0)
+                  if current in visited: continue
+                  visited.add(current)
+                  for path,is_dir,size in sorted(list_dir(current)):
+                      if path.rstrip('/')==current.rstrip('/'): continue
+                      if is_dir or ('.' not in pathlib.PurePosixPath(path).name and path.count('/') <= 5):
+                          stack.append(path.rstrip('/')); continue
+                      if not (path.endswith('.json') or path.endswith('.ndjson')): continue
+                      chosen.append((path,size))
+                      if len(chosen)>=max_files: break
+          collect_tree('/archive/mongo-import')
+          if len(chosen)<max_files: collect_tree('/raw')
+          manifest=[]
+          for remote,_ in chosen:
+              if len(manifest)>=max_files: break
+              rel=remote.lstrip('/'); local=root/rel; local.parent.mkdir(parents=True, exist_ok=True)
+              subprocess.check_call(cmd('download',remote,str(local),'--overwrite'))
+              size=local.stat().st_size
+              if manifest and total+size>max_bytes: local.unlink(); break
+              if size>max_bytes: raise SystemExit(f'single evidence file exceeds bounded sync size: {remote} ({size})')
+              total+=size; manifest.append({'remote':remote,'relative':rel,'bytes':size})
+          (root/'manifest.json').write_text(json.dumps(manifest,sort_keys=True),encoding='utf-8')
+          print(f'bounded sync selected files={len(manifest)} bytes={total}')
+          PY
+
+      - name: Validate and stage evidence
+        if: steps.volume.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib, re, shutil
+          incoming=pathlib.Path('/tmp/prediction-lab-incoming')
+          manifest=json.loads((incoming/'manifest.json').read_text()) if (incoming/'manifest.json').exists() else []
+          root=pathlib.Path('prediction_lab')
+          forbidden=re.compile(r'(mongodb\+srv://|telegram[_-]?token|authorization\s*[=:]|api[_-]?key\s*[=:]|password\s*[=:])',re.I)
+          accepted=[]
+          for item in manifest:
+              source=incoming/item['relative']; raw=source.read_text(encoding='utf-8')
+              if forbidden.search(raw): raise SystemExit(f'credential-like material rejected: {item["relative"]}')
+              if source.suffix=='.json':
+                  parsed=json.loads(raw)
+                  if item['relative'].startswith('raw/') and parsed.get('schema')!='plane-alerts-prediction-evidence-v1': raise SystemExit(f'unsupported evidence schema: {item["relative"]}')
+              else:
+                  for line in raw.splitlines():
+                      if line.strip(): json.loads(line)
+              target=root/item['relative']; target.parent.mkdir(parents=True,exist_ok=True)
+              if target.exists():
+                  if hashlib.sha256(target.read_bytes()).digest()!=hashlib.sha256(source.read_bytes()).digest(): raise SystemExit(f'conflicting evidence path: {target}')
+              else: shutil.copy2(source,target)
+              accepted.append(item)
+          pathlib.Path('/tmp/prediction-lab-accepted.json').write_text(json.dumps(accepted),encoding='utf-8')
+          print(f'validated files={len(accepted)}')
+          PY
+          git config user.name "plane-alerts-evidence"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prediction_lab/raw prediction_lab/archive/mongo-import 2>/dev/null || true
+
+      - name: Commit and push evidence
+        if: steps.volume.outputs.available == 'true'
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --cached --quiet; then
+            echo "No new repository evidence to commit."
+          else
+            git commit -m "Prediction Lab evidence sync"
+            if ! git pull --rebase origin prediction-lab-data; then
+              git rebase --abort || true
+              echo "::error::Evidence branch changed concurrently; refusing to acknowledge spool files."
+              exit 1
+            fi
+            git push origin HEAD:prediction-lab-data
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Acknowledge committed spool files
+        if: steps.volume.outputs.available == 'true' && steps.push.outputs.ok == 'true'
+        shell: bash
+        env:
+          VOLUME_ID: ${{ steps.volume.outputs.id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          accepted=json.load(open('/tmp/prediction-lab-accepted.json')) if pathlib.Path('/tmp/prediction-lab-accepted.json').exists() else []
+          volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
+          for item in accepted:
+              old=item['remote']; new=old+'.synced'
+              subprocess.check_call(['railway','volume','files','--volume',volume,'rename',old,new,'--json','--project',project,'--environment',environment,'--service',service])
+          print(f'acknowledged files={len(accepted)}')
+          PY
