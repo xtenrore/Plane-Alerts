@@ -1,4 +1,5 @@
 import pytest
+from pymongo.errors import OperationFailure
 
 import app.database as database
 from app.database import _mongo_target_label
@@ -55,3 +56,31 @@ async def test_index_scan_is_cached_for_warm_connection(monkeypatch):
     assert first is existing_db
     assert second is existing_db
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_quota_full_index_failure_is_deferred_only_for_prediction_lab_migration(monkeypatch):
+    db = object()
+    key = ("mongodb+srv://cluster.example.mongodb.net", "plane_alerts")
+    monkeypatch.setattr(database, "_indexes_ready_for", None)
+
+    async def quota_failure(candidate):
+        assert candidate is db
+        raise OperationFailure("you are over your space quota, using 512 MB of 512 MB", code=8000)
+
+    monkeypatch.setattr(database, "_ensure_indexes", quota_failure)
+    assert await database._ensure_indexes_with_quota_bridge(db, key) is False
+    assert database._indexes_ready_for is None
+
+
+@pytest.mark.asyncio
+async def test_non_quota_index_failure_remains_fatal(monkeypatch):
+    db = object()
+    key = ("mongodb+srv://cluster.example.mongodb.net", "plane_alerts")
+
+    async def other_failure(candidate):
+        raise OperationFailure("not authorized", code=13)
+
+    monkeypatch.setattr(database, "_ensure_indexes", other_failure)
+    with pytest.raises(OperationFailure):
+        await database._ensure_indexes_with_quota_bridge(db, key)
