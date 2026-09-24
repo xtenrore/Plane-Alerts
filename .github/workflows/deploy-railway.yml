@@ -80,26 +80,28 @@ jobs:
             echo "::error::Missing RAILWAY_TOKEN or RAILWAY_API_TOKEN GitHub secret."
             exit 1
           fi
-
-          if railway link \
-            --project "$PROJECT_ID" \
-            --environment "$ENVIRONMENT_ID" \
-            --workspace "$WORKSPACE_ID"; then
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then
             echo "Using Railway API-token mode."
             exit 0
           fi
-
           echo "Railway API-token link was rejected; trying project-token compatibility mode."
           echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
           echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+
+      - name: Ensure persistent Prediction Lab volume
+        shell: sh
+        run: |
+          set -eu
+          VOLUMES="$(railway volume list --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --json)"
+          if printf '%s' "$VOLUMES" | grep -q '/data/prediction_lab'; then
+            echo "Prediction Lab persistent volume already attached."
+          else
+            echo "Creating Prediction Lab persistent volume at /data/prediction_lab."
+            railway volume add --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --mount-path /data/prediction_lab --json
+          fi
 
       - name: Deploy tested commit to main service
         shell: sh
         run: |
           set -eu
-          railway up \
-            --project "$PROJECT_ID" \
-            --service "$MAIN_SERVICE_ID" \
-            --environment "$ENVIRONMENT_ID" \
-            --ci \
-            --message "Plane Alerts main ${DEPLOY_SHA}"
+          railway up --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Plane Alerts main ${DEPLOY_SHA}"
