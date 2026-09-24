@@ -42,7 +42,7 @@ def stabilize_lifecycle_stage(
 ) -> str:
     """Prevent PHOTO NOW / CAMERA READY threshold chatter without hiding turns.
 
-    AGY seq142 showed a single live message flipping between these two stages
+    retired external agent seq142 showed a single live message flipping between these two stages
     repeatedly as the predicted shooting-window start jittered around zero. A
     small *exit* band is presentation hysteresis only: physical CPA/ETA is left
     untouched, and a genuinely moved window (>30 s away) may still fall back to

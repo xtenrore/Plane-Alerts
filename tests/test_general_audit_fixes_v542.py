@@ -358,6 +358,6 @@ def test_pa_a17_product_version_strings_are_canonical():
     from app.bot import profile_legacy
     from app.admin import v36_routes
 
-    assert VERSION == "5.5.4"
+    assert VERSION == "5.6"
     assert "v4.3" not in profile_legacy.cmd_help_profiled.__doc__ if profile_legacy.cmd_help_profiled.__doc__ else True
     assert v36_routes.VERSION == VERSION

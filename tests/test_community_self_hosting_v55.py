@@ -29,8 +29,8 @@ def _config(**overrides: object) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def test_v55_runtime_uses_current_sequential_patch_version() -> None:
-    assert VERSION == "5.5.4"
+def test_runtime_uses_current_minor_release_version() -> None:
+    assert VERSION == "5.6"
 
 
 def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:

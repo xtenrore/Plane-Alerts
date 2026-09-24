@@ -93,7 +93,7 @@ def test_railway_deploy_runs_only_after_trusted_green_main_push():
     assert "contents: read" in workflow
 
 
-def test_railway_deploy_gate_runs_outside_railway_container_refuses_stale_main_and_excludes_agy():
+def test_railway_deploy_gate_runs_outside_railway_container_and_targets_only_main_service():
     workflow = _deploy_workflow_text()
     tested_sha = "${{ github.event.workflow_run.head_sha }}"
     gate_block, deploy_block = workflow.split("\n  deploy:\n", 1)
@@ -113,8 +113,7 @@ def test_railway_deploy_gate_runs_outside_railway_container_refuses_stale_main_a
     assert f"DEPLOY_SHA: {tested_sha}" in deploy_block
     assert f"ref: {tested_sha}" in deploy_block
     assert '--message "Plane Alerts main ${DEPLOY_SHA}"' in deploy_block
-    assert '--message "Plane Alerts AGY ${DEPLOY_SHA}"' not in deploy_block
-    assert "AGY_SERVICE_ID" not in deploy_block
+    assert "MAIN_SERVICE_ID" in deploy_block
 
 
 def test_v490_release_notes_exist_for_automatic_publishing():

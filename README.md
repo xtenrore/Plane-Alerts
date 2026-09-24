@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.5.4**  
+**Current code version: Plane Alerts v5.6**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,12 @@ ADS-B ingestion
 Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.6 — Retired Integration Cleanup
+
+v5.6 removes the remaining names, hand-off labels and stale documentation references from the retired external-agent integration. The Railway runtime already operated without that sidecar; this release also removes the final stale production token and adds a repository-wide regression so those references cannot return.
+
+There is no trajectory, CPA, ETA, destination-path, qualification, cancellation, provider, database or alert-timing change. The physical prediction version remains `5.3-3d-proximity-age-aware`, and the v5.5.4 destination-path arrival fix is preserved unchanged.
 
 ## v5.5.4 — Provider-First Destination Path Guard
 
