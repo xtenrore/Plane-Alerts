@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.5.1**
+**Current code version: Plane Alerts v5.5.2**
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -25,6 +25,12 @@ ADS-B ingestion
 ```
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.5.2 — Railway Volume CLI Compatibility Patch
+
+v5.5.2 corrects Railway CLI target-selector ordering in the production deployment and Prediction Lab evidence-sync workflows after the v5.5.1 rollout exposed a CLI parsing mismatch. The persistent `/data/prediction_lab` volume is now discovered or created using the current Railway `volume` command grammar, and volume file list/download/rename operations use the same verified selector ordering.
+
+This is an operations/release compatibility patch only. It does not change the Prediction Lab evidence schema, MongoDB migration semantics, live trajectory/CPA/ETA logic, qualification/cancellation behavior, alert timing, or the physical prediction version.
 
 ## v5.5.1 — File-Backed Prediction Lab
 
