@@ -1,0 +1,34 @@
+name: v56-residue-audit
+
+on:
+  push:
+    branches:
+      - fix/v5.6-retired-integration-cleanup
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print retired integration residue with context
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          needles = ("a" + "gy", "anti" + "gravity", "chatgpt_" + "handoff_json")
+          skip = {".git", "__pycache__", ".pytest_cache"}
+          for path in sorted(Path('.').rglob('*')):
+              if not path.is_file() or any(part in skip for part in path.parts):
+                  continue
+              try:
+                  lines = path.read_text(encoding='utf-8').splitlines()
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for number, line in enumerate(lines, 1):
+                  folded = line.casefold()
+                  if any(needle in folded for needle in needles):
+                      print(f"{path}:{number}:{line}")
+          PY
