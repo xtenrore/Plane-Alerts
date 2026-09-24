@@ -27,7 +27,10 @@ def _cases():
 
 
 def test_v52_identity_keeps_historical_predictor_and_v53_advances_current_identity():
-    major, minor, patch = (int(part) for part in VERSION.split("."))
+    parts = tuple(int(part) for part in VERSION.split("."))
+    assert len(parts) in (2, 3)
+    major, minor = parts[:2]
+    patch = parts[2] if len(parts) == 3 else 0
     assert (major, minor, patch) >= (5, 2, 0)
     if (major, minor) >= (5, 3):
         assert PREDICTION_VERSION == "5.3-3d-proximity-age-aware"
