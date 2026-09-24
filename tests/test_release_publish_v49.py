@@ -4,6 +4,7 @@ from pathlib import Path
 WORKFLOW = Path(".github/workflows/publish-release.yml")
 DEPLOY_WORKFLOW = Path(".github/workflows/deploy-railway.yml")
 TEST_WORKFLOW = Path(".github/workflows/tests.yml")
+COMMUNITY_WORKFLOW = Path(".github/workflows/community-installer.yml")
 
 
 def _workflow_text() -> str:
@@ -16,6 +17,10 @@ def _deploy_workflow_text() -> str:
 
 def _test_workflow_text() -> str:
     return TEST_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _community_workflow_text() -> str:
+    return COMMUNITY_WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_community_release_publish_requires_explicit_weekly_tested_sha():
@@ -62,6 +67,19 @@ def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     assert "--platform linux/arm64" not in workflow
     assert "Run v5.5.4 destination-path arrival regressions" in workflow
     assert "Benchmark v5.5.4 non-blocking destination path gate" in workflow
+
+
+def test_long_community_matrix_is_weekly_or_manual_not_every_main_push():
+    workflow = _community_workflow_text()
+    trigger_block = workflow.split("\npermissions:", 1)[0]
+    assert "schedule:" in trigger_block
+    assert 'cron: "30 2 * * 1"' in trigger_block
+    assert "workflow_dispatch:" in trigger_block
+    assert "pull_request:" in trigger_block
+    assert "push:" not in trigger_block
+    assert "windows-arm64:" in workflow
+    assert "linux-arm64:" in workflow
+    assert "raspberry-pi-arm64-emulation:" in workflow
 
 
 def test_railway_deploy_runs_only_after_trusted_green_main_push():
