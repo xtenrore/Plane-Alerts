@@ -192,5 +192,6 @@ def test_runtime_does_not_install_duplicate_route_or_notification_wrappers():
     worker_init = Path("app/worker/__init__.py").read_text()
     assert "install_route_history_read_guard_v44" not in worker_init
     assert "install_notification_telemetry_v44" not in worker_init
-    assert "install_route_guard_v2()" in worker_init
+    assert "install_route_guard_v2()" not in worker_init
+    assert "install_destination_path_guard()" in worker_init
     assert "install_route_observe_guard_v44()" in worker_init

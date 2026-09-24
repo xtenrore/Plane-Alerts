@@ -288,7 +288,7 @@ def _angle_delta(a: float, b: float) -> float:
 
 
 def _diverged(ac: Any, samples: Iterable[Any], destination: route_mod.AirportInfo) -> bool:
-    """Strong live evidence that filed destination should stop suppressing."""
+    """Require sustained divergence, except a clear climbing go-around."""
     rows = []
     for sample in samples:
         try:
@@ -306,19 +306,19 @@ def _diverged(ac: Any, samples: Iterable[Any], destination: route_mod.AirportInf
         return False
     newest = rows[-1]
     oldest = next(
-        (row for row in reversed(rows[:-1]) if newest[0] - row[0] >= 8.0),
+        (row for row in rows if newest[0] - row[0] >= 8.0),
         None,
     )
     if oldest is None:
         return False
+    span = newest[0] - oldest[0]
     old_d = haversine_km(
         oldest[1], oldest[2], destination.latitude, destination.longitude
     )
     new_d = haversine_km(
         newest[1], newest[2], destination.latitude, destination.longitude
     )
-    if new_d - old_d < max(0.8, min(4.0, new_d * 0.025)):
-        return False
+    increase = new_d - old_d
     try:
         track = float(getattr(ac, "heading"))
         dest_bearing = bearing_deg(
@@ -331,7 +331,18 @@ def _diverged(ac: Any, samples: Iterable[Any], destination: route_mod.AirportInf
         climbing = float(getattr(ac, "vertical_rate_mps")) >= 2.0
     except (TypeError, ValueError):
         climbing = False
-    return heading_away or climbing
+
+    # A climbing aircraft that is already increasing its airport distance is a
+    # general go-around/diversion signal and can release quickly.
+    if climbing and increase >= max(0.8, min(2.0, new_d * 0.015)):
+        return True
+
+    # Heading away for 5-10 seconds is normal on terminal arrivals and was the
+    # original false-alert failure. Require a much longer, material divergence
+    # before treating provider destination data as stale/wrong.
+    if span < 30.0:
+        return False
+    return heading_away and increase >= max(3.0, min(8.0, new_d * 0.05))
 
 
 def _speed_km_s(ac: Any) -> float:
@@ -464,7 +475,7 @@ async def evaluate_destination_path(
     observer_destination = haversine_km(
         float(user_lat), float(user_lon), destination.latitude, destination.longitude
     )
-    if observer_destination <= float(alert_radius_km) + 5.0:
+    if observer_destination <= float(alert_radius_km) + 1.0:
         return _result(
             key,
             False,
