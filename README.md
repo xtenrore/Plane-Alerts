@@ -171,7 +171,7 @@ Important environment settings are documented in `.env.example`. Runtime AI cred
 
 Railway production CI compiles the application, rebuilds/verifies airport reference data, runs the full pytest suite, replays Error Museum/provider/arrival/storage regressions, runs deterministic performance and cadence checks, and validates dependency consistency. Production deployment uses the exact successful current `main` commit.
 
-Community/self-host stable releases are separate. The weekly community validation path owns ARM64/Raspberry Pi, installer/platform matrices, updater/rollback checks and stable installer assets. The long community matrix runs weekly or manually (and for relevant pull-request changes), not on every Railway `main` push. The community release publisher requires the exact commit that passed that matrix and does not run automatically after an ordinary Railway deployment.
+Community/self-host stable releases are separate. The long Windows ARM64/Linux ARM64/Raspberry Pi/installer matrix is owned by the dedicated ChatGPT **Weekly Community Release** scheduled task, not by normal Railway CI and not by a GitHub weekly cron. GitHub exposes that community matrix and the community publisher as manual workflows for the scheduled ChatGPT task to invoke after it determines the required deferred validation. An ordinary Railway deployment is not automatically a community-stable release.
 
 ## Documentation
 
