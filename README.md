@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.5.2**
+**Current code version: Plane Alerts v5.5.3**
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -25,6 +25,14 @@ ADS-B ingestion
 ```
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.5.3 — Startup Migration Isolation
+
+v5.5.3 fixes the Railway readiness regression exposed by v5.5.2. After MongoDB connected, the required historical Prediction Lab archive migration plus index/schema maintenance still ran inside FastAPI startup. On a production-sized archive that low-priority work could outlive Railway's readiness window even though normal application reads were already available.
+
+Railway now schedules the same verified migration/index/schema maintenance in a retrying background task after normal Mongo connectivity succeeds. FastAPI, Telegram initialization and the live monitoring worker can become ready without waiting for historical archive work. Migration integrity is unchanged: record counts and SHA-256 hashes must verify before legacy Prediction Lab collections are retired, and normal application MongoDB data is not part of that retirement path.
+
+This is a startup/reliability patch only. It does not change trajectory, CPA, ETA, qualification, cancellation, alert timing or the physical prediction version.
 
 ## v5.5.2 — Railway Volume CLI Compatibility Patch
 
@@ -71,7 +79,7 @@ The scale path does not create a second ADS-B feed layer or multiply provider re
 
 MongoDB remains application persistence for users, configuration and normal product state. Prediction Lab high-volume audit/evaluation telemetry is file-backed in v5.5.1.
 
-A verified last-known-good active configuration can continue to drive live monitoring during a temporary MongoDB outage. A cold process without verified configuration does not invent state. Encounter persistence uses bounded queues and delayed writes cannot silently overwrite newer lifecycle records.
+A verified last-known-good active configuration can continue to drive live monitoring during a temporary MongoDB outage. A cold process without verified configuration does not invent state. Encounter persistence uses bounded queues and delayed writes cannot silently overwrite newer lifecycle records. On Railway, historical Prediction Lab migration and normal index/schema maintenance run as low-priority retrying work after normal Mongo connectivity is available, so they do not hold application readiness hostage.
 
 `/health` provides structured diagnostics. `/ready` is the rollout/readiness endpoint and requires a usable monitoring configuration, live worker and initialized Telegram runtime.
 

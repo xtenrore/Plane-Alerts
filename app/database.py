@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -23,6 +24,13 @@ _db: Any | None = None
 _indexes_ready_for: tuple[str, str] | None = None
 _schema_ready_for: tuple[str, str] | None = None
 _prediction_lab_migration_ready_for: tuple[str, str] | None = None
+_maintenance_task: asyncio.Task[None] | None = None
+_maintenance_state: dict[str, Any] = {
+    "state": "idle",
+    "attempt": 0,
+    "last_error": None,
+    "completed_at": None,
+}
 
 
 class _StorageCommandListener(monitoring.CommandListener):
@@ -109,6 +117,33 @@ def _is_atlas_space_quota(exc: BaseException) -> bool:
     return "over your space quota" in str(exc).lower()
 
 
+def _truthy_env(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _background_maintenance_enabled() -> bool:
+    """Defer expensive Mongo maintenance on Railway unless explicitly overridden.
+
+    v5.5 can need to export tens of thousands of historical Prediction Lab rows.
+    That migration is required, but it is low-priority storage work and must not
+    hold FastAPI lifespan/readiness or the five-second aircraft monitor hostage.
+    """
+    explicit = _truthy_env("PLANE_STORAGE_MAINTENANCE_BACKGROUND")
+    if explicit is not None:
+        return explicit
+    return bool(os.getenv("RAILWAY_ENVIRONMENT", "").strip())
+
+
+def storage_maintenance_snapshot() -> dict[str, Any]:
+    snapshot = dict(_maintenance_state)
+    snapshot["background_enabled"] = _background_maintenance_enabled()
+    snapshot["task_active"] = bool(_maintenance_task is not None and not _maintenance_task.done())
+    return snapshot
+
+
 async def _ensure_indexes_with_quota_bridge(db: Any, key: tuple[str, str]) -> bool:
     """Keep a readable quota-full Atlas DB alive only long enough for the v5.5 archive migration."""
     global _indexes_ready_for
@@ -141,7 +176,7 @@ async def _ensure_schema(db: Any, key: tuple[str, str]) -> None:
 
 
 async def _ensure_prediction_lab_migration(db: Any, key: tuple[str, str]) -> None:
-    """Export and retire only legacy Prediction Lab Mongo collections before normal Mongo startup."""
+    """Export and retire only legacy Prediction Lab Mongo collections before normal Mongo maintenance."""
     global _prediction_lab_migration_ready_for
     if _prediction_lab_migration_ready_for == key:
         return
@@ -165,11 +200,11 @@ async def _ensure_prediction_lab_migration(db: Any, key: tuple[str, str]) -> Non
         name: int((details or {}).get("exported_count", 0) or 0)
         for name, details in (manifest.get("collections") or {}).items()
     }
-    logger.info("Prediction Lab Mongo migration ready before storage warm: counts=%s", counts)
+    logger.info("Prediction Lab Mongo migration ready: counts=%s", counts)
 
 
 async def _prepare_connected_database(db: Any, key: tuple[str, str]) -> None:
-    """Complete the v5.5 Mongo migration gate, then require normal application indexes/schema."""
+    """Complete the v5.5 archive migration, then require normal indexes/schema."""
     await _ensure_prediction_lab_migration(db, key)
     indexes_ready = await _ensure_indexes_with_quota_bridge(db, key)
     if not indexes_ready:
@@ -178,6 +213,64 @@ async def _prepare_connected_database(db: Any, key: tuple[str, str]) -> None:
         # normal application indexes would hide a real storage release-gate failure.
         raise RuntimeError("MongoDB remains over storage quota after verified Prediction Lab migration")
     await _ensure_schema(db, key)
+
+
+async def _background_storage_maintenance(db: Any, key: tuple[str, str]) -> None:
+    """Retry migration/index/schema work without blocking live application startup."""
+    initial_delay = max(0.0, float(os.getenv("PLANE_STORAGE_MAINTENANCE_INITIAL_DELAY_S", "2") or "2"))
+    retry_delay = max(0.1, float(os.getenv("PLANE_STORAGE_MAINTENANCE_RETRY_S", "5") or "5"))
+    max_retry_delay = max(retry_delay, float(os.getenv("PLANE_STORAGE_MAINTENANCE_MAX_RETRY_S", "120") or "120"))
+    if initial_delay:
+        await asyncio.sleep(initial_delay)
+
+    attempt = 0
+    delay = retry_delay
+    while True:
+        attempt += 1
+        _maintenance_state.update({"state": "running", "attempt": attempt, "last_error": None})
+        try:
+            await _prepare_connected_database(db, key)
+            _maintenance_state.update(
+                {
+                    "state": "ready",
+                    "last_error": None,
+                    "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+            )
+            logger.info("Background storage maintenance ready after %d attempt(s)", attempt)
+            return
+        except asyncio.CancelledError:
+            _maintenance_state["state"] = "cancelled"
+            raise
+        except Exception as exc:
+            _maintenance_state.update({"state": "retrying", "last_error": type(exc).__name__})
+            logger.warning(
+                "Background storage maintenance attempt %d failed (%s); retrying in %.1fs",
+                attempt,
+                type(exc).__name__,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            delay = min(max_retry_delay, delay * 2.0)
+
+
+def _schedule_connected_database_maintenance(db: Any, key: tuple[str, str]) -> None:
+    global _maintenance_task
+    if _maintenance_task is not None and not _maintenance_task.done():
+        return
+    _maintenance_state.update({"state": "scheduled", "attempt": 0, "last_error": None, "completed_at": None})
+    _maintenance_task = asyncio.create_task(
+        _background_storage_maintenance(db, key),
+        name="plane-alerts-storage-maintenance-v553",
+    )
+    logger.info("Scheduled low-priority storage migration/index/schema maintenance in background")
+
+
+async def _prepare_or_schedule_connected_database(db: Any, key: tuple[str, str]) -> None:
+    if key[0] != "sqlite" and _background_maintenance_enabled():
+        _schedule_connected_database_maintenance(db, key)
+        return
+    await _prepare_connected_database(db, key)
 
 
 async def _connect_sqlite(*, ensure_indexes: bool) -> Any:
@@ -214,7 +307,7 @@ async def connect_db(
     key = _index_cache_key()
     if _client is not None and _db is not None:
         if ensure_indexes:
-            await _prepare_connected_database(_db, key)
+            await _prepare_or_schedule_connected_database(_db, key)
         return _db
 
     target = _mongo_target_label(settings.mongo_uri)
@@ -243,7 +336,7 @@ async def connect_db(
             storage_metrics.set_state("healthy")
             logger.info("MongoDB connection established – database: %s", settings.database_name)
             if ensure_indexes:
-                await _prepare_connected_database(_db, key)
+                await _prepare_or_schedule_connected_database(_db, key)
             return _db
         except Exception as exc:
             had_failure = True
@@ -283,7 +376,15 @@ async def ping_db(*, timeout_s: float = 1.0) -> bool:
 
 
 async def close_db() -> None:
-    global _client, _db, _indexes_ready_for, _schema_ready_for, _prediction_lab_migration_ready_for
+    global _client, _db, _indexes_ready_for, _schema_ready_for, _prediction_lab_migration_ready_for, _maintenance_task
+    if _maintenance_task is not None and not _maintenance_task.done():
+        _maintenance_task.cancel()
+        try:
+            await _maintenance_task
+        except asyncio.CancelledError:
+            pass
+    _maintenance_task = None
+    _maintenance_state.update({"state": "idle", "attempt": 0, "last_error": None, "completed_at": None})
     if _db is not None and bool(getattr(_db, "is_plane_alerts_sqlite", False)):
         await _db.close()
         _db = None

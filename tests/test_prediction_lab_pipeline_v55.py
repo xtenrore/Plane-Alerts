@@ -38,6 +38,17 @@ def test_sync_is_bounded_and_acknowledges_only_after_successful_push():
     assert "secrets.GITHUB_TOKEN" not in text
 
 
+def test_sync_refuses_partial_historical_archive_before_verified_manifest():
+    text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
+    assert "def archive_is_verified():" in text
+    assert "payload.get('verified') is True" in text
+    gate = "if archive_is_verified():"
+    collect = "collect_tree('/archive/mongo-import')"
+    assert gate in text and collect in text
+    assert text.index(gate) < text.index(collect)
+    assert "historical archive is not verified yet; skipping archive sync this run" in text
+
+
 def test_pipeline_collect_is_idempotent(tmp_path: Path):
     raw = tmp_path / "prediction_lab" / "raw" / "2026-09-24"; raw.mkdir(parents=True)
     event = {"schema": "plane-alerts-prediction-evidence-v1", "case_id": "case-abc", "event_id": "evt-abc"}
