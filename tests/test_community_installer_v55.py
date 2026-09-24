@@ -37,7 +37,7 @@ def test_v55_all_required_user_facing_installers_exist():
 def test_installer_self_test_and_stable_semver_parser():
     result = subprocess.run([sys.executable, str(SCRIPT), "--self-test"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert "AGY=excluded" in result.stdout
+    assert "COMMUNITY_INSTALLER_SELF_TEST=ok" in result.stdout
     installer = _installer()
     assert installer.semver("v5.5.1") == (5, 5, 1)
     with pytest.raises(ValueError):
@@ -76,26 +76,18 @@ def test_community_env_defaults_to_real_sqlite_and_keeps_receiver_location_separ
     assert "LOCAL_ADSB_RECEIVER_LONGITUDE=" in text
     assert "LOCAL_ADSB_RECEIVER_COVERAGE_KM=" in text
     assert "PREDICTION_LAB_ROOT=./.community/prediction_lab" in text
-    assert "AGY_WORKER_URL=" not in text
-    assert "AGY_WORKER_TOKEN=" not in text
 
 
-def test_community_runtime_and_installer_cannot_start_agy():
+def test_community_runtime_wraps_receiver_guard_without_deployment_specific_code():
     runtime = (ROOT / "app" / "community_main_v55.py").read_text(encoding="utf-8")
     installer = SCRIPT.read_text(encoding="utf-8")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert 'ModuleType("app.agy_console")' in runtime
-    assert "register_agy_console_handlers = lambda" in runtime
-    assert "Dockerfile.agy" not in installer
+    assert "install_local_receiver_coverage_guard()" in runtime
+    assert runtime.index("install_local_receiver_coverage_guard()") < runtime.index("from app.main import app")
     assert "railway" not in installer.casefold()
-    assert "from app.agy" not in installer
-    assert "import app.agy" not in installer
-    assert "agy_enabled\": False" in installer
     assert "app.main:app" in compose
     assert "DATABASE_BACKEND: mongodb" in compose
     assert "PREDICTION_LAB_ROOT: /data/prediction_lab" in compose
-    assert "AGY_WORKER_URL" not in compose
-    assert "AGY_WORKER_TOKEN" not in compose
 
 
 def test_updater_has_backup_validation_and_rollback_gates():
@@ -118,13 +110,12 @@ def test_windows_dependency_lock_excludes_uvloop_only_on_windows():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell syntax is gated on Linux CI; Windows CI gates the .bat entry points natively")
-def test_shell_entrypoints_parse_and_are_agy_free():
+def test_shell_entrypoints_parse_and_use_stable_release_install_semantics():
     for name in ("setup-linux.sh", "setup-linux-arm64.sh", "setup-raspberry-pi.sh"):
         path = ROOT / name
         result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
         assert result.returncode == 0, f"{name}: {result.stderr}"
         text = path.read_text(encoding="utf-8")
-        assert "AGY=excluded" in text
         assert "--branch main" not in text
         assert "refs/heads/main" not in text
 
