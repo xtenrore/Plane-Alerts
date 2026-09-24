@@ -30,7 +30,7 @@ def _config(**overrides: object) -> Settings:
 
 
 def test_v55_is_sequential_community_release() -> None:
-    assert VERSION == "5.5.1"
+    assert VERSION == "5.5.2"
 
 
 def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:
@@ -88,3 +88,14 @@ def test_community_runtime_is_not_used_by_railway_workflow() -> None:
     workflow = (ROOT / ".github" / "workflows" / "deploy-railway.yml").read_text(encoding="utf-8")
     assert "head_branch == 'main'" in workflow
     assert "community_main_v55" not in workflow
+
+
+def test_v552_railway_volume_selectors_precede_subcommands() -> None:
+    deploy = (ROOT / ".github" / "workflows" / "deploy-railway.yml").read_text(encoding="utf-8")
+    sync = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
+    bad = 'railway volume list --project'
+    assert bad not in deploy
+    assert bad not in sync
+    assert 'railway volume --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" list --json' in deploy
+    assert 'railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json' in sync
+    assert "'railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume" in sync

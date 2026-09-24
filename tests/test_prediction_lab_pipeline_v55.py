@@ -32,7 +32,9 @@ def test_sync_is_bounded_and_acknowledges_only_after_successful_push():
     assert "prediction-lab-data" in text
     assert 'MAX_FILES: "80"' in text and 'MAX_BYTES: "26214400"' in text
     assert "git pull --rebase" in text and "git push origin HEAD:prediction-lab-data" in text
-    assert text.index(".synced") > text.index("git push origin HEAD:prediction-lab-data")
+    acknowledgement = "new=old+'.synced'"
+    assert acknowledgement in text
+    assert text.index(acknowledgement) > text.index("git push origin HEAD:prediction-lab-data")
     assert "secrets.GITHUB_TOKEN" not in text
 
 
