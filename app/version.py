@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.5.1"
+VERSION = "5.5.2"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -28,6 +28,8 @@ VERSION = "5.5.1"
 # It moves Prediction Lab audit/shadow evidence from high-volume Mongo writes
 # to a bounded persistent file spool and Git data branch. It does not change
 # live physical prediction, qualification, cancellation or alert timing.
+# v5.5.2 fixes Railway CLI selector ordering in production deployment and
+# Prediction Lab volume synchronization after v5.5.1 exposed the CLI mismatch.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
