@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.5.2 — Railway Volume CLI Compatibility Patch
+
+- Corrected Railway CLI target-selector ordering in the production deployment workflow so the persistent `/data/prediction_lab` volume can be discovered or created before deployment.
+- Corrected the same selector ordering for Prediction Lab volume file list, download and acknowledgement/rename operations in the bounded Git sync workflow.
+- Added regression coverage for the current Railway `volume` command grammar exposed by the failed v5.5.1 production rollout.
+- No Prediction Lab evidence semantics or live physical prediction behavior changed; prediction version remains `5.3-3d-proximity-age-aware`.
+
 ## v5.5.1 — File-Backed Prediction Lab & Automated Evidence Pipeline
 
 - Moved high-volume Prediction Lab audit, shadow-evaluation and sentinel evidence from MongoDB to an atomic persistent file spool.
