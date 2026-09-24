@@ -1,52 +1,46 @@
-name: Publish tagged Plane Alerts release
+name: Publish community-stable Plane Alerts release
 
 on:
-  workflow_run:
-    workflows:
-      - tests
-    types:
-      - completed
+  workflow_dispatch:
+    inputs:
+      tested_sha:
+        description: Exact main commit that passed the weekly community validation matrix
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: plane-alerts-release-publish
+  group: plane-alerts-community-release-publish
   cancel-in-progress: false
 
 jobs:
   release:
-    if: >-
-      ${{ github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main' &&
-          github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      TESTED_SHA: ${{ inputs.tested_sha }}
     steps:
-      - name: Checkout exact tested main commit
+      - name: Checkout exact community-tested commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.tested_sha }}
           fetch-depth: 0
 
-      - name: Confirm tested commit is still main head
-        id: head
+      - name: Confirm community-tested commit belongs to main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          CURRENT_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')"
-          if [[ "${CURRENT_MAIN_SHA}" != "${TESTED_SHA}" ]]; then
-            echo "A newer main commit exists; its own successful test run will publish the release."
-            echo "publish=false" >> "${GITHUB_OUTPUT}"
-            exit 0
+          git fetch origin main --no-tags
+          git cat-file -e "${TESTED_SHA}^{commit}"
+          if ! git merge-base --is-ancestor "${TESTED_SHA}" origin/main; then
+            echo "Refusing community release: tested SHA is not part of main history." >&2
+            exit 1
           fi
-          echo "publish=true" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve canonical version and notes
-        if: steps.head.outputs.publish == 'true'
         id: release_meta
         run: |
           set -euo pipefail
@@ -66,7 +60,6 @@ jobs:
           echo "notes=${NOTES}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate guided installer assets
-        if: steps.head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           python scripts/community_installer_v55.py --self-test
@@ -87,19 +80,17 @@ jobs:
           )
 
       - name: Validate existing tag and release state
-        if: steps.head.outputs.publish == 'true'
         id: existing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release_meta.outputs.tag }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
           if git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
             TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
             if [[ "${TAG_SHA}" != "${TESTED_SHA}" ]]; then
-              echo "Refusing to move existing ${TAG}: ${TAG_SHA} != tested ${TESTED_SHA}" >&2
+              echo "Refusing to move existing ${TAG}: ${TAG_SHA} != community-tested ${TESTED_SHA}" >&2
               exit 1
             fi
             echo "tag_exists=true" >> "${GITHUB_OUTPUT}"
@@ -113,16 +104,13 @@ jobs:
             echo "release_exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Publish immutable GitHub release
-        if: >-
-          steps.head.outputs.publish == 'true' &&
-          steps.existing.outputs.release_exists != 'true'
+      - name: Publish immutable GitHub community release
+        if: steps.existing.outputs.release_exists != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release_meta.outputs.tag }}
           VERSION: ${{ steps.release_meta.outputs.version }}
           NOTES: ${{ steps.release_meta.outputs.notes }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
           TAG_EXISTS: ${{ steps.existing.outputs.tag_exists }}
         run: |
           set -euo pipefail
@@ -152,17 +140,15 @@ jobs:
           fi
 
       - name: Verify published tag and installer assets
-        if: steps.head.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release_meta.outputs.tag }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
           TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
           if [[ "${TAG_SHA}" != "${TESTED_SHA}" ]]; then
-            echo "Published tag does not point to the tested commit." >&2
+            echo "Published tag does not point to the community-tested commit." >&2
             exit 1
           fi
           release="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,targetCommitish,assets,url)"
@@ -170,4 +156,4 @@ jobs:
           [[ "$(jq -r '.isPrerelease' <<<"$release")" == "false" ]]
           count="$(jq '[.assets[] | select(.name == "setup.bat" or .name == "setup-windows.bat" or .name == "setup-windows-arm64.bat" or .name == "setup-linux.sh" or .name == "setup-linux-arm64.sh" or .name == "setup-raspberry-pi.sh" or .name == "SHA256SUMS.txt")] | length' <<<"$release")"
           [[ "$count" -eq 7 ]] || { echo "Expected 7 installer assets, found $count" >&2; exit 1; }
-          echo "Release verified: $(jq -r '.url' <<<"$release")"
+          echo "Community release verified: $(jq -r '.url' <<<"$release")"

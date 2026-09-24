@@ -1,24 +1,10 @@
 name: community-installer
 
 on:
-  push:
-    branches:
-      - main
-      - "release/**"
-      - "fix/community-installer/**"
-  pull_request:
-    paths:
-      - "setup*.bat"
-      - "setup*.sh"
-      - "scripts/community_installer_v55.py"
-      - "app/community_main_v55.py"
-      - "app/doctor_v55.py"
-      - "app/local_database_v55.py"
-      - "app/local_adsb_coverage_v55.py"
-      - ".env.example"
-      - "requirements*.txt"
-      - "tests/test_*v55.py"
-      - ".github/workflows/community-installer.yml"
+  # The long community/self-host matrix is owned by the dedicated ChatGPT
+  # Weekly Community Release scheduled task. It is intentionally manual here
+  # so ordinary Railway releases do not run ARM64/Raspberry Pi/installer gates.
+  workflow_dispatch:
 
 permissions:
   contents: read
