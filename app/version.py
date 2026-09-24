@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.4.3"
+VERSION = "5.5.0"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -23,7 +23,9 @@ VERSION = "5.4.3"
 # v5.4.2 fixes general-audit setup, storage, self-hosting, interaction,
 # enrichment and photography correctness issues.
 # v5.4.3 removes the retired external agent sidecar/runtime and Telegram command.
-# Physical prediction/qualification behavior remains unchanged.
+# v5.5 moves Prediction Lab audit/shadow evidence from high-volume Mongo writes
+# to a bounded persistent file spool and Git data branch. It does not change
+# live physical prediction, qualification, cancellation or alert timing.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
