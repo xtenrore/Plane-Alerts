@@ -1,11 +1,12 @@
 name: community-installer
 
 on:
-  push:
-    branches:
-      - main
-      - "release/**"
-      - "fix/community-installer/**"
+  # Community/self-host validation is intentionally separated from frequent
+  # Railway production releases. Run the long matrix weekly, manually, or
+  # when installer-related files change in a pull request.
+  schedule:
+    - cron: "30 2 * * 1"
+  workflow_dispatch:
   pull_request:
     paths:
       - "setup*.bat"
