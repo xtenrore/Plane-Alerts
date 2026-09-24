@@ -267,6 +267,7 @@ async def test_prediction_lab_marks_pass_scoreable_but_cancellation_unresolved(m
 
     monkeypatch.setattr(prediction_lab_audit, "append_evidence", _append)
     monkeypatch.setattr(prediction_lab_audit, "migration_verified", lambda: True)
+    monkeypatch.setattr(prediction_lab_audit, "observer_ref", lambda user_id: f"observer-test-{user_id}")
     aircraft = SimpleNamespace(icao24="abc123", callsign="TEST1", aircraft_type="A320")
     prediction = SimpleNamespace(
         projected_closest_km=4.0,
