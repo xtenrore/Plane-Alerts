@@ -129,7 +129,21 @@ jobs:
                       if path.endswith('.synced'): continue
                       chosen.append((path,size))
                       if len(chosen)>=max_files: break
-          collect_tree('/archive/mongo-import')
+          def archive_is_verified():
+              remote='/archive/mongo-import/manifest.json'
+              local=root/'__archive_manifest_probe.json'
+              try:
+                  subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  payload=json.loads(local.read_text(encoding='utf-8'))
+                  return payload.get('verified') is True
+              except (subprocess.CalledProcessError, OSError, json.JSONDecodeError):
+                  return False
+              finally:
+                  local.unlink(missing_ok=True)
+          if archive_is_verified():
+              collect_tree('/archive/mongo-import')
+          else:
+              print('historical archive is not verified yet; skipping archive sync this run')
           if len(chosen)<max_files: collect_tree('/raw')
           manifest=[]
           for remote,_ in chosen:
