@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, pass/no-pass, runway use, terminal state, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.4.3**  
+**Current code version: Plane Alerts v5.5.0**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -24,19 +24,25 @@ ADS-B ingestion
   -> Telegram delivery
 ```
 
-Non-critical persistence, photography enrichment, historical learning and shadow evaluation are isolated from the five-second monitoring path. A slow provider, database query or analytical write must not unnecessarily delay live aircraft evaluation.
+Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
 
-## v5.4.3
+## v5.5.0 — File-Backed Prediction Lab
 
-v5.4.3 removes the retired external agent sidecar integration from Plane Alerts. The dedicated Railway service and state volume are gone, the private Telegram command is removed, and the associated runtime modules, Docker/dependency files, helper scripts, environment settings and agent-only tests are no longer part of the project.
+v5.5.0 moves high-volume Prediction Lab audit, shadow-evaluation and sentinel evidence out of MongoDB and into a bounded persistent file spool. Railway uses `/data/prediction_lab`; Docker Compose uses the same path on a dedicated persistent volume.
 
-The useful v5.3 provider-age and stale-cancellation regressions remain under a neutral test name because they protect the production predictor rather than any external agent integration.
+Historical `prediction_lab_audit`, `prediction_shadow_evaluations` and `prediction_sentinel_routes` records are exported to verified NDJSON chunks with count and SHA-256 integrity checks before those legacy collections are retired. Normal application MongoDB data remains in place.
 
-This release does not intentionally alter trajectory, CPA, ETA, confidence, terminal inference, qualification, cancellation, alert timing or provider polling. The physical prediction version remains `5.3-3d-proximity-age-aware`.
+A dedicated `prediction-lab-data` Git branch receives bounded synchronized evidence batches. Runtime does not hold GitHub credentials or perform Git network work. Files are acknowledged only after a successful Git push, making failed/conflicting syncs resumable. Commits to the data branch cannot trigger production deployment.
+
+The repository provides durable case/event IDs and Collector, Investigator and Release checkpoints for external scheduled evidence processing. Missing ADS-B coverage remains inconclusive, and 30–60 minute `/next60` history predictions remain shadow-only.
+
+The fixed high-risk evaluation network covers Istanbul, London, Frankfurt, Paris, Amsterdam, Madrid, Rome and Vienna. Configured locations belonging to current delegated admins are also evaluated in memory using privacy-safe repository identifiers rather than admin identity or private observer coordinates.
+
+This release does not change physical prediction behavior. The prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## Prediction behavior
 
-Plane Alerts continuously recalculates aircraft motion from fresh observations and bounded history. The production stack preserves the established safety layers around the deterministic predictor, including:
+Plane Alerts continuously recalculates aircraft motion from fresh observations and bounded history. The production stack preserves the established deterministic safety layers, including:
 
 - current distance and horizontal CPA,
 - altitude-aware 3D relevance when altitude evidence is trustworthy,
@@ -57,15 +63,29 @@ The scale path does not create a second ADS-B feed layer or multiply provider re
 
 ## Storage resilience
 
-MongoDB remains the primary production persistence layer, but live monitoring does not synchronously depend on every analytical write.
+MongoDB remains application persistence for users, configuration and normal product state. Prediction Lab high-volume audit/evaluation telemetry is file-backed in v5.5.0.
 
 A verified last-known-good active configuration can continue to drive live monitoring during a temporary MongoDB outage. A cold process without verified configuration does not invent state. Encounter persistence uses bounded queues and delayed writes cannot silently overwrite newer lifecycle records.
 
 `/health` provides structured diagnostics. `/ready` is the rollout/readiness endpoint and requires a usable monitoring configuration, live worker and initialized Telegram runtime.
 
-## Prediction Lab and shadow evaluation
+## Prediction Lab and automated evidence pipeline
 
-Shadow candidates can be evaluated against later observed outcomes without selecting the live model. Observed in-radius passes can become scoreable ground truth; lifecycle cancellation alone and missing ADS-B coverage remain unresolved until separately supported by evidence.
+Repository structure:
+
+```text
+prediction_lab/raw/YYYY-MM-DD/
+prediction_lab/unchecked/YYYY-MM-DD/
+prediction_lab/reviewed/YYYY-MM-DD/
+prediction_lab/error_museum/
+prediction_lab/archive/mongo-import/
+prediction_lab/state/
+prediction_lab/schemas/
+```
+
+The Collector converts new raw events into durable unchecked cases. The Investigator/Fixer independently verifies evidence before producing reviewed cases, replay regressions or engineering branches. The Daily Release task independently validates candidate fixes before using sequential v5.5.x patch releases. Checkpoints advance only after their corresponding durable work succeeds.
+
+See [`docs/prediction-lab-pipeline.md`](docs/prediction-lab-pipeline.md) for the evidence/sync contract.
 
 Operator commands include:
 
@@ -76,6 +96,10 @@ planealerts shadow-eval
 ```
 
 Candidate promotion is never automatic.
+
+## Next 60 Minutes
+
+`/next60` prefers fresh live deterministic approach state. Historical shadow candidates are derived from bounded normal flight-route history rather than Prediction Lab MongoDB. The 30–60 minute horizon stays evaluation-only and history confidence cannot override live CPA.
 
 ## Photography and spotting guidance
 
@@ -119,54 +143,30 @@ docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
 
-Never commit `.env` or expose provider credentials in logs or issue reports.
+`mongo_data` and `prediction_lab_data` are persistent named volumes. Never commit `.env` or expose provider credentials in logs or issue reports.
 
 ## Configuration
 
-Important environment settings are documented in `.env.example`. Notable groups include:
-
-- Telegram/webhook configuration,
-- MongoDB,
-- public ADS-B providers and OpenSky credentials,
-- optional local ADS-B receiver,
-- optional photography/explanation providers,
-- monitoring cadence/radius,
-- shadow-evaluation feature flags,
-- admin authentication,
-- host/port/logging.
-
-Runtime AI credentials are optional and are not required for the deterministic alert path.
+Important environment settings are documented in `.env.example`. Runtime AI credentials are optional and are not required for the deterministic alert path. `PREDICTION_LAB_ROOT` defaults to `/data/prediction_lab` in production/container deployments and should point to persistent storage when overridden.
 
 ## Testing and release safety
 
-CI compiles the application, rebuilds/verifies airport data, runs the full pytest suite, replays Error Museum/provider/terminal/storage regressions, validates self-hosting configuration, builds amd64 and ARM64 images, and runs deterministic performance gates.
+CI compiles the application, rebuilds/verifies airport data, runs the full pytest suite, replays Error Museum/provider/terminal/storage regressions, validates Prediction Lab migration/sync/idempotency/cadence behavior, validates self-hosting configuration, builds amd64 and ARM64 images, and runs deterministic performance gates.
 
-The v5.4.3 removal regression explicitly verifies that the retired sidecar runtime files, Telegram command, bridge configuration and agent-specific CI references are absent.
-
-Useful local checks:
-
-```bash
-python -m compileall -q app vercel_runtime worker.py
-python scripts/build_airport_database.py
-python scripts/verify_airport_database.py
-pytest -q
-pytest -q tests/test_no_retired_agent_runtime_v543.py
-pytest -q tests/test_v53_prediction_regressions.py
-```
-
-Production deployment is gated on successful CI for the exact current `main` commit.
+Production deployment is gated on successful CI for the exact current `main` commit. Stable tags are immutable semantic `vX.Y.Z` releases.
 
 ## Documentation
 
 - [`CHANGELOG.md`](CHANGELOG.md) — release summary
 - [`docs/releases/`](docs/releases/) — version-specific release notes
 - [`docs/self-hosting.md`](docs/self-hosting.md) — installation, upgrade and rollback
+- [`docs/prediction-lab-pipeline.md`](docs/prediction-lab-pipeline.md) — v5.5 evidence pipeline
 - [`docs/V4_PREDICTION_LAB.md`](docs/V4_PREDICTION_LAB.md) — Prediction Lab background
 - [`docs/error_museum/`](docs/error_museum/) — reproducible prediction failures/regressions
 
 ## Security and privacy
 
-Do not expose Telegram tokens, MongoDB credentials, provider keys, admin passwords, webhook secrets or exact private observer coordinates. Admin APIs fail closed when `ADMIN_PASSWORD` is blank. Exact user coordinates are not included in normal operator diagnostics.
+Do not expose Telegram tokens, MongoDB credentials, provider keys, admin passwords, webhook secrets or exact private observer coordinates. Admin APIs fail closed when `ADMIN_PASSWORD` is blank. Prediction Lab repository evidence replaces direct user identifiers with local salted references and does not include private admin observer coordinates.
 
 ## License
 
