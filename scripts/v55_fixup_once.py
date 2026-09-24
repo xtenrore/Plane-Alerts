@@ -37,26 +37,13 @@ async def test_prediction_lab_marks_pass_scoreable_but_cancellation_unresolved(m
         confidence="High",
         altitude_relevance_applied=False,
     )
-
-    await prediction_lab_audit.record_prediction_outcome(
-        user_id=1,
-        aircraft=aircraft,
-        outcome="passed",
-        observed_closest_km=4.1,
-        final_prediction=prediction,
-    )
+    await prediction_lab_audit.record_prediction_outcome(user_id=1, aircraft=aircraft, outcome="passed", observed_closest_km=4.1, final_prediction=prediction)
     passed = next(doc for doc in written if doc.get("kind") == "outcome")
     assert passed["scoreable"] is True
     assert passed["outcome_basis"] == "observed_in_radius_pass"
 
     written.clear()
-    await prediction_lab_audit.record_prediction_outcome(
-        user_id=1,
-        aircraft=aircraft,
-        outcome="cancelled",
-        observed_closest_km=12.0,
-        final_prediction=prediction,
-    )
+    await prediction_lab_audit.record_prediction_outcome(user_id=1, aircraft=aircraft, outcome="cancelled", observed_closest_km=12.0, final_prediction=prediction)
     cancelled = next(doc for doc in written if doc.get("kind") == "outcome")
     assert cancelled["scoreable"] is False
     assert cancelled["outcome_basis"] == "lifecycle_transition_only"
@@ -83,10 +70,7 @@ if "from app.next60_outcomes_v55 import resolve_next60_outcomes\n" not in text:
     if import_anchor not in text:
         raise SystemExit("sentinel import anchor not found")
     text = text.replace(import_anchor, import_anchor + "from app.next60_outcomes_v55 import resolve_next60_outcomes\n")
-text = text.replace(
-    "last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0",
-    "last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0; last_next60_resolution = 0.0",
-)
+text = text.replace("last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0", "last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0; last_next60_resolution = 0.0")
 anchor = "        dynamic = await _refresh_admin_regions(started)\n"
 block = '''        if started - last_next60_resolution >= 60.0:
             try:
@@ -103,11 +87,4 @@ if "prediction_next60_outcome_resolution_failed" not in text:
     if anchor not in text:
         raise SystemExit("sentinel loop anchor not found")
     text = text.replace(anchor, block + anchor)
-p.write_text(text, encoding="utf-8")
-
-p = Path(".github/workflows/tests.yml")
-text = p.read_text(encoding="utf-8")
-old = "pytest -q tests/test_prediction_lab_files_v55.py tests/test_prediction_lab_pipeline_v55.py tests/test_next60_file_history_v55.py tests/test_prediction_lab_cadence_v55.py"
-if old in text and "tests/test_next60_outcomes_v55.py" not in text:
-    text = text.replace(old, old + " tests/test_next60_outcomes_v55.py")
 p.write_text(text, encoding="utf-8")
