@@ -1,0 +1,3 @@
+Plane Alerts Prediction Lab evidence branch.
+
+This branch stores continuously changing Prediction Lab evidence and durable task checkpoints. It is intentionally isolated from production deployment triggers.
