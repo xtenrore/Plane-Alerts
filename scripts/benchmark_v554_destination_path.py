@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import statistics
+import sys
 import time
 from types import SimpleNamespace
 
-from app.intelligence.destination_path_guard_v554 import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.intelligence.destination_path_guard_v554 import (  # noqa: E402
     CacheEntry,
     DestinationResolution,
     destination_resolver,
     evaluate_destination_path,
 )
-from app.intelligence import route_history as route_mod
+from app.intelligence import route_history as route_mod  # noqa: E402
 
 
 async def main() -> None:
