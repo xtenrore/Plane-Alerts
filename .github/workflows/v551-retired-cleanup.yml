@@ -1,0 +1,67 @@
+name: v551-retired-cleanup
+
+on:
+  push:
+    branches: ["release/v5.5.1"]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v5.5.1
+          fetch-depth: 0
+      - name: Remove retired compatibility references
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path("scripts/community_installer_v55.py")
+          text = p.read_text(encoding="utf-8")
+          text = text.replace(
+              '"""Plane Alerts v5.5 guided community self-hosting installer.\n\nThis installer is intentionally AGY-free. It never imports, starts, restarts,\nconfigures, authenticates or contacts the private AGY service.\n"""',
+              '"""Plane Alerts v5.5 guided community self-hosting installer."""',
+          )
+          text = text.replace('AGY_KEYS = {"AGY_WORKER_URL", "AGY_WORKER_TOKEN", "AGY_GOAL", "AGY_MODEL"}\n', '')
+          text = text.replace('upper in SECRET_KEYS or upper in AGY_KEYS or ', 'upper in SECRET_KEYS or ')
+          text = text.replace('    for key in AGY_KEYS:\n        updates[key] = ""\n\n', '')
+          text = text.replace('        "agy_enabled": False,\n', '')
+          text = text.replace(
+              '        "config": {key: redact_value(key, value) for key, value in values.items() if key not in AGY_KEYS},\n        "agy_included": False,\n',
+              '        "config": {key: redact_value(key, value) for key, value in values.items()},\n',
+          )
+          text = text.replace('    assert semver("v5.5.0") == (5, 5, 0)', '    assert semver("v5.5.1") == (5, 5, 1)')
+          text = text.replace('    assert not any(key.startswith("AGY_") for key in SECRET_KEYS)\n', '')
+          text = text.replace('    print("COMMUNITY_INSTALLER_SELF_TEST=ok AGY=excluded")', '    print("COMMUNITY_INSTALLER_SELF_TEST=ok")')
+          for banned in ("AGY_", "agy_enabled", "agy_included", "AGY-free"):
+              if banned in text:
+                  raise SystemExit(f"retired compatibility marker remains in installer: {banned}")
+          p.write_text(text, encoding="utf-8")
+
+          for name in (
+              "setup-linux.sh",
+              "setup-linux-arm64.sh",
+              "setup-raspberry-pi.sh",
+              "setup.bat",
+              "setup-windows.bat",
+              "setup-windows-arm64.bat",
+          ):
+              path = Path(name)
+              source = path.read_text(encoding="utf-8")
+              source = source.replace(" AGY=excluded", "").replace("AGY=excluded ", "")
+              path.write_text(source, encoding="utf-8")
+          PY
+      - name: Commit cleanup
+        run: |
+          git config user.name plane-alerts-release-bot
+          git config user.email actions@users.noreply.github.com
+          git add scripts/community_installer_v55.py setup*.bat setup*.sh
+          git diff --cached --check
+          git commit -m "Remove retired compatibility from guided installer"
+          git push origin HEAD:release/v5.5.1
