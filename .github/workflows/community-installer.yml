@@ -1,25 +1,10 @@
 name: community-installer
 
 on:
-  # Community/self-host validation is intentionally separated from frequent
-  # Railway production releases. Run the long matrix weekly, manually, or
-  # when installer-related files change in a pull request.
-  schedule:
-    - cron: "30 2 * * 1"
+  # The long community/self-host matrix is owned by the dedicated ChatGPT
+  # Weekly Community Release scheduled task. It is intentionally manual here
+  # so ordinary Railway releases do not run ARM64/Raspberry Pi/installer gates.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "setup*.bat"
-      - "setup*.sh"
-      - "scripts/community_installer_v55.py"
-      - "app/community_main_v55.py"
-      - "app/doctor_v55.py"
-      - "app/local_database_v55.py"
-      - "app/local_adsb_coverage_v55.py"
-      - ".env.example"
-      - "requirements*.txt"
-      - "tests/test_*v55.py"
-      - ".github/workflows/community-installer.yml"
 
 permissions:
   contents: read
