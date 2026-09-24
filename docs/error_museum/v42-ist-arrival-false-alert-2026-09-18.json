@@ -42,9 +42,9 @@
   },
   "v554_destination_path_expected_behavior": {
     "authority_model": "cached destination intent plus deterministic live destination/path geometry is the only live arrival authority; route history and runway inference are analytics/diagnostics only",
-    "THY2GN": "a new straight-line close-CPA candidate is held while non-blocking destination resolution completes; 5-10 seconds of temporary heading away from the airport is not enough to invalidate a plausible arrival destination",
+    "THY2GN": "a new straight-line close-CPA candidate is held while non-blocking destination resolution completes; if providers disagree, live terminal geometry may select IST only when it is the single physically strong nearby terminal destination and the competing destination is materially farther; 5-10 seconds of temporary heading away from the airport is not enough to invalidate a plausible arrival destination",
     "THY7ER": "a known IST destination can suppress the misleading initial straight-line CPA when the aircraft would reach the airport first or the projected observer CPA would move it materially away from IST, without using yesterday's route as a veto",
-    "provider_conflict_or_outage": "fail open to live deterministic trajectory after the bounded background lookup result is unavailable or conflicting",
+    "provider_conflict_or_outage": "genuinely ambiguous provider conflict and provider outage fail open to live deterministic trajectory after the bounded background lookup; provider brand priority alone never resolves a conflict",
     "physical_entry": "fresh physical presence inside the configured observer radius always overrides destination metadata",
     "diversion_or_go_around": "clear live divergence, including a climbing aircraft moving away from the filed airport, releases destination suppression"
   }
