@@ -24,7 +24,7 @@ ADS-B ingestion
   -> Telegram delivery
 ```
 
-Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider conflict or outage safely falls back to live trajectory behavior. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
+Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
 
@@ -36,7 +36,7 @@ ADSB.lol route data is used as the primary destination source and ADSBDB provide
 
 When a reliable destination is known, Plane Alerts compares the live aircraft position, destination airport, observer, speed, altitude/descent, predicted CPA and projected path. An arrival can be held when the destination airport or landing area is physically reached before the supposed observer pass, or when continuing to the observer CPA would move the aircraft materially away from its known destination. This fixes the class of false alert where an IST/LTFM or LTBA arrival points toward the observer for several seconds but must turn or land before reaching them.
 
-The guard fails open when providers are unavailable or conflict. Destination authority also releases when fresh live movement clearly diverges from the airport, including a go-around/diversion pattern. Fresh physical presence inside the configured observer radius always wins over destination metadata.
+The guard fails open when providers are unavailable or a disagreement remains physically ambiguous. A disagreement may be resolved only when live terminal geometry decisively supports one nearby airport over a materially farther alternative; provider brand priority alone is never enough. Destination authority also releases when fresh live movement clearly diverges from the airport, including a go-around/diversion pattern. Fresh physical presence inside the configured observer radius always wins over destination metadata.
 
 The underlying trajectory/3D prediction version remains `5.3-3d-proximity-age-aware`; v5.5.4 changes destination-aware alert qualification rather than the motion predictor itself.
 
@@ -171,7 +171,7 @@ Important environment settings are documented in `.env.example`. Runtime AI cred
 
 Railway production CI compiles the application, rebuilds/verifies airport reference data, runs the full pytest suite, replays Error Museum/provider/arrival/storage regressions, runs deterministic performance and cadence checks, and validates dependency consistency. Production deployment uses the exact successful current `main` commit.
 
-Community/self-host stable releases are separate. The weekly community validation path owns ARM64/Raspberry Pi, installer/platform matrices, updater/rollback checks and stable installer assets. The community release publisher requires the exact commit that passed that matrix and does not run automatically after an ordinary Railway deployment.
+Community/self-host stable releases are separate. The weekly community validation path owns ARM64/Raspberry Pi, installer/platform matrices, updater/rollback checks and stable installer assets. The long community matrix runs weekly or manually (and for relevant pull-request changes), not on every Railway `main` push. The community release publisher requires the exact commit that passed that matrix and does not run automatically after an ordinary Railway deployment.
 
 ## Documentation
 
