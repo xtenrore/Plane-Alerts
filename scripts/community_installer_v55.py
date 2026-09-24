@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Plane Alerts v5.5 guided community self-hosting installer.
-
-This installer is intentionally AGY-free. It never imports, starts, restarts,
-configures, authenticates or contacts the private AGY service.
-"""
+"""Plane Alerts v5.5 guided community self-hosting installer."""
 from __future__ import annotations
 
 import argparse
@@ -37,7 +33,6 @@ SECRET_KEYS = {
     "GROQ_KEY", "GROQ_KEY_2", "GROQ_API_KEY", "GOOGLE_CONTRAILS_API_KEY",
     "LOCAL_ADSB_AUTH_HEADER", "ADMIN_PASSWORD",
 }
-AGY_KEYS = {"AGY_WORKER_URL", "AGY_WORKER_TOKEN", "AGY_GOAL", "AGY_MODEL"}
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -107,7 +102,7 @@ def render_env(template: Path, updates: dict[str, str]) -> str:
 
 def redact_value(key: str, value: str) -> str:
     upper = key.upper()
-    if upper in SECRET_KEYS or upper in AGY_KEYS or any(token in upper for token in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "AUTHORIZATION")):
+    if upper in SECRET_KEYS or any(token in upper for token in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "AUTHORIZATION")):
         return "***"
     if upper in {"LOCAL_ADSB_RECEIVER_LATITUDE", "LOCAL_ADSB_RECEIVER_LONGITUDE"}:
         return "***"
@@ -322,9 +317,6 @@ def configure(root: Path, *, reconfigure: bool = False) -> dict[str, Any]:
     updates.setdefault("POLL_INTERVAL_SECONDS", current.get("POLL_INTERVAL_SECONDS", "5") or "5")
     updates.setdefault("PORT", current.get("PORT", "8000") or "8000")
     updates.setdefault("LOG_LEVEL", current.get("LOG_LEVEL", "INFO") or "INFO")
-    for key in AGY_KEYS:
-        updates[key] = ""
-
     rendered = render_env(root / ".env.example", {**current, **updates})
     env_path.write_text(rendered, encoding="utf-8")
     harden_env(env_path)
@@ -340,7 +332,6 @@ def configure(root: Path, *, reconfigure: bool = False) -> dict[str, Any]:
         "database_backend": updates["DATABASE_BACKEND"],
         "update_policy": "automatic" if policy_choice == 1 else "manual",
         "receiver_configured": bool(updates.get("LOCAL_ADSB_URL")),
-        "agy_enabled": False,
     }
     if metadata_path.exists():
         previous = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -525,8 +516,7 @@ def support_bundle(root: Path) -> Path:
     payload = {
         "generated_at": now_iso(), "repository": REPO, "commit": git_head(root), "tag": current_tag(root),
         "platform": platform.platform(), "architecture": platform.machine(),
-        "config": {key: redact_value(key, value) for key, value in values.items() if key not in AGY_KEYS},
-        "agy_included": False,
+        "config": {key: redact_value(key, value) for key, value in values.items()},
     }
     if metadata_path.exists():
         payload["installation"] = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -573,11 +563,10 @@ def menu(root: Path) -> None:
 
 
 def self_test() -> None:
-    assert semver("v5.5.0") == (5, 5, 0)
+    assert semver("v5.5.1") == (5, 5, 1)
     assert _parse_opensky("client:secret") == ("client", "secret")
     assert redact_value("TELEGRAM_BOT_TOKEN", "secret") == "***"
-    assert not any(key.startswith("AGY_") for key in SECRET_KEYS)
-    print("COMMUNITY_INSTALLER_SELF_TEST=ok AGY=excluded")
+    print("COMMUNITY_INSTALLER_SELF_TEST=ok")
 
 
 def main(argv: list[str] | None = None) -> int:

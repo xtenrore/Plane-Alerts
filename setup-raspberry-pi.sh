@@ -6,7 +6,7 @@ REPO_URL="https://github.com/xtenrore/Plane-Alerts.git"
 API_URL="https://api.github.com/repos/xtenrore/Plane-Alerts/releases/latest"
 
 if [[ "${1:-}" == "--self-test" ]]; then
-  echo "INSTALLER_SELF_TEST=ok platform=raspberry-pi-arm64 AGY=excluded"
+  echo "INSTALLER_SELF_TEST=ok platform=raspberry-pi-arm64"
   exit 0
 fi
 

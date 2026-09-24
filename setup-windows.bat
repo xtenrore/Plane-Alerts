@@ -8,7 +8,7 @@ set "REPO_URL=https://github.com/xtenrore/Plane-Alerts.git"
 set "API_URL=https://api.github.com/repos/xtenrore/Plane-Alerts/releases/latest"
 
 if /I "%~1"=="--self-test" (
-  echo INSTALLER_SELF_TEST=ok platform=windows-x64 AGY=excluded
+  echo INSTALLER_SELF_TEST=ok platform=windows-x64
   exit /b 0
 )
 

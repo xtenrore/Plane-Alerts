@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 if /I "%~1"=="--self-test" (
-  echo INSTALLER_SELF_TEST=ok platform=windows-auto AGY=excluded
+  echo INSTALLER_SELF_TEST=ok platform=windows-auto
   exit /b 0
 )
 
