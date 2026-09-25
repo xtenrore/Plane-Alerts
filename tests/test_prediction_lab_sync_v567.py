@@ -39,7 +39,7 @@ def test_v568_repository_acknowledged_removal_happens_only_after_successful_push
     commit_pos = text.index("- name: Commit and push evidence")
     push_pos = text.index("git push origin HEAD:prediction-lab-data", commit_pos)
     ack_pos = text.index("- name: Remove repository-acknowledged spool files")
-    delete_pos = text.index("'delete',old,'--json'", ack_pos)
+    delete_pos = text.index("'delete',old,'--yes','--json'", ack_pos)
     assert commit_pos < push_pos < ack_pos < delete_pos
     assert "steps.push.outputs.ok == 'true'" in text
     assert "new=old+'.synced'" not in text
