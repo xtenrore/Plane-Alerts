@@ -62,7 +62,7 @@ def test_pa_a07_compose_healthcheck_uses_readiness_endpoint():
 @pytest.mark.asyncio
 async def test_pa_a01_initial_setup_enables_only_after_successful_profile_save(monkeypatch):
     from app.bot import profile_handlers as legacy
-    import app.bot.profile_legacy  # installs the v5.4.2 runtime safety layer
+    import app.bot.profile_legacy
 
     events: list[str] = []
     config = _valid_profile_config()
@@ -254,7 +254,7 @@ async def test_pa_a10_cached_worker_path_queues_elevation_without_blocking(monke
 
 @pytest.mark.asyncio
 async def test_pa_a11_stale_preset_save_cannot_create_or_activate_profile(monkeypatch):
-    import app.bot.profile_legacy  # installs the preset-session wrapper
+    import app.bot.profile_legacy
     from app.bot import profile_experience_v54 as v54
 
     created = []
@@ -338,7 +338,7 @@ async def test_pa_a13_untargeted_photo_uses_canonical_filter(monkeypatch):
 
 
 def test_pa_a16_inherited_altitude_contradiction_is_rejected():
-    import app.bot.profile_legacy  # installs profile safety validation
+    import app.bot.profile_legacy
     from app.bot import profile_handlers as legacy
 
     config = _valid_profile_config()
@@ -358,6 +358,6 @@ def test_pa_a17_product_version_strings_are_canonical():
     from app.bot import profile_legacy
     from app.admin import v36_routes
 
-    assert VERSION == "5.6.5"
+    assert VERSION == "5.6.6"
     assert "v4.3" not in profile_legacy.cmd_help_profiled.__doc__ if profile_legacy.cmd_help_profiled.__doc__ else True
     assert v36_routes.VERSION == VERSION
