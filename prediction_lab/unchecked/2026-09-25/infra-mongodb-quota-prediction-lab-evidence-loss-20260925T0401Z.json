@@ -1,0 +1,21 @@
+{
+  "schema": "plane-alerts-prediction-lab-case-v1",
+  "case_id": "infra-mongodb-quota-prediction-lab-evidence-loss-20260925T0401Z",
+  "selected_at": "2026-09-25T04:03:36Z",
+  "category": ["infrastructure", "evidence-loss", "prediction-lab-pipeline"],
+  "source": "Railway production deploy logs",
+  "coverage_status": "inconclusive-for-aircraft-outcomes",
+  "prediction_version": "post-v5.5.4/v5.6 stream; exact deployed version not established by this evidence bundle",
+  "reason_selected": "Production is generating telemetry while MongoDB writes are blocked at the Atlas 512 MB quota. Prediction Lab Mongo migration fails and legacy prediction outcome recording reaches a blocked Mongo insert path, creating a material risk of missing Prediction Lab and route-history evidence.",
+  "evidence": [
+    {"timestamp":"2026-09-25T03:58:30.571547510Z","event":"mongodb_write_blocked","detail":"Atlas reports 512 MB of 512 MB used; writes blocked; code 8000 AtlasError."},
+    {"timestamp":"2026-09-25T03:58:40.367537647Z","event":"storage_v48_flush_failed","detail":"OperationFailure; retry_in_s=24.0."},
+    {"timestamp":"2026-09-25T04:01:20.720423247Z","event":"prediction_lab_mongo_migration_failed","detail":"Failure originates through app/prediction_lab_files_v55.py migrate_prediction_lab_mongo -> _export_collection while Mongo writes/storage are unhealthy."},
+    {"timestamp":"2026-09-25T04:02:28.556865255Z","event":"prediction_outcome_recording_failure_path","detail":"Trace reaches app/prediction_lab_audit.py record_prediction_outcome and _legacy_insert during the active Mongo quota failure."},
+    {"timestamp":"2026-09-25T04:03:31.396617874Z","event":"storage_v48_flush_failed","detail":"OperationFailure continues; retry_in_s=24.0."},
+    {"timestamp":"2026-09-25T04:03:36.024762802Z","event":"mongodb_write_blocked","detail":"Atlas quota failure remains active at end of sampled window."}
+  ],
+  "privacy": {"sentinel_admin_category":"infrastructure-global","admin_names_persisted":false,"precise_user_locations_persisted":false},
+  "classification": "unchecked",
+  "notes": "Do not score missing aircraft evidence during this interval as a prediction hit or miss. Collector checkpoint must not imply complete consumption of production evidence because the upstream persistence/sync path is degraded. No production code changed by collector."
+}
