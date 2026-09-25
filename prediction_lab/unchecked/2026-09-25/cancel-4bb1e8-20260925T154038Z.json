@@ -1,0 +1,26 @@
+{
+  "case_id": "cancel-4bb1e8-20260925T154038Z",
+  "event_id": "railway-approach_alert_cancelled-4bb1e8-20260925T154038Z",
+  "source": "railway_live_log_fallback",
+  "status": "unchecked",
+  "classification": "trajectory_changed_requalification_candidate",
+  "icao": "4bb1e8",
+  "callsign": "THY9NL",
+  "cancelled_at": "2026-09-25T15:40:38.821Z",
+  "stable_cpa_km": 0.4873702497357709,
+  "candidate_progression": [
+    {"at":"2026-09-25T15:40:24.712Z","cpa_km":14.76,"confirmation":"1/3","state":"Will not approach","route_veto":false},
+    {"at":"2026-09-25T15:40:28.217Z","cpa_km":14.23,"confirmation":"2/3","state":"Will not approach","route_veto":false},
+    {"at":"2026-09-25T15:40:38.821Z","cpa_km":14.13,"confirmation":"3/3","state":"cancelled","route_veto":false}
+  ],
+  "destination_resolution": {"state":"pending_at_initial_qualification","destination":null,"observed_at":"2026-09-25T15:40:02.831Z"},
+  "route_veto_progression": [
+    {"at":"2026-09-25T15:40:02.831Z","route_veto":true,"reason":"destination lookup pending in background; initial alert held without blocking"},
+    {"at":"2026-09-25T15:40:24.712Z","route_veto":false},
+    {"at":"2026-09-25T15:40:38.821Z","route_veto":false}
+  ],
+  "telegram_alert_preexisting": "not_determinable_from_scanned_logs",
+  "adsb_quality": {"summary":"repeated rejected observations before lifecycle; notable jump 3.98 km at age 43.7 s at 15:32:13; stale rejected samples reached 70.4 s at 15:34:22; freshness improved near cancellation but remained irregular"},
+  "subsequent_reality": "inconclusive_due_to_irregular_or_missing_adsb_coverage",
+  "notes": "High-priority candidate: initial qualification was destination-pending/route-vetoed, then cancellation confirmation proceeded with route_veto=false. Do not label as bug until replay/subsequent valid reality supports it. Same aircraft requalified again roughly 84 seconds later; separate lifecycle stored separately."
+}
