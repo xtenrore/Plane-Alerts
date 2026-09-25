@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.6.8**  
+**Current code version: Plane Alerts v5.6.9**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,16 @@ ADS-B ingestion
 Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.6.9 — Live Service Filesystem Prediction Lab Drain
+
+v5.6.9 fixes the remaining Railway transfer failure discovered by the first v5.6.8 bootstrap run. The volume attachment was resolvable, but the selected-volume SFTP target failed while listing `/raw` before any validation, repository push or deletion occurred.
+
+The synchronization workflow now uses Railway's supported `service files` interface against the exact live mount at `/data/prediction_lab`. It confirms the mount first, lists and downloads only evidence below that root, converts absolute service paths back to repository-relative paths only after enforcing the mount boundary, and exposes Railway's actual command output on failure instead of hiding it behind a generic process exception.
+
+Repository acknowledgement remains the destructive boundary: a remote object can be removed only after validation and a successful push to `prediction-lab-data`. The v5.6.8 bounded 500-object / 25 MiB transfer, confirmed non-interactive removal and serialized self-drain continuation remain in place. No route-history SQLite, notification-history SQLite, state, user/profile/location/settings or durable application data is selected for removal.
+
+No trajectory, CPA, ETA, confidence, destination/path qualification, cancellation or alert-timing behavior changes in v5.6.9. The physical prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.6.8 — Repository-Acknowledged Spool Drain
 
