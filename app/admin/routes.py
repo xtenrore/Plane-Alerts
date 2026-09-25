@@ -253,3 +253,10 @@ async def admin_system(_: None = Depends(_check_auth)) -> dict[str, Any]:
             "cooldown_minutes": settings.cooldown_minutes,
         },
     }
+
+
+# Mounted last so the sync bridge can reuse the exact same fail-closed HTTP Basic
+# dependency without duplicating admin authentication semantics.
+from app.admin.prediction_lab_sync_v5610 import router as prediction_lab_sync_router  # noqa: E402
+
+admin_router.include_router(prediction_lab_sync_router)

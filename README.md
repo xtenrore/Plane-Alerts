@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.6.9**  
+**Current code version: Plane Alerts v5.6.10**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,18 @@ ADS-B ingestion
 Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.6.10 — Authenticated Prediction Lab Spool Bridge
+
+v5.6.10 removes Railway SFTP from Prediction Lab evidence synchronization after production proved that project-token CI could reach the project but could not use Railway file transport without a user SSH key.
+
+The runtime now exposes a narrowly scoped admin-authenticated bridge that exports only validated `prediction_lab/raw` JSON/NDJSON evidence in bounded 500-file / 25 MiB ZIP batches created in ephemeral `/tmp` storage. Each manifest records the exact repository-relative path, byte count and SHA-256. GitHub independently revalidates the ZIP member set, path boundary, byte count, hash, schema and credential safety before committing the exact bytes to `prediction-lab-data`.
+
+Deletion remains strictly after repository acknowledgement: only after the Git push succeeds does GitHub POST the exact path + size + SHA-256 manifest back to the runtime. The bridge rechecks those bytes immediately before unlinking. Route-history SQLite, notification-history SQLite, state, user/profile/location/settings data and historical archive data are outside the bridge's selectable tree.
+
+The workflow uses the existing Railway project token only to read the already-configured `ADMIN_PASSWORD` and public service domain; no Railway SSH key or runtime GitHub credential is introduced. Merge-triggered sync also waits until the running bridge reports exactly `5.6.10`, avoiding a race with the previous Railway deployment.
+
+No trajectory, CPA, ETA, confidence, destination/path qualification, cancellation or alert-timing behavior changes in v5.6.10. The physical prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.6.9 — Live Service Filesystem Prediction Lab Drain
 

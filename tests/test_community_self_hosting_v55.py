@@ -30,7 +30,7 @@ def _config(**overrides: object) -> Settings:
 
 
 def test_runtime_uses_current_minor_release_version() -> None:
-    assert VERSION == "5.6.9"
+    assert VERSION == "5.6.10"
 
 
 def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:
@@ -90,13 +90,13 @@ def test_community_runtime_is_not_used_by_railway_workflow() -> None:
     assert "community_main_v55" not in workflow
 
 
-def test_v569_railway_volume_check_and_service_file_selectors_are_explicit() -> None:
+def test_v5610_prediction_sync_uses_existing_admin_http_bridge_not_sftp() -> None:
     deploy = (ROOT / ".github" / "workflows" / "deploy-railway.yml").read_text(encoding="utf-8")
     sync = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
-    bad = 'railway volume list --project'
-    assert bad not in deploy
-    assert bad not in sync
     assert 'railway volume --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" list --json' in deploy
-    assert 'railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json' in sync
-    assert "['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]" in sync
-    assert "PREDICTION_LAB_MOUNT: /data/prediction_lab" in sync
+    assert 'RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}' in sync
+    assert "railway variable list" in sync
+    assert "/admin/api/prediction-lab/sync-batch" in sync
+    assert "/admin/api/prediction-lab/sync-ack" in sync
+    assert "railway service files" not in sync
+    assert "ssh-keygen" not in sync
