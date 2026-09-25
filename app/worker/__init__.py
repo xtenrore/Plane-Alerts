@@ -47,6 +47,13 @@ if "pytest" not in sys.modules:
 
     install_route_observe_guard_v44()
 
+    # v5.6.1 permanently separates high-volume operational telemetry from Mongo.
+    # Route history and Prediction Lab evidence use the Plane Alerts persistent
+    # volume; Mongo remains for users, locations, profiles and durable settings.
+    from app.operational_volume_v561 import install_operational_volume_v561
+
+    install_operational_volume_v561()
+
     from app.intelligence.destination_path_guard_v554 import install_destination_path_guard
 
     install_destination_path_guard()
