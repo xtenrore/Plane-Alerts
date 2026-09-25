@@ -27,46 +27,47 @@ def test_prediction_data_branch_cannot_trigger_production_deploy():
     assert deploy["permissions"]["contents"] == "read"
 
 
-def test_sync_is_bounded_and_removes_only_after_successful_repository_push():
+def test_sync_is_bounded_and_acknowledges_only_after_successful_repository_push():
     text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
     assert "prediction-lab-data" in text
     assert 'MAX_FILES: "500"' in text and 'MAX_BYTES: "26214400"' in text
     assert 'cron: "*/5 * * * *"' in text
     assert "git pull --rebase" in text and "git push origin HEAD:prediction-lab-data" in text
-    removal = "cmd('delete',old,'--yes','--json')"
-    assert removal in text
-    assert text.index(removal) > text.index("git push origin HEAD:prediction-lab-data")
+    acknowledgement = "/admin/api/prediction-lab/sync-ack"
+    assert acknowledgement in text
+    assert text.index(acknowledgement) > text.index("git push origin HEAD:prediction-lab-data")
     assert "steps.push.outputs.ok == 'true'" in text
+    assert "acknowledgement count mismatch" in text
     assert "actions: write" in text
 
 
-def test_sync_uses_live_service_filesystem_and_exact_prediction_lab_mount():
+def test_sync_uses_authenticated_http_bridge_not_railway_sftp():
     text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
-    assert "PREDICTION_LAB_MOUNT: /data/prediction_lab" in text
-    assert "['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]" in text
-    assert "collect_tree(service_root + '/raw')" in text
-    assert "remote evidence escaped Prediction Lab mount" in text
-    assert "refusing to remove path outside evidence roots" in text
+    assert "/admin/api/prediction-lab/sync-status" in text
+    assert "/admin/api/prediction-lab/sync-batch" in text
+    assert "/admin/api/prediction-lab/sync-ack" in text
+    assert 'RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}' in text
+    assert "railway variable list" in text
+    assert "ssh-keygen" not in text
+    assert "railway service files" not in text
+    assert "railway volume" not in text
 
 
 def test_sync_self_drains_only_after_a_large_acknowledged_batch():
     text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
-    assert "continue_drain={\"true\" if count >= max(100, max_files // 2) else \"false\"}" in text
+    assert 'continue_drain={"true" if removed >= 250 else "false"}' in text
     condition = "steps.acknowledge.outputs.continue_drain == 'true'"
     dispatch = "actions/workflows/prediction-lab-sync.yml/dispatches"
     assert condition in text and dispatch in text
     assert text.index(dispatch) > text.index("acknowledged_and_removed")
 
 
-def test_sync_refuses_partial_historical_archive_before_verified_manifest():
-    text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
-    assert "def archive_is_verified():" in text
-    assert "payload.get('verified') is True" in text
-    gate = "if archive_is_verified():"
-    collect = "collect_tree(service_root + '/archive/mongo-import')"
-    assert gate in text and collect in text
-    assert text.index(gate) < text.index(collect)
-    assert "historical archive is not verified yet; skipping archive sync this run" in text
+def test_sync_bridge_is_deliberately_raw_only_for_incident_recovery():
+    workflow = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
+    bridge = (ROOT / "app" / "prediction_lab_sync_bridge_v5610.py").read_text(encoding="utf-8")
+    assert "not relative.startswith('raw/')" in workflow
+    assert "not rel.startswith(\"raw/\")" in bridge
+    assert "archive/mongo-import" not in bridge
 
 
 def test_pipeline_collect_is_idempotent(tmp_path: Path):
