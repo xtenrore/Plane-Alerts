@@ -2,7 +2,8 @@
 
 Telegram delivery is the foreground operation. Metrics, photo snapshots and
 other audit writes are explicitly secondary and run through one bounded FIFO
-worker so ordinary message edits cannot delay or inflate live alerts.
+worker so ordinary message edits cannot delay or inflate live alerts. From
+v5.6.3 notification history is persistent-volume only and never writes MongoDB.
 """
 from __future__ import annotations
 
@@ -13,7 +14,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config import settings
-from app.database import get_db
+from app.notification_volume_v563 import (
+    close as close_notification_volume,
+    ensure_ready as ensure_notification_volume,
+    notification_history_collection,
+    retention_deadline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +42,8 @@ def _logical_event_type(stage: str, input_message_id: int | None) -> str:
 
 
 async def _persist_event(payload: dict[str, Any]) -> None:
-    collection = get_db()["notification_history"]
+    await ensure_notification_volume()
+    collection = notification_history_collection()
     notification_id = str(payload["notification_id"])
     occurred_at = payload.get("occurred_at") or datetime.now(timezone.utc)
     delivered = bool(payload.get("delivered"))
@@ -113,6 +120,7 @@ async def _persist_event(payload: dict[str, Any]) -> None:
                 "last_event_at": occurred_at,
                 "last_delivery_success": delivered,
                 "last_message_id": output_message_id,
+                "expires_at": retention_deadline(occurred_at),
             },
             "$inc": increments,
             "$push": {"events": {"$each": [event], "$slice": -64}},
@@ -120,8 +128,8 @@ async def _persist_event(payload: dict[str, Any]) -> None:
         upsert=True,
     )
 
-    # ``notified_at`` is a legacy analysis field. From v4.4 onward it means the
-    # first successful logical alert only and is never refreshed by edits.
+    # ``notified_at`` is a legacy analysis field. It means the first successful
+    # logical alert only and is never refreshed by edits.
     if delivered and logical_type == "first_notification" and not has_first_delivery:
         await collection.update_one(
             {"_id": notification_id, "first_notified_at": {"$exists": False}},
@@ -198,7 +206,7 @@ def enqueue_notification_event(
     *,
     auxiliary: Callable[[], Awaitable[None]] | None = None,
 ) -> bool:
-    """Queue one delivery result without waiting for MongoDB/photo telemetry."""
+    """Queue one delivery result without waiting for operational storage."""
     event_payload = dict(payload)
     event_payload.setdefault("occurred_at", datetime.now(timezone.utc))
     return _enqueue(event_payload, auxiliary, label="notification_event")
@@ -226,3 +234,4 @@ async def close() -> None:
         _worker.cancel()
         await asyncio.gather(_worker, return_exceptions=True)
     _worker = None
+    await close_notification_volume()

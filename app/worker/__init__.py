@@ -54,12 +54,16 @@ if "pytest" not in sys.modules:
 
     install_operational_volume_v561()
 
-    # v5.6.2 makes the split permanent at startup: immediately retire the
-    # reconstructable legacy route collection and stop live sentinel loops from
-    # retrying historical Prediction Lab Mongo exports.
+    # v5.6.2 retires legacy Prediction Lab Mongo exporters/collections.
     from app.legacy_mongo_retirement_v562 import install_legacy_mongo_retirement_v562
 
     install_legacy_mongo_retirement_v562()
+
+    # v5.6.3 extends that boundary to notification lifecycle telemetry and blocks
+    # operational Mongo indexes/accessors from silently reappearing.
+    from app.operational_storage_policy_v563 import install_operational_storage_policy_v563
+
+    install_operational_storage_policy_v563()
 
     from app.intelligence.destination_path_guard_v554 import install_destination_path_guard
 
