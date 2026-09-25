@@ -18,79 +18,52 @@ if "pytest" not in sys.modules:
 
     _trajectory_core.predict_trajectory = _predict_trajectory_v53
 
-    # Keep the robust trajectory predictor but remove systematic full-step
-    # acceleration/turn integration bias.
     from app.intelligence.trajectory_hotfix_v43 import install_trajectory_hotfix_v43
-
     install_trajectory_hotfix_v43()
 
-    # Fresh direct physical presence inside the configured radius can recover an
-    # otherwise-uncertain close pass without weakening ordinary thresholds.
     from app.intelligence.direct_presence_guard_v44 import install_direct_presence_guard_v44
-
     install_direct_presence_guard_v44()
 
-    # v4.6 adds speed-dependent freshness, uncertainty and formal confidence
-    # evidence around the established CPA geometry.
     from app.intelligence.prediction_v46 import install_prediction_v46
-
     install_prediction_v46()
 
-    # Keep bounded route-history collection for Prediction Lab/analytics, but it
-    # is no longer an alert authority. The destination/path guard below is the
-    # only live arrival/destination qualification layer.
     from app.intelligence.route_intelligence_v46 import install_route_intelligence_v46
-
     install_route_intelligence_v46()
 
     from app.intelligence.route_observe_guard_v44 import install_route_observe_guard_v44
-
     install_route_observe_guard_v44()
 
-    # v5.6.1 permanently separates high-volume operational telemetry from Mongo.
-    # Route history and Prediction Lab evidence use the Plane Alerts persistent
-    # volume; Mongo remains for users, locations, profiles and durable settings.
+    # v5.6.1 permanently separates high-volume route/Prediction Lab telemetry
+    # from MongoDB.
     from app.operational_volume_v561 import install_operational_volume_v561
-
     install_operational_volume_v561()
 
     from app.intelligence.destination_path_guard_v554 import install_destination_path_guard
-
     install_destination_path_guard()
 
-    # Cap individual ADS-B provider latency and prevent stale observations from
-    # creating brand-new approach alerts.
     from app.worker.critical_timing import install_critical_timing_guards
-
     install_critical_timing_guards()
 
-    # v4.3 profile filtering runs before v4.2.3 batching so one state snapshot
-    # covers all custom-radius groups in a user evaluation.
     from app.worker.profile_filter_guard_v43 import install_profile_filter_guard_v43
-
     install_profile_filter_guard_v43()
 
-    # v4.2.3 bounds provider latency, batches state reads and moves provider
-    # learning out of the five-second path.
     from app.worker.cadence_guard_v423 import install_cadence_guard_v423
-
     install_cadence_guard_v423()
 
-    # v4.2.4 prevents ordinary scheduler jitter from creating ~10-second skips.
     from app.worker.cadence_due_guard_v424 import install_cadence_due_guard_v424
-
     install_cadence_due_guard_v424()
 
-    # v4.8 installs late so it can replace only remaining storage-facing hooks.
+    # v4.8 keeps live state in memory and coalesces persistence behind bounded
+    # queues. v5.6.2 keeps those queues and replaces their Mongo targets.
     from app.worker.storage_guard_v48 import install_storage_guard_v48
-
     install_storage_guard_v48()
 
-    # v5.6.2 owns all short-lived/high-churn operational state. Install after
-    # v4.8 so its bounded queues remain intact while their persistence target is
-    # swapped from Mongo to the Plane Alerts persistent volume.
-    from app.operational_state_patch_v562 import install_operational_state_v562
+    # Load photography orchestration before the v5.6.2 installer so retained
+    # alert/photo fallback cannot bind the old Mongo accessors because of import
+    # order. This import performs no network work or runtime calculation.
+    from app.photography import service as _photography_service  # noqa: F401
 
+    from app.operational_state_patch_v562 import install_operational_state_v562
     install_operational_state_v562()
 
     # app.main imports the Telegram modules before app.worker. Install the
@@ -98,5 +71,4 @@ if "pytest" not in sys.modules:
     # into standalone worker processes.
     if "app.bot.profile_handlers" in sys.modules:
         from app.bot.interaction_v46 import install_interaction_v46
-
         install_interaction_v46()
