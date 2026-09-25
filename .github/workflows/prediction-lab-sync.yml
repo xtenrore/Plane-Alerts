@@ -25,6 +25,7 @@ jobs:
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
+      PREDICTION_LAB_MOUNT: /data/prediction_lab
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       MAX_FILES: "500"
@@ -53,67 +54,76 @@ jobs:
           echo "RAILWAY_TOKEN=${RAILWAY_API_TOKEN}" >> "$GITHUB_ENV"
           echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
 
-      - name: Find Prediction Lab volume
+      - name: Confirm Prediction Lab volume attachment
         id: volume
         shell: bash
         run: |
           set -euo pipefail
           railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json > /tmp/volumes.json
-          VOLUME_ID="$(python - <<'PY'
-          import json
+          FOUND="$(python - <<'PY'
+          import json, os
           data=json.load(open('/tmp/volumes.json'))
-          matches=[]
+          wanted=os.environ['PREDICTION_LAB_MOUNT'].rstrip('/')
+          found=False
           def walk(value):
+              global found
               if isinstance(value, dict):
-                  text=' '.join(str(value.get(k,'')) for k in ('mountPath','mount_path','path'))
-                  if '/data/prediction_lab' in text:
-                      ident=value.get('id') or value.get('volumeId') or value.get('volume_id') or value.get('name')
-                      if ident: matches.append(str(ident))
+                  mount=str(value.get('mountPath') or value.get('mount_path') or '').rstrip('/')
+                  if mount == wanted:
+                      found=True
                   for child in value.values(): walk(child)
               elif isinstance(value, list):
                   for child in value: walk(child)
           walk(data)
-          print(matches[0] if matches else '')
+          print('true' if found else 'false')
           PY
           )"
-          if [[ -z "$VOLUME_ID" ]]; then
-            echo "Prediction Lab volume is not attached yet; nothing to sync."
+          if [[ "$FOUND" != "true" ]]; then
+            echo "Prediction Lab volume is not attached at $PREDICTION_LAB_MOUNT; refusing to sync."
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "available=true" >> "$GITHUB_OUTPUT"
-          echo "id=$VOLUME_ID" >> "$GITHUB_OUTPUT"
 
       - name: Download bounded evidence batch
         if: steps.volume.outputs.available == 'true'
         shell: bash
-        env:
-          VOLUME_ID: ${{ steps.volume.outputs.id }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/prediction-lab-incoming
           python - <<'PY'
           import concurrent.futures, json, os, pathlib, subprocess
 
-          volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
+          project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
+          service_root=os.environ['PREDICTION_LAB_MOUNT'].rstrip('/')
           max_files=int(os.environ['MAX_FILES']); max_bytes=int(os.environ['MAX_BYTES']); workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
           root=pathlib.Path('/tmp/prediction-lab-incoming')
           chosen=[]; estimated_bytes=0
 
+          # Railway's service-files target addresses the exact live service
+          # filesystem and therefore sees the mounted volume at its absolute
+          # mount path. This avoids the volume-target SFTP listing failure seen
+          # in production while preserving the same authenticated service instance.
           def cmd(*args):
-              return ['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,*args]
+              return ['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]
+
+          def run_json(*args):
+              try:
+                  raw=subprocess.check_output(cmd(*args), text=True, stderr=subprocess.STDOUT)
+                  return json.loads(raw)
+              except subprocess.CalledProcessError as exc:
+                  output=(exc.output or '').strip()
+                  raise SystemExit(f"Railway service-files command failed: {' '.join(args)}\n{output}") from exc
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f"Railway service-files command returned invalid JSON: {' '.join(args)}") from exc
 
           def list_dir(remote):
-              try:
-                  raw=subprocess.check_output(cmd('list',remote,'--json'), text=True, stderr=subprocess.STDOUT)
-                  data=json.loads(raw)
-              except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-                  raise SystemExit(f'volume listing failed for {remote}: {type(exc).__name__}') from exc
+              data=run_json('list',remote,'--json')
               files=data.get('files') if isinstance(data,dict) else None
               if not isinstance(files,list):
-                  raise SystemExit(f'malformed Railway volume listing for {remote}: missing files[]')
+                  raise SystemExit(f'malformed Railway service-files listing for {remote}: missing files[]')
               entries=[]
-              base=pathlib.PurePosixPath(remote if remote.startswith('/') else '/' + remote)
+              base=pathlib.PurePosixPath(remote)
               for value in files:
                   if not isinstance(value,dict):
                       continue
@@ -124,13 +134,10 @@ jobs:
                   size=value.get('size') or value.get('bytes') or 0
                   try: size=int(size or 0)
                   except (TypeError,ValueError): size=0
-                  # Railway may expose a mount-absolute `path`. File operations,
-                  # however, are rooted at the selected volume, so always rebuild
-                  # the child remote path from the directory we actually listed.
                   path=str(base / name)
                   is_dir=kind in {'dir','directory','folder'} or (not kind and '.' not in name and size == 0)
                   entries.append((path,is_dir,size))
-              print(f'volume listing remote={remote} entries={len(entries)}')
+              print(f'service-files listing remote={remote} entries={len(entries)}')
               return entries
 
           def collect_tree(start):
@@ -160,7 +167,7 @@ jobs:
                           return
 
           def archive_is_verified():
-              remote='/archive/mongo-import/manifest.json'
+              remote=service_root + '/archive/mongo-import/manifest.json'
               local=root/'__archive_manifest_probe.json'
               try:
                   subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -172,18 +179,30 @@ jobs:
                   local.unlink(missing_ok=True)
 
           if archive_is_verified():
-              collect_tree('/archive/mongo-import')
+              collect_tree(service_root + '/archive/mongo-import')
           else:
               print('historical archive is not verified yet; skipping archive sync this run')
           if len(chosen)<max_files and estimated_bytes<max_bytes:
-              collect_tree('/raw')
+              collect_tree(service_root + '/raw')
 
           print(f'bounded sync candidates files={len(chosen)} estimated_bytes={estimated_bytes}')
 
+          def repository_relative(remote):
+              prefix=service_root + '/'
+              if not remote.startswith(prefix):
+                  raise SystemExit(f'remote evidence escaped Prediction Lab mount: {remote}')
+              rel=remote[len(prefix):]
+              if not rel or rel.startswith('../'):
+                  raise SystemExit(f'invalid repository-relative evidence path: {remote}')
+              return rel
+
           def download(item):
               remote,_=item
-              rel=remote.lstrip('/'); local=root/rel; local.parent.mkdir(parents=True, exist_ok=True)
-              subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              rel=repository_relative(remote); local=root/rel; local.parent.mkdir(parents=True, exist_ok=True)
+              try:
+                  subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+              except subprocess.CalledProcessError as exc:
+                  raise RuntimeError(f'failed to download {remote}: {(exc.stderr or "").strip()}') from exc
               return remote,rel,local.stat().st_size
 
           downloaded=[]
@@ -264,19 +283,25 @@ jobs:
         if: steps.volume.outputs.available == 'true' && steps.push.outputs.ok == 'true'
         id: acknowledge
         shell: bash
-        env:
-          VOLUME_ID: ${{ steps.volume.outputs.id }}
         run: |
           set -euo pipefail
           python - <<'PY'
           import concurrent.futures, json, os, pathlib, subprocess
           accepted=json.load(open('/tmp/prediction-lab-accepted.json')) if pathlib.Path('/tmp/prediction-lab-accepted.json').exists() else []
-          volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
+          project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
+          service_root=os.environ['PREDICTION_LAB_MOUNT'].rstrip('/')
           workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
           max_files=int(os.environ['MAX_FILES'])
+          def cmd(*args):
+              return ['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]
           def remove_acknowledged(item):
               old=item['remote']
-              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'delete',old,'--yes','--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              if not old.startswith(service_root + '/raw/') and not old.startswith(service_root + '/archive/mongo-import/'):
+                  raise RuntimeError(f'refusing to remove path outside evidence roots: {old}')
+              try:
+                  subprocess.check_call(cmd('delete',old,'--yes','--json'), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+              except subprocess.CalledProcessError as exc:
+                  raise RuntimeError(f'failed to remove acknowledged evidence {old}: {(exc.stderr or "").strip()}') from exc
               return old
           with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
               futures=[pool.submit(remove_acknowledged,item) for item in accepted]
