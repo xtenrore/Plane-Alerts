@@ -18,7 +18,8 @@ from typing import Any
 from app.database import connect_db, get_db, system_status_col
 from app.intelligence.route_history import normalize_flight_key
 from app.next60_outcomes_v55 import resolve_next60_outcomes
-from app.prediction_lab_files_v55 import append_evidence, migrate_prediction_lab_mongo, migration_verified, observer_ref, prune_synced, spool_snapshot
+from app.prediction_lab_files_v55 import append_evidence, migrate_prediction_lab_mongo, migration_verified, observer_ref, spool_snapshot
+from app.volume_headroom_v565 import prune_acknowledged_evidence
 from app.worker import monitor
 from app.worker.geo import haversine
 
@@ -31,6 +32,7 @@ ROUTE_TTL_DAYS = 8
 MAX_POINTS_PER_ROUTE_DAY = 480
 MAX_POINTS_PER_POLL = 80
 ADMIN_REFRESH_S = 600.0
+VOLUME_HEADROOM_CHECK_S = 300.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,19 +193,36 @@ async def _ensure_migration() -> bool:
         return False
 
 
+async def _maintain_volume_headroom() -> None:
+    try:
+        result = await asyncio.to_thread(prune_acknowledged_evidence)
+        if result.get("removed_files"):
+            logger.warning(
+                "prediction_lab_spool_cleanup removed_files=%s removed_bytes=%s free_after=%s unsynced_untouched=true",
+                result.get("removed_files"),
+                result.get("removed_bytes"),
+                result.get("free_after"),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("prediction_lab_volume_headroom_check_failed")
+
+
 async def run_sentinel_network() -> None:
     region_cursor = 0; provider_cursor = 0
+    # Recover headroom immediately. This operation only removes evidence that
+    # has already been acknowledged by the repository sync workflow.
+    await _maintain_volume_headroom()
     await asyncio.sleep(12.0)
     migration_done = await _ensure_migration()
-    last_migration_attempt = time.monotonic(); last_spool_cleanup = 0.0; last_next60_resolution = 0.0
+    last_migration_attempt = time.monotonic(); last_spool_cleanup = time.monotonic(); last_next60_resolution = 0.0
     while True:
         started = time.monotonic()
         if not migration_done and started - last_migration_attempt >= 60.0:
             migration_done = await _ensure_migration(); last_migration_attempt = started
-        if started - last_spool_cleanup >= 3600.0:
-            removed = await asyncio.to_thread(prune_synced, older_than_hours=24.0, max_files=200)
-            if removed:
-                logger.info("prediction_lab_spool_cleanup removed=%d", removed)
+        if started - last_spool_cleanup >= VOLUME_HEADROOM_CHECK_S:
+            await _maintain_volume_headroom()
             last_spool_cleanup = started
         if started - last_next60_resolution >= 60.0:
             try:
