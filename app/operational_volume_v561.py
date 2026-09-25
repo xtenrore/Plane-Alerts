@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -25,7 +26,7 @@ from app.intelligence import route_history as route_mod
 from app.intelligence import route_intelligence_v46 as route_v46
 from app.intelligence import route_observe_guard_v44 as route_observe_guard
 from app.intelligence.trajectory import haversine_km
-from app import next60_outcomes_v55, prediction_lab_audit, sentinel_network
+from app import prediction_lab_files_v55 as lab_files
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ _db_lock = threading.Lock()
 _last_prune_mono = 0.0
 _last_failure_log_mono = 0.0
 _installed = False
-_original_sentinel_migration = sentinel_network._ensure_migration
+_migration_task: asyncio.Task | None = None
 
 
 def root_path() -> Path:
@@ -186,6 +187,10 @@ async def append_route_sample(
         captured_at=float(captured_at),
         aircraft_type=str(aircraft_type or ""),
     )
+    # Once the volume has accepted a live sample, retire the legacy Mongo route
+    # collection in a separate bounded background task. This never blocks the
+    # five-second monitor.
+    _schedule_route_migration()
 
 
 def _load_route_docs_sync(callsign: str, wanted: list[str], limit: int) -> list[dict[str, Any]]:
@@ -208,7 +213,11 @@ def _load_route_docs_sync(callsign: str, wanted: list[str], limit: int) -> list[
             points = json.loads(str(points_json or "[]"))
         except (ValueError, TypeError):
             points = []
-        docs.append({"utc_date": str(utc_date), "points": points if isinstance(points, list) else [], "aircraft_type": str(aircraft_type or "")})
+        docs.append({
+            "utc_date": str(utc_date),
+            "points": points if isinstance(points, list) else [],
+            "aircraft_type": str(aircraft_type or ""),
+        })
     return docs
 
 
@@ -399,7 +408,10 @@ async def historical_paths_volume(
     now: datetime | None = None,
 ) -> route_v46.RouteHistoryBundle:
     current = now or datetime.now(timezone.utc)
-    wanted = [(current.date() - timedelta(days=offset)).isoformat() for offset in range(1, ROUTE_LOOKBACK_DAYS + 1)]
+    wanted = [
+        (current.date() - timedelta(days=offset)).isoformat()
+        for offset in range(1, ROUTE_LOOKBACK_DAYS + 1)
+    ]
     try:
         docs = await load_route_docs(key, wanted, limit=ROUTE_MAX_PATHS)
     except asyncio.CancelledError:
@@ -428,28 +440,35 @@ async def _next60_route_from_volume(db: Any, callsign: str, utc_date: str) -> di
     return await load_route_doc(callsign, utc_date)
 
 
-async def _no_legacy_prediction_mongo_write(collection: str, doc: dict[str, Any]) -> None:
-    del collection, doc
-    return None
+def _operational_migration_verified() -> bool:
+    # New high-volume Prediction Lab writes are permanently file-backed. This
+    # compatibility hook exists only so older modules never write those records
+    # back to Mongo while the old collections are being exported/dropped.
+    return True
 
 
-async def _no_legacy_sentinel_mongo_write(region: Any, rows: list[Any], provider_name: str, now: float) -> int:
-    del region, rows, provider_name, now
-    return 0
+async def _route_migration_runner() -> None:
+    while True:
+        try:
+            state = await migrate_route_history_mongo(get_db())
+            if state.get("legacy_collection_dropped"):
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("route_history_volume_migration_failed error=%s", type(exc).__name__)
+        await asyncio.sleep(60.0)
 
 
-async def _ensure_volume_migrations() -> bool:
-    route_ok = False
+def _schedule_route_migration() -> None:
+    global _migration_task
+    if _migration_task is not None and not _migration_task.done():
+        return
     try:
-        route_state = await migrate_route_history_mongo(get_db())
-        route_ok = bool(route_state.get("legacy_collection_dropped"))
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning("route_history_volume_migration_failed error=%s", type(exc).__name__)
-
-    prediction_ok = await _original_sentinel_migration()
-    return bool(route_ok and prediction_ok)
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _migration_task = loop.create_task(_route_migration_runner(), name="route-history-mongo-retirement")
 
 
 def install_operational_volume_v561() -> None:
@@ -458,17 +477,33 @@ def install_operational_volume_v561() -> None:
     if _installed:
         return
 
+    # Route history: replace both the v4.6 implementation and the v4.4 worker's
+    # captured function so no live route read/write reaches MongoDB. The core
+    # functions themselves also use this volume backend; these assignments are
+    # a belt-and-suspenders guard for versioned wrapper composition.
     route_v46.observe_v46 = observe_route_volume
     route_v46.historical_paths_v46 = historical_paths_volume
     route_v2._ORIGINAL_OBSERVE = observe_route_volume
     route_observe_guard._BASE_OBSERVE = observe_route_volume
     route_mod.RouteHistoryService._historical_paths = historical_paths_volume
 
-    next60_outcomes_v55._route_for = _next60_route_from_volume
+    # High-volume Prediction Lab evidence has been file-backed since v5.5.
+    # Permanently report the compatibility migration as complete to writer-side
+    # checks so they can never fall back to Mongo. The migration routine itself
+    # remains available to export/drop old collections and reclaim Atlas space.
+    lab_files.migration_verified = _operational_migration_verified
 
-    prediction_lab_audit._legacy_insert = _no_legacy_prediction_mongo_write
-    sentinel_network._legacy_record_region = _no_legacy_sentinel_mongo_write
-    sentinel_network._ensure_migration = _ensure_volume_migrations
+    sentinel = sys.modules.get("app.sentinel_network")
+    if sentinel is not None:
+        setattr(sentinel, "migration_verified", _operational_migration_verified)
+
+    audit = sys.modules.get("app.prediction_lab_audit")
+    if audit is not None:
+        setattr(audit, "migration_verified", _operational_migration_verified)
+
+    next60 = sys.modules.get("app.next60_outcomes_v55")
+    if next60 is not None:
+        setattr(next60, "_route_for", _next60_route_from_volume)
 
     _installed = True
     logger.info(
