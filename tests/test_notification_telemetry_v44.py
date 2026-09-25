@@ -18,15 +18,6 @@ class FakeCollection:
         self.calls.append((query, update, upsert))
 
 
-class FakeDb:
-    def __init__(self, collection):
-        self.collection = collection
-
-    def __getitem__(self, name):
-        assert name == "notification_history"
-        return self.collection
-
-
 def _payload(**overrides):
     values = {
         "notification_id": "alert-1",
@@ -49,10 +40,18 @@ def _payload(**overrides):
     return values
 
 
+def _patch_collection(monkeypatch, collection):
+    async def ready():
+        return None
+
+    monkeypatch.setattr(telemetry, "ensure_notification_volume", ready)
+    monkeypatch.setattr(telemetry, "notification_history_collection", lambda: collection)
+
+
 @pytest.mark.asyncio
 async def test_first_notification_timestamp_is_written_once_after_delivery(monkeypatch):
     collection = FakeCollection()
-    monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(collection))
+    _patch_collection(monkeypatch, collection)
 
     await telemetry._persist_event(_payload())
 
@@ -63,6 +62,7 @@ async def test_first_notification_timestamp_is_written_once_after_delivery(monke
     assert event_update["$inc"]["event_counts.first_notification"] == 1
     assert "notified_at" not in event_update["$set"]
     assert event_update["$push"]["events"]["$slice"] == -64
+    assert event_update["$set"]["expires_at"] > _payload()["occurred_at"]
 
     first_query, first_update, first_upsert = collection.calls[1]
     assert first_upsert is False
@@ -76,7 +76,7 @@ async def test_first_notification_timestamp_is_written_once_after_delivery(monke
 async def test_message_edit_never_overwrites_first_notification_time(monkeypatch):
     first_at = datetime(2026, 9, 20, 8, 0, tzinfo=timezone.utc)
     collection = FakeCollection({"first_notified_at": first_at, "delivery_attempts": 1})
-    monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(collection))
+    _patch_collection(monkeypatch, collection)
 
     await telemetry._persist_event(
         _payload(
@@ -109,7 +109,7 @@ async def test_failed_first_delivery_then_success_is_typed_as_retry_but_counts_o
             "last_stage": "prepare",
         }
     )
-    monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(failed))
+    _patch_collection(monkeypatch, failed)
 
     await telemetry._persist_event(_payload())
 
@@ -134,7 +134,7 @@ async def test_failed_cancellation_update_then_success_is_typed_as_retry_not_new
             "last_stage": "cancelled",
         }
     )
-    monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(collection))
+    _patch_collection(monkeypatch, collection)
 
     await telemetry._persist_event(
         _payload(
@@ -161,7 +161,7 @@ async def test_failed_cancellation_update_then_success_is_typed_as_retry_not_new
 @pytest.mark.asyncio
 async def test_failed_delivery_is_recorded_without_creating_first_notification_time(monkeypatch):
     collection = FakeCollection()
-    monkeypatch.setattr(telemetry, "get_db", lambda: FakeDb(collection))
+    _patch_collection(monkeypatch, collection)
 
     await telemetry._persist_event(
         _payload(
@@ -195,3 +195,11 @@ def test_runtime_does_not_install_duplicate_route_or_notification_wrappers():
     assert "install_route_guard_v2()" not in worker_init
     assert "install_destination_path_guard()" in worker_init
     assert "install_route_observe_guard_v44()" in worker_init
+    assert "install_operational_storage_policy_v563()" in worker_init
+
+
+def test_notification_telemetry_source_has_no_mongo_runtime_writer():
+    source = Path("app/worker/notification_telemetry.py").read_text(encoding="utf-8")
+    assert 'get_db()["notification_history"]' not in source
+    assert "notification_history_collection()" in source
+    assert "expires_at" in source
