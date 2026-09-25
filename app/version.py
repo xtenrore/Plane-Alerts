@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.8"
+VERSION = "5.6.9"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -52,6 +52,11 @@ VERSION = "5.6.8"
 # successful evidence-branch push and chains bounded workflow-dispatch drain passes
 # while a saturated backlog remains. A main-workflow push trigger bootstraps the
 # first drain pass instead of relying solely on delayed GitHub schedule delivery.
+# v5.6.9 targets the live service filesystem for Prediction Lab synchronization,
+# because production proved the selected-volume SFTP target could resolve the
+# volume attachment yet fail listing /raw. Service-file operations address the
+# mounted /data/prediction_lab tree exactly as the running service sees it and
+# expose the underlying Railway CLI output when transfer operations fail.
 # No v5.6.x storage patch changes trajectory, CPA, ETA, qualification,
 # cancellation, destination-path logic or alert timing.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
