@@ -28,6 +28,7 @@ _db: SQLiteDatabase | None = None
 _ready = False
 _ready_lock: asyncio.Lock | None = None
 _retirement_task: asyncio.Task | None = None
+_retirement_complete = False
 
 
 def database_path() -> Path:
@@ -92,6 +93,16 @@ def _write_state(state: dict[str, Any]) -> None:
     _atomic_write(_state_path(), payload)
 
 
+def _state_is_retired(state: dict[str, Any]) -> bool:
+    return bool(
+        state.get("migration_verified")
+        and state.get("legacy_notification_collection_dropped")
+        and state.get("legacy_route_collection_dropped")
+        and state.get("mongo_runtime_writes_disabled")
+        and state.get("normal_application_data_untouched")
+    )
+
+
 async def _import_legacy_notifications(mongo_db: Any) -> tuple[int, int]:
     source = mongo_db[LEGACY_COLLECTION]
     source_count = int(await source.count_documents({}))
@@ -116,11 +127,20 @@ async def _import_legacy_notifications(mongo_db: Any) -> tuple[int, int]:
 
 async def retire_legacy_mongo() -> dict[str, Any]:
     """Migrate notification telemetry once, then retire only operational collections."""
+    global _retirement_complete
     await ensure_ready()
+
+    # The completion marker is on the persistent Plane Alerts volume. Once it
+    # proves both operational collections were retired, do not even acquire a
+    # Mongo handle on later notification events or process restarts.
+    previous = await asyncio.to_thread(_read_state)
+    if _state_is_retired(previous):
+        _retirement_complete = True
+        return previous
+
     from app.database import get_db
 
     mongo_db = get_db()
-    previous = await asyncio.to_thread(_read_state)
     source_count = int(previous.get("source_count", -1) or -1)
     imported = int(previous.get("imported", 0) or 0)
     migration_verified = bool(previous.get("migration_verified"))
@@ -152,6 +172,7 @@ async def retire_legacy_mongo() -> dict[str, Any]:
         "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     await asyncio.to_thread(_write_state, state)
+    _retirement_complete = True
     logger.info(
         "Operational Mongo telemetry retired collections=%s,%s imported_notifications=%d user_data_untouched=true",
         LEGACY_COLLECTION,
@@ -181,6 +202,8 @@ async def _retirement_runner() -> None:
 
 def schedule_legacy_retirement() -> None:
     global _retirement_task
+    if _retirement_complete:
+        return
     if _retirement_task is not None and not _retirement_task.done():
         return
     try:
@@ -231,11 +254,12 @@ async def delivery_counts_since(cutoff: datetime) -> dict[str, int]:
 
 
 async def close() -> None:
-    global _db, _ready, _retirement_task, _ready_lock
+    global _db, _ready, _retirement_task, _ready_lock, _retirement_complete
     if _retirement_task is not None and not _retirement_task.done():
         _retirement_task.cancel()
         await asyncio.gather(_retirement_task, return_exceptions=True)
     _retirement_task = None
+    _retirement_complete = False
     if _db is not None:
         await _db.close()
     _db = None
