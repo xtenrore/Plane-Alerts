@@ -94,10 +94,7 @@ def _write_state(state: dict[str, Any]) -> None:
 
 async def _import_legacy_notifications(mongo_db: Any) -> tuple[int, int]:
     source = mongo_db[LEGACY_COLLECTION]
-    try:
-        source_count = int(await source.count_documents({}))
-    except Exception:
-        source_count = -1
+    source_count = int(await source.count_documents({}))
 
     imported = 0
     cursor = source.find({})
@@ -130,7 +127,7 @@ async def retire_legacy_mongo() -> dict[str, Any]:
 
     if not migration_verified:
         source_count, imported = await _import_legacy_notifications(mongo_db)
-        migration_verified = source_count < 0 or imported == source_count
+        migration_verified = source_count >= 0 and imported == source_count
         if not migration_verified:
             raise RuntimeError(
                 f"notification telemetry migration count mismatch source={source_count} imported={imported}"
