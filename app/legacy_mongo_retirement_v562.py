@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from app.database import get_db
-from app.operational_volume_v561 import _schedule_route_migration
+from app import operational_volume_v561 as operational_volume
 from app import prediction_lab_files_v55 as lab_files
 
 logger = logging.getLogger(__name__)
 _installed = False
 _cleanup_task: asyncio.Task | None = None
 _cleanup_complete = False
+_route_schedule_started = False
 _RETIREMENT_STATE = "prediction_lab_legacy_retirement_v562.json"
 
 
@@ -125,9 +126,20 @@ def _schedule_prediction_cleanup() -> None:
     _cleanup_task = loop.create_task(_cleanup_runner(), name="prediction-lab-mongo-retirement")
 
 
+def _schedule_route_cleanup_once() -> None:
+    """Start the v5.6.1 route retirement runner once when an event loop exists."""
+    global _route_schedule_started
+    if _route_schedule_started:
+        return
+    operational_volume._schedule_route_migration()
+    task = operational_volume._migration_task
+    if task is not None:
+        _route_schedule_started = True
+
+
 def _volume_authoritative_and_schedule_retirement() -> bool:
     """Return the permanent file-backed state and schedule bounded cleanup."""
-    _schedule_route_migration()
+    _schedule_route_cleanup_once()
     _schedule_prediction_cleanup()
     return True
 
@@ -157,7 +169,7 @@ def install_legacy_mongo_retirement_v562() -> None:
 
     # Import-time scheduling is opportunistic. If no asyncio loop exists yet,
     # the compatibility verification hook retries from the live sentinel loop.
-    _schedule_route_migration()
+    _schedule_route_cleanup_once()
     _schedule_prediction_cleanup()
 
     # New operational evidence is permanently file-backed. Every compatibility
