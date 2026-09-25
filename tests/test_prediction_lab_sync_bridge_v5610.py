@@ -78,7 +78,7 @@ def test_bridge_ack_cannot_escape_raw_tree(tmp_path: Path, relative: str) -> Non
 
 def test_bridge_export_rejects_credential_like_payload(tmp_path: Path) -> None:
     raw = tmp_path / "raw" / "2026-09-25"; raw.mkdir(parents=True)
-    (raw / "bad.json").write_text(json.dumps({"schema": SCHEMA, "password": "secret"}) + "\n", encoding="utf-8")
+    (raw / "bad.json").write_text(json.dumps({"schema": SCHEMA, "note": "mongodb+srv://redacted-example"}) + "\n", encoding="utf-8")
     with pytest.raises(SyncBridgeError, match="credential-like"):
         build_batch_zip(root=tmp_path)
     clear_sync_guard()
