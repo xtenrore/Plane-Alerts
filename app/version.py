@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.9"
+VERSION = "5.6.10"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -54,9 +54,11 @@ VERSION = "5.6.9"
 # first drain pass instead of relying solely on delayed GitHub schedule delivery.
 # v5.6.9 targets the live service filesystem for Prediction Lab synchronization,
 # because production proved the selected-volume SFTP target could resolve the
-# volume attachment yet fail listing /raw. Service-file operations address the
-# mounted /data/prediction_lab tree exactly as the running service sees it and
-# expose the underlying Railway CLI output when transfer operations fail.
+# volume attachment yet fail listing /raw. Production then proved Railway file
+# transport itself requires an SSH key unavailable to project-token CI.
+# v5.6.10 replaces Railway SFTP with a bounded admin-authenticated HTTP bridge.
+# GitHub independently validates each raw evidence byte/hash/schema, pushes it to
+# prediction-lab-data, then acknowledges exact path+size+SHA before runtime unlink.
 # No v5.6.x storage patch changes trajectory, CPA, ETA, qualification,
 # cancellation, destination-path logic or alert timing.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
