@@ -33,7 +33,7 @@ def test_sync_is_bounded_and_removes_only_after_successful_repository_push():
     assert 'MAX_FILES: "500"' in text and 'MAX_BYTES: "26214400"' in text
     assert 'cron: "*/5 * * * *"' in text
     assert "git pull --rebase" in text and "git push origin HEAD:prediction-lab-data" in text
-    removal = "'delete',old,'--json'"
+    removal = "'delete',old,'--yes','--json'"
     assert removal in text
     assert text.index(removal) > text.index("git push origin HEAD:prediction-lab-data")
     assert "steps.push.outputs.ok == 'true'" in text
