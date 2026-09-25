@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -42,6 +42,10 @@ VERSION = "5.6.1"
 # Prediction Lab compatibility telemetry off MongoDB and onto the Plane Alerts
 # persistent volume. Mongo remains authoritative for users, locations, profiles
 # and durable configuration. Live prediction/qualification geometry is unchanged.
+# v5.6.2 extends that boundary to alert lifecycle restart state, notification
+# telemetry, photo snapshots, worker status and generic analytical persistence.
+# These short-lived/high-churn records are volume-only; durable user/config data
+# remains in MongoDB. Prediction/qualification/cancellation behavior is unchanged.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
