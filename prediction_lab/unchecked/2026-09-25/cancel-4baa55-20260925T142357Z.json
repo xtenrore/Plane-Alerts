@@ -1,0 +1,43 @@
+{
+  "schema": "plane-alerts-prediction-case-v1",
+  "case_id": "cancel-4baa55-20260925T142357Z",
+  "event_id": "railway-approach_alert_cancelled-4baa55-20260925T142357Z",
+  "status": "unchecked",
+  "source": "railway-live-log-fallback",
+  "observed_at": "2026-09-25T14:23:57.974Z",
+  "icao": "4baa55",
+  "callsign": "THY274",
+  "classification": "trajectory-change-cancellation-candidate",
+  "priority": "high",
+  "prediction": {
+    "stable_cpa_km": 3.4722642349847552,
+    "candidate_progression": [
+      {"at":"2026-09-25T14:23:24.037Z","cpa_km":23.78,"state":"Prediction uncertain","confirmation":"0/3","route_veto":false},
+      {"at":"2026-09-25T14:23:34.058Z","cpa_km":18.31,"state":"Will not approach","confirmation":"1/3","route_veto":false},
+      {"at":"2026-09-25T14:23:48.040Z","cpa_km":19.28,"state":"Will not approach","confirmation":"2/3","route_veto":false},
+      {"at":"2026-09-25T14:23:57.974Z","cpa_km":19.04,"state":"cancelled","confirmation":"3/3","route_veto":false}
+    ]
+  },
+  "destination": {
+    "initial_guard_at":"2026-09-25T14:03:27.275Z",
+    "initial_result":"lookup pending; initial alert held",
+    "resolved_at":"2026-09-25T14:03:29.768Z",
+    "destination":"SAW",
+    "authority":"single-provider",
+    "provider":"adsbdb",
+    "latency_ms":2362.6,
+    "provider_failures":["adsb.lol-single HTTP 500","adsb.lol HTTP 201 JSONDecodeError"],
+    "route_veto_at_cancellation":false
+  },
+  "adsb_quality": {
+    "rejected_samples_before_cancellation":[
+      {"at":"2026-09-25T14:23:12.096Z","jump_km":0.0,"sample_age_s":20.5},
+      {"at":"2026-09-25T14:23:17.121Z","jump_km":0.0,"sample_age_s":25.5},
+      {"at":"2026-09-25T14:23:27.096Z","jump_km":0.0,"sample_age_s":37.1}
+    ],
+    "coverage_assessment":"degraded"
+  },
+  "telegram_alert_existed":"not determinable from reconstructed interval",
+  "subsequent_reality":"inconclusive; degraded ADS-B observations and production evidence spool failures prevent reliable outcome scoring",
+  "notes":"Same ICAO has an earlier independent structured cancellation case at 08:48:55Z; this is a distinct later lifecycle. Destination was SAW, not IST. Preserve as a trajectory/requalification candidate, not a proven bug."
+}
