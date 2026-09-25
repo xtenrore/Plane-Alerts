@@ -1,0 +1,28 @@
+{
+  "schema": "plane-alerts-prediction-case-v1",
+  "case_id": "cancel-4ba9c1-20260925T070325Z",
+  "category": ["approach_alert_cancelled", "terminal_arrival", "destination_guard", "provider_freshness", "evidence_loss"],
+  "status": "unchecked",
+  "source": "Railway production logs fallback",
+  "prediction_version_context": "post-v5.5.4/v5.6 stream",
+  "aircraft": {"icao": "4ba9c1", "callsign": "THY2MH"},
+  "timeline": [
+    {"ts":"2026-09-25T07:01:04.171Z","event":"adsb_outlier_rejected","sample_age_s":43.2,"jump_km":0.0},
+    {"ts":"2026-09-25T07:01:14.172Z","event":"adsb_outlier_rejected","sample_age_s":53.2,"jump_km":0.0},
+    {"ts":"2026-09-25T07:02:39.420Z","event":"approach_route_veto","destination":"pending","reason":"destination lookup pending in background; initial alert held without blocking"},
+    {"ts":"2026-09-25T07:02:49.744Z","event":"approach_alert_held","stable_cpa_km":6.464042348020372,"candidate_cpa_km":9.22,"state":"Will not approach","confirmation":"0/3","route_veto":false},
+    {"ts":"2026-09-25T07:02:54.402Z","event":"approach_alert_held","stable_cpa_km":6.464042348020372,"candidate_cpa_km":10.93,"state":"Will not approach","confirmation":"0/3","route_veto":false},
+    {"ts":"2026-09-25T07:03:09.732Z","event":"approach_route_veto","destination":"IST","reason":"adsb.lol: observer CPA would move aircraft significantly away from known destination"},
+    {"ts":"2026-09-25T07:03:09.732Z","event":"approach_alert_held","stable_cpa_km":6.464042348020372,"candidate_cpa_km":20.40,"state":"Will not approach","confirmation":"1/3","route_veto":true},
+    {"ts":"2026-09-25T07:03:14.428Z","event":"approach_alert_held","stable_cpa_km":6.464042348020372,"candidate_cpa_km":20.04,"state":"Will not approach","confirmation":"2/3","route_veto":true},
+    {"ts":"2026-09-25T07:03:25.130Z","event":"approach_alert_cancelled","old_cpa_km":6.464042348020372,"new_cpa_km":19.76,"confirmations":3,"route_veto":true},
+    {"ts":"2026-09-25T07:03:25.168Z","event":"prediction_lab_file_write_failed","kind":"outcome"}
+  ],
+  "telegram_alert_existed": "not determinable from captured fallback lines",
+  "destination_resolution": {"initial":"pending","resolved":"IST","provider":"adsb.lol","resolved_before_cancellation":true},
+  "coverage_status": "degraded/inconclusive",
+  "coverage_notes": "Earlier accepted/rejected observation stream is incomplete; stale/outlier samples reached 53.2s. Do not score subsequent reality as hit/miss without valid coverage.",
+  "selection_reason": "Stable CPA was inside alert radius, destination lookup was pending, destination then resolved to IST with repeated route veto, and the alert cancelled after candidate CPA moved to ~20 km. This is a high-priority terminal-arrival guard timing/control case. It is not labelled a prediction bug pending replay and valid subsequent coverage.",
+  "evidence_pipeline": {"file_backed_write_failed":true,"outcome_write_failed_at_cancellation":true},
+  "privacy": "User/admin identifiers and observer coordinates intentionally omitted."
+}
