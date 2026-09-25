@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/prediction-lab-sync.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/prediction-lab-sync.yml"
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -26,7 +30,6 @@ jobs:
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
       PREDICTION_LAB_MOUNT: /data/prediction_lab
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       MAX_FILES: "500"
       MAX_BYTES: "26214400"
@@ -42,17 +45,18 @@ jobs:
       - name: Install Railway CLI
         run: npm install --global @railway/cli
 
-      - name: Resolve Railway authentication
+      - name: Require Railway workspace API authentication
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
           if [[ -z "${RAILWAY_API_TOKEN:-}" ]]; then
-            echo "::error::Missing Railway authentication secret."
+            echo "::error::Missing Railway workspace API token required for ephemeral SSH registration."
             exit 1
           fi
-          echo "RAILWAY_TOKEN=${RAILWAY_API_TOKEN}" >> "$GITHUB_ENV"
-          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
+            echo "::error::RAILWAY_TOKEN must remain unset; Railway SSH-key management rejects project-token mode."
+            exit 1
+          fi
 
       - name: Confirm Prediction Lab volume attachment
         id: volume
@@ -85,8 +89,44 @@ jobs:
           fi
           echo "available=true" >> "$GITHUB_OUTPUT"
 
-      - name: Download bounded evidence batch
+      - name: Register ephemeral Railway SSH key
+        id: ssh
         if: steps.volume.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          KEY_PATH="$HOME/.ssh/id_ed25519"
+          KEY_NAME="plane-alerts-sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -f "$KEY_PATH" "$KEY_PATH.pub"
+          ssh-keygen -q -t ed25519 -N "" -C "$KEY_NAME" -f "$KEY_PATH"
+          if ! railway ssh keys add --key "$KEY_PATH" --name "$KEY_NAME" > /tmp/railway-ssh-key-add.log 2>&1; then
+            cat /tmp/railway-ssh-key-add.log
+            echo "::error::Failed to register ephemeral Railway SSH key."
+            exit 1
+          fi
+          echo "name=$KEY_NAME" >> "$GITHUB_OUTPUT"
+          echo "registered=true" >> "$GITHUB_OUTPUT"
+          echo "Ephemeral Railway SSH key registered for this workflow run."
+
+      - name: Verify Railway SSH file transport
+        if: steps.ssh.outputs.registered == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          railway service files --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list "$PREDICTION_LAB_MOUNT/raw" --json > /tmp/prediction-lab-raw-list.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/prediction-lab-raw-list.json'))
+          files=data.get('files') if isinstance(data,dict) else None
+          if not isinstance(files,list):
+              raise SystemExit('Railway SSH file transport returned malformed raw listing')
+          print(f'Railway SSH file transport verified entries={len(files)}')
+          PY
+
+      - name: Download bounded evidence batch
+        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -100,10 +140,6 @@ jobs:
           root=pathlib.Path('/tmp/prediction-lab-incoming')
           chosen=[]; estimated_bytes=0
 
-          # Railway's service-files target addresses the exact live service
-          # filesystem and therefore sees the mounted volume at its absolute
-          # mount path. This avoids the volume-target SFTP listing failure seen
-          # in production while preserving the same authenticated service instance.
           def cmd(*args):
               return ['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]
 
@@ -225,7 +261,7 @@ jobs:
           PY
 
       - name: Validate and stage evidence
-        if: steps.volume.outputs.available == 'true'
+        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -261,7 +297,7 @@ jobs:
           git add prediction_lab/raw prediction_lab/archive/mongo-import 2>/dev/null || true
 
       - name: Commit and push evidence
-        if: steps.volume.outputs.available == 'true'
+        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true'
         id: push
         shell: bash
         run: |
@@ -280,7 +316,7 @@ jobs:
           echo "ok=true" >> "$GITHUB_OUTPUT"
 
       - name: Remove repository-acknowledged spool files
-        if: steps.volume.outputs.available == 'true' && steps.push.outputs.ok == 'true'
+        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true' && steps.push.outputs.ok == 'true'
         id: acknowledge
         shell: bash
         run: |
@@ -315,10 +351,27 @@ jobs:
           PY
 
       - name: Continue draining a saturated backlog
-        if: steps.acknowledge.outputs.continue_drain == 'true'
+        if: github.event_name != 'pull_request' && steps.acknowledge.outputs.continue_drain == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "Large acknowledged batch removed; dispatching the next bounded drain pass."
           gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/prediction-lab-sync.yml/dispatches" -f ref=main
+
+      - name: Remove ephemeral Railway SSH key
+        if: always() && steps.ssh.outputs.registered == 'true'
+        shell: bash
+        env:
+          RAILWAY_SSH_KEY_NAME: ${{ steps.ssh.outputs.name }}
+        run: |
+          set +e
+          railway ssh keys remove "$RAILWAY_SSH_KEY_NAME" > /tmp/railway-ssh-key-remove.log 2>&1
+          RC=$?
+          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
+          if [[ $RC -ne 0 ]]; then
+            cat /tmp/railway-ssh-key-remove.log
+            echo "::error::Failed to remove ephemeral Railway SSH key $RAILWAY_SSH_KEY_NAME."
+            exit $RC
+          fi
+          echo "Ephemeral Railway SSH key removed."
