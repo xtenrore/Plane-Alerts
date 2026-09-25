@@ -6,6 +6,7 @@ volume. MongoDB remains for durable user/configuration/application state.
 from __future__ import annotations
 
 import logging
+import sys
 
 from app import database
 from app import legacy_mongo_retirement_v562 as legacy_retirement
@@ -83,14 +84,12 @@ def install_operational_storage_policy_v563() -> None:
     legacy_retirement._volume_authoritative_and_schedule_retirement = _volume_authoritative_with_notification_retirement
     lab_files.migration_verified = _volume_authoritative_with_notification_retirement
 
-    # sentinel_network is already imported by app.main before worker bootstrap.
-    # Replace its compatibility check as well so the live event loop schedules
-    # notification-history retirement even before the first Telegram delivery.
-    try:
-        from app import sentinel_network
-        sentinel_network.migration_verified = _volume_authoritative_with_notification_retirement
-    except Exception:
-        logger.debug("sentinel storage-policy binding deferred", exc_info=True)
+    # Never import sentinel_network from worker bootstrap: doing so can re-enter
+    # app.worker.monitor before the critical predictor wrappers finish installing.
+    # app.main loads the sentinel first, so bind only when it already exists.
+    sentinel = sys.modules.get("app.sentinel_network")
+    if sentinel is not None:
+        setattr(sentinel, "migration_verified", _volume_authoritative_with_notification_retirement)
 
     notification_volume.schedule_legacy_retirement()
     _installed = True
