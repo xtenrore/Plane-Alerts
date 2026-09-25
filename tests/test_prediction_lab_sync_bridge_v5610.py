@@ -76,12 +76,47 @@ def test_bridge_ack_cannot_escape_raw_tree(tmp_path: Path, relative: str) -> Non
         acknowledge([{"relative": relative, "bytes": 1, "sha256": "0" * 64}], root=tmp_path)
 
 
-def test_bridge_export_rejects_credential_like_payload(tmp_path: Path) -> None:
+def test_bridge_skips_credential_like_object_and_exports_valid_evidence_behind_it(tmp_path: Path) -> None:
     raw = tmp_path / "raw" / "2026-09-25"; raw.mkdir(parents=True)
-    (raw / "bad.json").write_text(json.dumps({"schema": SCHEMA, "note": "mongodb+srv://redacted-example"}) + "\n", encoding="utf-8")
-    with pytest.raises(SyncBridgeError, match="credential-like"):
+    bad = raw / "a-bad.json"
+    bad.write_text(json.dumps({"schema": SCHEMA, "note": "mongodb+srv://redacted-example"}) + "\n", encoding="utf-8")
+    good = raw / "b-good.json"; good.write_bytes(_event("good"))
+    archive, manifest = build_batch_zip(root=tmp_path)
+    try:
+        assert manifest["total_files"] == 1
+        assert manifest["files"][0]["relative"].endswith("b-good.json")
+        assert manifest["rejected_files"] == 1
+        assert manifest["rejected_by_reason"] == {"credential_like": 1}
+        assert bad.exists()
+        assert good.exists()
+    finally:
+        archive.unlink(missing_ok=True)
+        clear_sync_guard()
+
+
+def test_bridge_reports_sanitized_reason_when_bounded_scan_has_no_exportable_evidence(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "2026-09-25"; raw.mkdir(parents=True)
+    bad = raw / "bad.json"
+    bad.write_text(json.dumps({"schema": SCHEMA, "note": "mongodb+srv://redacted-example"}) + "\n", encoding="utf-8")
+    with pytest.raises(SyncBridgeError, match=r"rejected=credential_like:1"):
         build_batch_zip(root=tmp_path)
+    assert bad.exists()
     clear_sync_guard()
+
+
+def test_bridge_skips_legacy_schema_and_continues_with_valid_evidence(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "2026-09-25"; raw.mkdir(parents=True)
+    legacy = raw / "a-legacy.json"
+    legacy.write_text(json.dumps({"schema": "legacy-schema", "event_id": "old"}) + "\n", encoding="utf-8")
+    good = raw / "b-good.json"; good.write_bytes(_event("good"))
+    archive, manifest = build_batch_zip(root=tmp_path)
+    try:
+        assert manifest["total_files"] == 1
+        assert manifest["rejected_by_reason"] == {"schema": 1}
+        assert legacy.exists()
+    finally:
+        archive.unlink(missing_ok=True)
+        clear_sync_guard()
 
 
 def test_bridge_validates_ndjson_rows(tmp_path: Path) -> None:
@@ -100,7 +135,7 @@ def test_bridge_validates_ndjson_rows(tmp_path: Path) -> None:
 def test_bridge_status_reports_version_and_disk_headroom(tmp_path: Path) -> None:
     (tmp_path / "raw").mkdir()
     result = status(root=tmp_path)
-    assert result["bridge_version"] == "5.6.10"
+    assert result["bridge_version"] == "5.6.11"
     assert result["raw_exists"] is True
     assert result["total_bytes"] > 0
     assert result["free_bytes"] >= 0
