@@ -29,8 +29,20 @@ def test_v562_installer_starts_route_retirement_and_disables_legacy_migrator(mon
     retirement.install_legacy_mongo_retirement_v562()
 
     assert scheduled == [True]
+    assert prediction_lab_files_v55.migration_verified is retirement._volume_authoritative_and_schedule_retirement
+    assert sentinel_network.migration_verified is retirement._volume_authoritative_and_schedule_retirement
     assert prediction_lab_files_v55.migrate_prediction_lab_mongo is retirement._retired_prediction_lab_migration
     assert sentinel_network.migrate_prediction_lab_mongo is retirement._retired_prediction_lab_migration
+
+
+def test_authoritative_check_schedules_route_retirement(monkeypatch):
+    from app import legacy_mongo_retirement_v562 as retirement
+
+    scheduled: list[bool] = []
+    monkeypatch.setattr(retirement, "_schedule_route_migration", lambda: scheduled.append(True))
+
+    assert retirement._volume_authoritative_and_schedule_retirement() is True
+    assert scheduled == [True]
 
 
 @pytest.mark.asyncio
