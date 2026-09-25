@@ -19,7 +19,7 @@ from app.database import connect_db, get_db, system_status_col
 from app.intelligence.route_history import normalize_flight_key
 from app.next60_outcomes_v55 import resolve_next60_outcomes
 from app.prediction_lab_files_v55 import append_evidence, migrate_prediction_lab_mongo, migration_verified, observer_ref, spool_snapshot
-from app.volume_headroom_v565 import prune_acknowledged_evidence
+from app.volume_headroom_v565 import prune_acknowledged_evidence, recover_critical_headroom
 from app.worker import monitor
 from app.worker.geo import haversine
 
@@ -193,6 +193,22 @@ async def _ensure_migration() -> bool:
         return False
 
 
+async def _recover_volume_startup() -> None:
+    try:
+        result = await asyncio.to_thread(recover_critical_headroom)
+        logger.warning(
+            "prediction_lab_startup_volume_recovery archive_cleanup=%s synced_cleanup=%s free_before=%s free_after=%s",
+            result.get("archive_cleanup"),
+            result.get("synced_cleanup"),
+            result.get("before", {}).get("disk", {}).get("free"),
+            result.get("after", {}).get("disk", {}).get("free"),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("prediction_lab_startup_volume_recovery_failed")
+
+
 async def _maintain_volume_headroom() -> None:
     try:
         result = await asyncio.to_thread(prune_acknowledged_evidence)
@@ -211,9 +227,11 @@ async def _maintain_volume_headroom() -> None:
 
 async def run_sentinel_network() -> None:
     region_cursor = 0; provider_cursor = 0
-    # Recover headroom immediately. This operation only removes evidence that
-    # has already been acknowledged by the repository sync workflow.
-    await _maintain_volume_headroom()
+    # Emergency v5.6.6 recovery runs before the initial delay. It may remove
+    # only a locally unverified historical operational-Mongo export plus normal
+    # repository-acknowledged evidence. Raw unsynced evidence and runtime SQLite
+    # stores are never candidates.
+    await _recover_volume_startup()
     await asyncio.sleep(12.0)
     migration_done = await _ensure_migration()
     last_migration_attempt = time.monotonic(); last_spool_cleanup = time.monotonic(); last_next60_resolution = 0.0
