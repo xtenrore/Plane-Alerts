@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.6.10**  
+**Current code version: Plane Alerts v5.6.11**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,16 @@ ADS-B ingestion
 Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.6.11 — Resilient Prediction Lab Spool Drain
+
+v5.6.11 fixes the production 409 discovered by the first live v5.6.10 HTTP-bridge drain attempt. One malformed, legacy, sensitive or otherwise non-exportable raw object can no longer block valid evidence behind it. Rejected objects remain untouched on the Railway volume; the bridge continues scanning within a bounded 5,000-object window and exports only valid evidence.
+
+Each batch still contains at most 500 files / 25 MiB, and GitHub still independently verifies every member path, byte count, SHA-256, JSON/NDJSON schema and credential-safety rule before pushing exact bytes to `prediction-lab-data`. Runtime deletion remains impossible until that repository push succeeds and the exact path + size + SHA-256 acknowledgement is posted back. Rejected objects are reported only as sanitized reason counts such as schema, invalid JSON, credential-like, read/stat error or oversized; their content is never surfaced through workflow diagnostics.
+
+The workflow now also exposes a sanitized bridge error detail if a future batch cannot produce any exportable evidence, so another HTTP 409 cannot hide the concrete rejection class. Route-history SQLite, notification-history SQLite, state, user/profile/location/settings data and historical archive data remain outside the bridge's selectable raw tree.
+
+No trajectory, CPA, ETA, confidence, destination/path qualification, cancellation or alert-timing behavior changes in v5.6.11. The physical prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.6.10 — Authenticated Prediction Lab Spool Bridge
 
@@ -96,7 +106,7 @@ v5.5.2 corrects Railway CLI target-selector ordering in the production deploymen
 
 ## v5.5.1 — File-Backed Prediction Lab
 
-v5.5.1 moves high-volume Prediction Lab audit, shadow-evaluation and sentinel evidence out of MongoDB and into a bounded persistent file spool. Railway uses `/data/prediction_lab`; Docker Compose uses the same path on a dedicated persistent volume.
+v5.5.1 moves high-volume Prediction Lab audit/shadow-evaluation and sentinel evidence out of MongoDB and into a bounded persistent file spool. Railway uses `/data/prediction_lab`; Docker Compose uses the same path on a dedicated persistent volume.
 
 Historical `prediction_lab_audit`, `prediction_shadow_evaluations` and `prediction_sentinel_routes` records are exported to verified NDJSON chunks with count and SHA-256 integrity checks before those legacy collections are retired. Normal application MongoDB data remains in place.
 
