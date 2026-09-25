@@ -18,13 +18,24 @@ def test_v567_sync_runs_frequently_with_bounded_higher_throughput() -> None:
     assert 'TRANSFER_WORKERS: "12"' in text
 
 
-def test_v567_sync_rebuilds_volume_relative_paths_from_listed_directory_and_name() -> None:
+def test_v569_sync_targets_live_service_filesystem_at_exact_mount() -> None:
+    text = _text()
+    assert "PREDICTION_LAB_MOUNT: /data/prediction_lab" in text
+    assert "['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]" in text
+    assert "collect_tree(service_root + '/raw')" in text
+    assert "collect_tree(service_root + '/archive/mongo-import')" in text
+    assert "remote.startswith(prefix)" in text
+    assert "remote evidence escaped Prediction Lab mount" in text
+    assert "Railway service-files command failed" in text
+
+
+def test_v569_sync_rebuilds_absolute_service_paths_from_listed_directory_and_name() -> None:
     text = _text()
     assert "files=data.get('files')" in text
     assert "path=str(base / name)" in text
     assert "value.get('remotePath')" not in text
     assert "path=value.get('path')" not in text
-    assert "malformed Railway volume listing" in text
+    assert "malformed Railway service-files listing" in text
 
 
 def test_v567_sync_validates_bundled_raw_evidence() -> None:
@@ -34,14 +45,16 @@ def test_v567_sync_validates_bundled_raw_evidence() -> None:
     assert "json.loads(line)" in text
 
 
-def test_v568_repository_acknowledged_removal_happens_only_after_successful_push() -> None:
+def test_v569_repository_acknowledged_removal_happens_only_after_successful_push() -> None:
     text = _text()
     commit_pos = text.index("- name: Commit and push evidence")
     push_pos = text.index("git push origin HEAD:prediction-lab-data", commit_pos)
     ack_pos = text.index("- name: Remove repository-acknowledged spool files")
-    delete_pos = text.index("'delete',old,'--yes','--json'", ack_pos)
+    delete_pos = text.index("cmd('delete',old,'--yes','--json')", ack_pos)
     assert commit_pos < push_pos < ack_pos < delete_pos
     assert "steps.push.outputs.ok == 'true'" in text
+    assert "old.startswith(service_root + '/raw/')" in text
+    assert "old.startswith(service_root + '/archive/mongo-import/')" in text
     assert "new=old+'.synced'" not in text
 
 
