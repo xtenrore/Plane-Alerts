@@ -1,0 +1,21 @@
+{
+  "case_id": "cancel-4baa8a-20260925T125257Z",
+  "event_id": "approach_alert_cancelled:4baa8a:2026-09-25T12:52:57.742Z",
+  "kind": "approach_alert_cancelled",
+  "status": "unchecked",
+  "priority": "highest",
+  "source": "railway_production_logs_fallback",
+  "aircraft": {"icao": "4baa8a", "callsign": "THY9GQ", "known_destination": "IST"},
+  "prior_terminal_guard": {"active": true, "prior_cancel_at": "2026-09-25T12:50:58.013Z", "prior_cancel_route_veto": true},
+  "timeline": [
+    {"at": "2026-09-25T12:52:27.126Z", "event": "approach_alert_held", "stable_cpa_km": 2.3810208980057035, "candidate_cpa_km": 23.67, "state": "Prediction uncertain", "confirmation": "0/3", "route_veto": false},
+    {"at": "2026-09-25T12:52:37.612Z", "event": "approach_alert_held", "stable_cpa_km": 2.3810208980057035, "candidate_cpa_km": 18.28, "state": "Will not approach", "confirmation": "1/3", "route_veto": false},
+    {"at": "2026-09-25T12:52:47.293Z", "event": "approach_alert_held", "stable_cpa_km": 2.3810208980057035, "candidate_cpa_km": 19.93, "state": "Will not approach", "confirmation": "2/3", "route_veto": false},
+    {"at": "2026-09-25T12:52:57.742Z", "event": "approach_alert_cancelled", "old_cpa_km": 2.3810208980057035, "new_cpa_km": 19.32, "confirmations": 3, "route_veto": false}
+  ],
+  "adsb_quality": {"notable_rejections": [{"at": "2026-09-25T12:52:31.840Z", "jump_km": 0.0, "sample_age_s": 36.1}, {"at": "2026-09-25T12:58:46.856Z", "jump_km": 0.0, "sample_age_s": 46.6}]},
+  "telegram_alert_existed": "not determinable from filtered evidence",
+  "classification": "candidate terminal-veto state loss / requalification oscillation; not yet a proven bug",
+  "subsequent_reality": "inconclusive",
+  "notes": "Known IST destination had route_veto=true through cancellation 120 seconds earlier, then same aircraft requalified with route_veto=false. Replay must separate state loss from provider/freshness effects."
+}
