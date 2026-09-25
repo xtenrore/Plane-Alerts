@@ -5,10 +5,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/prediction-lab-sync.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/prediction-lab-sync.yml"
+      - "app/prediction_lab_sync_bridge_v5610.py"
+      - "app/admin/prediction_lab_sync_v5610.py"
+      - "app/admin/routes.py"
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -24,16 +23,15 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
-      PREDICTION_LAB_MOUNT: /data/prediction_lab
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       MAX_FILES: "500"
       MAX_BYTES: "26214400"
-      TRANSFER_WORKERS: "12"
+      REQUIRED_BRIDGE_VERSION: "5.6.10"
     steps:
       - name: Checkout evidence branch
         uses: actions/checkout@v4
@@ -45,265 +43,180 @@ jobs:
       - name: Install Railway CLI
         run: npm install --global @railway/cli
 
-      - name: Require Railway workspace API authentication
+      - name: Load existing admin credential without printing it
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${RAILWAY_API_TOKEN:-}" ]]; then
-            echo "::error::Missing Railway workspace API token required for ephemeral SSH registration."
+          if [[ -z "${RAILWAY_TOKEN:-}" ]]; then
+            echo "::error::Missing Railway project token."
             exit 1
           fi
-          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
-            echo "::error::RAILWAY_TOKEN must remain unset; Railway SSH-key management rejects project-token mode."
-            exit 1
-          fi
-
-      - name: Confirm Prediction Lab volume attachment
-        id: volume
-        shell: bash
-        run: |
-          set -euo pipefail
-          railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json > /tmp/volumes.json
-          FOUND="$(python - <<'PY'
-          import json, os
-          data=json.load(open('/tmp/volumes.json'))
-          wanted=os.environ['PREDICTION_LAB_MOUNT'].rstrip('/')
-          found=False
-          def walk(value):
-              global found
-              if isinstance(value, dict):
-                  mount=str(value.get('mountPath') or value.get('mount_path') or '').rstrip('/')
-                  if mount == wanted:
-                      found=True
-                  for child in value.values(): walk(child)
-              elif isinstance(value, list):
-                  for child in value: walk(child)
-          walk(data)
-          print('true' if found else 'false')
-          PY
-          )"
-          if [[ "$FOUND" != "true" ]]; then
-            echo "Prediction Lab volume is not attached at $PREDICTION_LAB_MOUNT; refusing to sync."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "available=true" >> "$GITHUB_OUTPUT"
-
-      - name: Register ephemeral Railway SSH key
-        id: ssh
-        if: steps.volume.outputs.available == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir -p "$HOME/.ssh"
-          KEY_PATH="$HOME/.ssh/id_ed25519"
-          KEY_NAME="plane-alerts-sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          rm -f "$KEY_PATH" "$KEY_PATH.pub"
-          ssh-keygen -q -t ed25519 -N "" -C "$KEY_NAME" -f "$KEY_PATH"
-          if ! railway ssh keys add --key "$KEY_PATH" --name "$KEY_NAME" > /tmp/railway-ssh-key-add.log 2>&1; then
-            cat /tmp/railway-ssh-key-add.log
-            echo "::error::Failed to register ephemeral Railway SSH key."
-            exit 1
-          fi
-          echo "name=$KEY_NAME" >> "$GITHUB_OUTPUT"
-          echo "registered=true" >> "$GITHUB_OUTPUT"
-          echo "Ephemeral Railway SSH key registered for this workflow run."
-
-      - name: Verify Railway SSH file transport
-        if: steps.ssh.outputs.registered == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          railway service files --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list "$PREDICTION_LAB_MOUNT/raw" --json > /tmp/prediction-lab-raw-list.json
+          railway variable list --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" --json > /tmp/plane-alerts-variables.json
           python - <<'PY'
+          import json, pathlib
+          data=json.load(open('/tmp/plane-alerts-variables.json'))
+          password=data.get('ADMIN_PASSWORD') if isinstance(data,dict) else None
+          domain=data.get('RAILWAY_PUBLIC_DOMAIN') if isinstance(data,dict) else None
+          if not isinstance(password,str) or not password.strip():
+              raise SystemExit('ADMIN_PASSWORD is missing or unreadable; refusing unauthenticated sync')
+          if '\n' in password or '\r' in password:
+              raise SystemExit('ADMIN_PASSWORD contains unsupported newline characters')
+          if not isinstance(domain,str) or not domain.strip():
+              raise SystemExit('RAILWAY_PUBLIC_DOMAIN is missing; cannot reach production sync bridge')
+          pathlib.Path('/tmp/plane-alerts-admin-password').write_text(password,encoding='utf-8')
+          pathlib.Path('/tmp/plane-alerts-service-url').write_text('https://' + domain.strip().rstrip('/'),encoding='utf-8')
+          PY
+          chmod 600 /tmp/plane-alerts-admin-password /tmp/plane-alerts-service-url
+          ADMIN_PASSWORD="$(cat /tmp/plane-alerts-admin-password)"
+          echo "::add-mask::$ADMIN_PASSWORD"
+
+      - name: Wait for exact deployed sync bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADMIN_PASSWORD="$(cat /tmp/plane-alerts-admin-password)"
+          SERVICE_URL="$(cat /tmp/plane-alerts-service-url)"
+          READY=false
+          for attempt in $(seq 1 72); do
+            if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+              --user "plane-alerts-sync:${ADMIN_PASSWORD}" \
+              "$SERVICE_URL/admin/api/prediction-lab/sync-status" \
+              --output /tmp/prediction-lab-sync-status.json; then
+              FOUND_VERSION="$(python - <<'PY'
           import json
-          data=json.load(open('/tmp/prediction-lab-raw-list.json'))
-          files=data.get('files') if isinstance(data,dict) else None
-          if not isinstance(files,list):
-              raise SystemExit('Railway SSH file transport returned malformed raw listing')
-          print(f'Railway SSH file transport verified entries={len(files)}')
-          PY
-
-      - name: Download bounded evidence batch
-        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/prediction-lab-incoming
-          python - <<'PY'
-          import concurrent.futures, json, os, pathlib, subprocess
-
-          project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
-          service_root=os.environ['PREDICTION_LAB_MOUNT'].rstrip('/')
-          max_files=int(os.environ['MAX_FILES']); max_bytes=int(os.environ['MAX_BYTES']); workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
-          root=pathlib.Path('/tmp/prediction-lab-incoming')
-          chosen=[]; estimated_bytes=0
-
-          def cmd(*args):
-              return ['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]
-
-          def run_json(*args):
-              try:
-                  raw=subprocess.check_output(cmd(*args), text=True, stderr=subprocess.STDOUT)
-                  return json.loads(raw)
-              except subprocess.CalledProcessError as exc:
-                  output=(exc.output or '').strip()
-                  raise SystemExit(f"Railway service-files command failed: {' '.join(args)}\n{output}") from exc
-              except json.JSONDecodeError as exc:
-                  raise SystemExit(f"Railway service-files command returned invalid JSON: {' '.join(args)}") from exc
-
-          def list_dir(remote):
-              data=run_json('list',remote,'--json')
-              files=data.get('files') if isinstance(data,dict) else None
-              if not isinstance(files,list):
-                  raise SystemExit(f'malformed Railway service-files listing for {remote}: missing files[]')
-              entries=[]
-              base=pathlib.PurePosixPath(remote)
-              for value in files:
-                  if not isinstance(value,dict):
-                      continue
-                  name=str(value.get('name') or '').strip()
-                  if not name or name in {'.','..'}:
-                      continue
-                  kind=str(value.get('type') or value.get('kind') or '').strip().lower()
-                  size=value.get('size') or value.get('bytes') or 0
-                  try: size=int(size or 0)
-                  except (TypeError,ValueError): size=0
-                  path=str(base / name)
-                  is_dir=kind in {'dir','directory','folder'} or (not kind and '.' not in name and size == 0)
-                  entries.append((path,is_dir,size))
-              print(f'service-files listing remote={remote} entries={len(entries)}')
-              return entries
-
-          def collect_tree(start):
-              global estimated_bytes
-              stack=[start]; visited=set()
-              while stack and len(chosen)<max_files:
-                  current=stack.pop(0)
-                  if current in visited:
-                      continue
-                  visited.add(current)
-                  for path,is_dir,size in sorted(list_dir(current)):
-                      name=pathlib.PurePosixPath(path).name
-                      if is_dir:
-                          stack.append(path.rstrip('/'))
-                          continue
-                      if name.startswith('.') or path.endswith('.synced'):
-                          continue
-                      if not (path.endswith('.json') or path.endswith('.ndjson')):
-                          continue
-                      if chosen and size > 0 and estimated_bytes + size > max_bytes:
-                          return
-                      if size > max_bytes:
-                          raise SystemExit(f'single evidence file exceeds bounded sync size: {path} ({size})')
-                      chosen.append((path,size))
-                      estimated_bytes += max(0,size)
-                      if len(chosen)>=max_files:
-                          return
-
-          def archive_is_verified():
-              remote=service_root + '/archive/mongo-import/manifest.json'
-              local=root/'__archive_manifest_probe.json'
-              try:
-                  subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  payload=json.loads(local.read_text(encoding='utf-8'))
-                  return payload.get('verified') is True
-              except (subprocess.CalledProcessError, OSError, json.JSONDecodeError):
-                  return False
-              finally:
-                  local.unlink(missing_ok=True)
-
-          if archive_is_verified():
-              collect_tree(service_root + '/archive/mongo-import')
+          try:
+              data=json.load(open('/tmp/prediction-lab-sync-status.json'))
+          except Exception:
+              print('')
           else:
-              print('historical archive is not verified yet; skipping archive sync this run')
-          if len(chosen)<max_files and estimated_bytes<max_bytes:
-              collect_tree(service_root + '/raw')
-
-          print(f'bounded sync candidates files={len(chosen)} estimated_bytes={estimated_bytes}')
-
-          def repository_relative(remote):
-              prefix=service_root + '/'
-              if not remote.startswith(prefix):
-                  raise SystemExit(f'remote evidence escaped Prediction Lab mount: {remote}')
-              rel=remote[len(prefix):]
-              if not rel or rel.startswith('../'):
-                  raise SystemExit(f'invalid repository-relative evidence path: {remote}')
-              return rel
-
-          def download(item):
-              remote,_=item
-              rel=repository_relative(remote); local=root/rel; local.parent.mkdir(parents=True, exist_ok=True)
-              try:
-                  subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-              except subprocess.CalledProcessError as exc:
-                  raise RuntimeError(f'failed to download {remote}: {(exc.stderr or "").strip()}') from exc
-              return remote,rel,local.stat().st_size
-
-          downloaded=[]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-              futures=[pool.submit(download,item) for item in chosen]
-              for future in concurrent.futures.as_completed(futures):
-                  downloaded.append(future.result())
-
-          manifest=[]; total=0
-          for remote,rel,size in sorted(downloaded):
-              local=root/rel
-              if manifest and total+size>max_bytes:
-                  local.unlink(missing_ok=True)
-                  continue
-              if size>max_bytes:
-                  raise SystemExit(f'single evidence file exceeds bounded sync size: {remote} ({size})')
-              total+=size; manifest.append({'remote':remote,'relative':rel,'bytes':size})
-          (root/'manifest.json').write_text(json.dumps(manifest,sort_keys=True),encoding='utf-8')
-          print(f'bounded sync selected files={len(manifest)} bytes={total}')
+              print(data.get('bridge_version',''))
           PY
+              )"
+              if [[ "$FOUND_VERSION" == "$REQUIRED_BRIDGE_VERSION" ]]; then
+                READY=true
+                python - <<'PY'
+          import json
+          data=json.load(open('/tmp/prediction-lab-sync-status.json'))
+          print(f"sync_bridge_ready version={data.get('bridge_version')} used_bytes={data.get('used_bytes')} free_bytes={data.get('free_bytes')}")
+          PY
+                break
+              fi
+            fi
+            sleep 10
+          done
+          if [[ "$READY" != "true" ]]; then
+            echo "::error::Exact Plane Alerts sync bridge did not become ready within the bounded deployment window."
+            exit 1
+          fi
 
-      - name: Validate and stage evidence
-        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true'
+      - name: Download bounded authenticated evidence batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADMIN_PASSWORD="$(cat /tmp/plane-alerts-admin-password)"
+          SERVICE_URL="$(cat /tmp/plane-alerts-service-url)"
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 180 --retry 2 \
+            --user "plane-alerts-sync:${ADMIN_PASSWORD}" \
+            "$SERVICE_URL/admin/api/prediction-lab/sync-batch?max_files=$MAX_FILES&max_bytes=$MAX_BYTES" \
+            --output /tmp/prediction-lab-batch.zip
+
+      - name: Independently validate and stage evidence
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, pathlib, re, shutil
+          import hashlib, json, pathlib, re, shutil, zipfile
+
+          archive=pathlib.Path('/tmp/prediction-lab-batch.zip')
           incoming=pathlib.Path('/tmp/prediction-lab-incoming')
-          manifest=json.loads((incoming/'manifest.json').read_text()) if (incoming/'manifest.json').exists() else []
-          root=pathlib.Path('prediction_lab')
+          incoming.mkdir(parents=True,exist_ok=True)
+          repo_root=pathlib.Path('prediction_lab')
+          max_files=int('${{ env.MAX_FILES }}')
+          max_bytes=int('${{ env.MAX_BYTES }}')
           forbidden=re.compile(r'(mongodb\+srv://|telegram[_-]?token|authorization\s*[=:]|api[_-]?key\s*[=:]|password\s*[=:])',re.I)
-          accepted=[]
-          for item in manifest:
-              source=incoming/item['relative']; raw=source.read_text(encoding='utf-8')
-              if forbidden.search(raw): raise SystemExit(f'credential-like material rejected: {item["relative"]}')
-              if source.suffix=='.json':
-                  parsed=json.loads(raw)
-                  if item['relative'].startswith('raw/') and parsed.get('schema')!='plane-alerts-prediction-evidence-v1': raise SystemExit(f'unsupported evidence schema: {item["relative"]}')
-              else:
-                  for line in raw.splitlines():
-                      if not line.strip():
-                          continue
-                      parsed=json.loads(line)
-                      if item['relative'].startswith('raw/') and parsed.get('schema')!='plane-alerts-prediction-evidence-v1': raise SystemExit(f'unsupported evidence schema in bundle: {item["relative"]}')
-              target=root/item['relative']; target.parent.mkdir(parents=True,exist_ok=True)
-              if target.exists():
-                  if hashlib.sha256(target.read_bytes()).digest()!=hashlib.sha256(source.read_bytes()).digest(): raise SystemExit(f'conflicting evidence path: {target}')
-              else: shutil.copy2(source,target)
-              accepted.append(item)
-          pathlib.Path('/tmp/prediction-lab-accepted.json').write_text(json.dumps(accepted),encoding='utf-8')
-          print(f'validated files={len(accepted)}')
+
+          with zipfile.ZipFile(archive,'r') as bundle:
+              infos=bundle.infolist()
+              names=[info.filename for info in infos]
+              if len(names)!=len(set(names)):
+                  raise SystemExit('duplicate ZIP member rejected')
+              if 'manifest.json' not in names:
+                  raise SystemExit('Prediction Lab batch manifest is missing')
+              manifest=json.loads(bundle.read('manifest.json').decode('utf-8'))
+              if manifest.get('schema')!='plane-alerts-prediction-sync-batch-v1':
+                  raise SystemExit('unsupported Prediction Lab sync manifest')
+              if manifest.get('bridge_version')!='${{ env.REQUIRED_BRIDGE_VERSION }}':
+                  raise SystemExit('unexpected Prediction Lab sync bridge version')
+              files=manifest.get('files')
+              if not isinstance(files,list) or len(files)>max_files:
+                  raise SystemExit('invalid or oversized Prediction Lab file manifest')
+              expected_names={'manifest.json'}
+              accepted=[]; total=0
+              by_name={info.filename:info for info in infos}
+              for item in files:
+                  if not isinstance(item,dict):
+                      raise SystemExit('invalid Prediction Lab manifest item')
+                  relative=str(item.get('relative') or '').replace('\\','/')
+                  posix=pathlib.PurePosixPath(relative)
+                  if posix.is_absolute() or not relative.startswith('raw/') or '..' in posix.parts:
+                      raise SystemExit(f'unsafe Prediction Lab evidence path: {relative}')
+                  expected_sha=str(item.get('sha256') or '').lower()
+                  expected_bytes=int(item.get('bytes') or 0)
+                  if not re.fullmatch(r'[0-9a-f]{64}',expected_sha):
+                      raise SystemExit(f'invalid SHA-256 for {relative}')
+                  info=by_name.get(relative)
+                  if info is None or info.is_dir() or info.file_size!=expected_bytes:
+                      raise SystemExit(f'ZIP metadata mismatch for {relative}')
+                  total += expected_bytes
+                  if total>max_bytes:
+                      raise SystemExit('Prediction Lab batch exceeds byte limit')
+                  raw=bundle.read(relative)
+                  if len(raw)!=expected_bytes or hashlib.sha256(raw).hexdigest()!=expected_sha:
+                      raise SystemExit(f'Prediction Lab content hash mismatch for {relative}')
+                  text=raw.decode('utf-8')
+                  if forbidden.search(text):
+                      raise SystemExit(f'credential-like material rejected: {relative}')
+                  if relative.endswith('.json'):
+                      payload=json.loads(text)
+                      if not isinstance(payload,dict) or payload.get('schema')!='plane-alerts-prediction-evidence-v1':
+                          raise SystemExit(f'unsupported evidence schema: {relative}')
+                  elif relative.endswith('.ndjson'):
+                      rows=0
+                      for line in text.splitlines():
+                          if not line.strip(): continue
+                          payload=json.loads(line); rows+=1
+                          if not isinstance(payload,dict) or payload.get('schema')!='plane-alerts-prediction-evidence-v1':
+                              raise SystemExit(f'unsupported evidence schema in bundle: {relative}')
+                      if rows==0:
+                          raise SystemExit(f'empty evidence bundle rejected: {relative}')
+                  else:
+                      raise SystemExit(f'unsupported evidence extension: {relative}')
+                  target=repo_root/pathlib.Path(*posix.parts)
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  if target.exists():
+                      if hashlib.sha256(target.read_bytes()).hexdigest()!=expected_sha:
+                          raise SystemExit(f'conflicting evidence path: {target}')
+                  else:
+                      target.write_bytes(raw)
+                  expected_names.add(relative)
+                  accepted.append({'relative':relative,'bytes':expected_bytes,'sha256':expected_sha})
+              if set(names)!=expected_names:
+                  raise SystemExit('unexpected ZIP members rejected')
+
+          pathlib.Path('/tmp/prediction-lab-accepted.json').write_text(json.dumps(accepted,sort_keys=True),encoding='utf-8')
+          print(f'validated files={len(accepted)} bytes={total}')
           PY
           git config user.name "plane-alerts-evidence"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add prediction_lab/raw prediction_lab/archive/mongo-import 2>/dev/null || true
+          git add prediction_lab/raw 2>/dev/null || true
 
       - name: Commit and push evidence
-        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true'
         id: push
         shell: bash
         run: |
           set -euo pipefail
           if git diff --cached --quiet; then
-            echo "No new repository evidence to commit."
+            echo "No new repository evidence to commit; validating existing bytes was sufficient."
           else
             git commit -m "Prediction Lab evidence sync"
             if ! git pull --rebase origin prediction-lab-data; then
@@ -315,63 +228,45 @@ jobs:
           fi
           echo "ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Remove repository-acknowledged spool files
-        if: github.event_name != 'pull_request' && steps.volume.outputs.available == 'true' && steps.ssh.outputs.registered == 'true' && steps.push.outputs.ok == 'true'
+      - name: Acknowledge only repository-verified evidence
+        if: steps.push.outputs.ok == 'true'
         id: acknowledge
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import concurrent.futures, json, os, pathlib, subprocess
-          accepted=json.load(open('/tmp/prediction-lab-accepted.json')) if pathlib.Path('/tmp/prediction-lab-accepted.json').exists() else []
-          project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
-          service_root=os.environ['PREDICTION_LAB_MOUNT'].rstrip('/')
-          workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
-          max_files=int(os.environ['MAX_FILES'])
-          def cmd(*args):
-              return ['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]
-          def remove_acknowledged(item):
-              old=item['remote']
-              if not old.startswith(service_root + '/raw/') and not old.startswith(service_root + '/archive/mongo-import/'):
-                  raise RuntimeError(f'refusing to remove path outside evidence roots: {old}')
-              try:
-                  subprocess.check_call(cmd('delete',old,'--yes','--json'), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-              except subprocess.CalledProcessError as exc:
-                  raise RuntimeError(f'failed to remove acknowledged evidence {old}: {(exc.stderr or "").strip()}') from exc
-              return old
-          with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-              futures=[pool.submit(remove_acknowledged,item) for item in accepted]
-              for future in concurrent.futures.as_completed(futures):
-                  future.result()
-          count=len(accepted)
-          print(f'acknowledged_and_removed files={count}')
+          import json
+          accepted=json.load(open('/tmp/prediction-lab-accepted.json'))
+          with open('/tmp/prediction-lab-ack.json','w',encoding='utf-8') as handle:
+              json.dump({'files':accepted},handle,separators=(',',':'))
+          PY
+          ADMIN_PASSWORD="$(cat /tmp/plane-alerts-admin-password)"
+          SERVICE_URL="$(cat /tmp/plane-alerts-service-url)"
+          curl --fail --silent --show-error --connect-timeout 5 --max-time 120 \
+            --user "plane-alerts-sync:${ADMIN_PASSWORD}" \
+            --header "Content-Type: application/json" \
+            --request POST \
+            --data-binary @/tmp/prediction-lab-ack.json \
+            "$SERVICE_URL/admin/api/prediction-lab/sync-ack" \
+            --output /tmp/prediction-lab-ack-response.json
+          python - <<'PY'
+          import json, os
+          accepted=json.load(open('/tmp/prediction-lab-accepted.json'))
+          response=json.load(open('/tmp/prediction-lab-ack-response.json'))
+          removed=int(response.get('removed_files',-1))
+          if removed!=len(accepted):
+              raise SystemExit(f'acknowledgement count mismatch: accepted={len(accepted)} removed={removed}')
+          print(f"acknowledged_and_removed files={removed} bytes={response.get('removed_bytes')} free_bytes={response.get('free_bytes')}")
           with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as handle:
-              handle.write(f'count={count}\n')
-              handle.write(f'continue_drain={"true" if count >= max(100, max_files // 2) else "false"}\n')
+              handle.write(f'count={removed}\n')
+              handle.write(f'continue_drain={"true" if removed >= 250 else "false"}\n')
           PY
 
       - name: Continue draining a saturated backlog
-        if: github.event_name != 'pull_request' && steps.acknowledge.outputs.continue_drain == 'true'
+        if: steps.acknowledge.outputs.continue_drain == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "Large acknowledged batch removed; dispatching the next bounded drain pass."
+          echo "Large repository-acknowledged batch removed; dispatching the next bounded drain pass."
           gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/prediction-lab-sync.yml/dispatches" -f ref=main
-
-      - name: Remove ephemeral Railway SSH key
-        if: always() && steps.ssh.outputs.registered == 'true'
-        shell: bash
-        env:
-          RAILWAY_SSH_KEY_NAME: ${{ steps.ssh.outputs.name }}
-        run: |
-          set +e
-          railway ssh keys remove "$RAILWAY_SSH_KEY_NAME" > /tmp/railway-ssh-key-remove.log 2>&1
-          RC=$?
-          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
-          if [[ $RC -ne 0 ]]; then
-            cat /tmp/railway-ssh-key-remove.log
-            echo "::error::Failed to remove ephemeral Railway SSH key $RAILWAY_SSH_KEY_NAME."
-            exit $RC
-          fi
-          echo "Ephemeral Railway SSH key removed."
