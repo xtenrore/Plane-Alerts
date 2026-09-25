@@ -276,7 +276,7 @@ jobs:
           max_files=int(os.environ['MAX_FILES'])
           def remove_acknowledged(item):
               old=item['remote']
-              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'delete',old,'--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'delete',old,'--yes','--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
               return old
           with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
               futures=[pool.submit(remove_acknowledged,item) for item in accepted]
