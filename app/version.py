@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.2"
+VERSION = "5.6.3"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -23,28 +23,20 @@ VERSION = "5.6.2"
 # v5.4.2 fixes general-audit setup, storage, self-hosting, interaction,
 # enrichment and photography correctness issues.
 # v5.4.3 removes the retired external agent sidecar/runtime and Telegram command.
-# v5.5.1 carries the file-backed Prediction Lab architecture forward because
-# the immutable v5.5.0 tag was already published for guided community self-hosting.
-# It moves Prediction Lab audit/shadow evidence from high-volume Mongo writes
-# to a bounded persistent file spool and Git data branch. It does not change
-# live physical prediction, qualification, cancellation or alert timing.
-# v5.5.2 fixes Railway CLI selector ordering in production deployment and
-# Prediction Lab volume synchronization after v5.5.1 exposed the CLI mismatch.
-# v5.5.3 isolates verified Prediction Lab archive/index/schema maintenance from
-# Railway readiness so historical migration retries in the background while
-# normal Mongo-backed monitoring can start immediately.
-# v5.5.4 replaces stacked route-history/runway arrival vetoes with one cached,
-# provider-first destination/path qualification guard. The underlying motion/3D
-# predictor is unchanged; only destination-aware alert qualification changes.
-# v5.6 removes all remaining retired external-agent names/hand-off residue from
-# active source, tests and documentation. Prediction behavior is unchanged.
-# v5.6.1 permanently moves callsign route-history and other high-volume
-# Prediction Lab compatibility telemetry off MongoDB and onto the Plane Alerts
-# persistent volume. Mongo remains authoritative for users, locations, profiles
-# and durable configuration. Live prediction/qualification geometry is unchanged.
-# v5.6.2 starts retirement of the legacy route collection at process startup and
-# prevents the live sentinel loop from retrying obsolete Prediction Lab Mongo
-# exports. No prediction, qualification, cancellation or alert timing changes.
+# v5.5.1 moves Prediction Lab audit/shadow evidence from high-volume Mongo writes
+# to a bounded persistent file spool and Git data branch.
+# v5.5.2 fixes Railway deployment/volume synchronization.
+# v5.5.3 isolates historical maintenance from live readiness.
+# v5.5.4 installs provider-first destination/path qualification.
+# v5.6 removes all remaining retired external-agent residue.
+# v5.6.1 moves callsign route history and Prediction Lab compatibility telemetry
+# to the Plane Alerts persistent volume while retaining Mongo for durable app data.
+# v5.6.2 retires legacy Prediction Lab Mongo exporters/collections.
+# v5.6.3 moves notification lifecycle telemetry to bounded volume SQLite,
+# retires the Mongo notification/route shells, and enforces a runtime policy that
+# prevents high-volume operational Mongo indexes/accessors from reappearing.
+# No v5.6.x storage patch changes trajectory, CPA, ETA, qualification,
+# cancellation, destination-path logic or alert timing.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
