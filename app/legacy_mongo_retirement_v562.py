@@ -3,12 +3,11 @@
 The authoritative v5.6.1 storage split keeps high-volume route history and
 Prediction Lab evidence on the Plane Alerts persistent volume. This guard makes
 that boundary permanent at runtime: it starts retirement of the reconstructable
-legacy route collection immediately and prevents the sentinel loop from
-re-exporting already-retired Prediction Lab telemetry from Mongo.
+legacy route collection from the live event loop and prevents the sentinel loop
+from re-exporting already-retired Prediction Lab telemetry from Mongo.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 
@@ -19,13 +18,15 @@ logger = logging.getLogger(__name__)
 _installed = False
 
 
-async def _migration_already_retired() -> bool:
-    """Tell the sentinel loop that operational telemetry migration is complete.
+def _volume_authoritative_and_schedule_retirement() -> bool:
+    """Return the permanent file-backed state and start route cleanup when possible."""
+    _schedule_route_migration()
+    return True
 
-    New Prediction Lab writes are file-backed and must never fall back to Mongo.
-    Historical cleanup is deliberately decoupled from live sentinel polling so a
-    slow/full Atlas cluster cannot generate repeated export timeouts.
-    """
+
+async def _migration_already_retired() -> bool:
+    """Tell the sentinel loop that operational telemetry migration is complete."""
+    _volume_authoritative_and_schedule_retirement()
     return True
 
 
@@ -45,20 +46,20 @@ def install_legacy_mongo_retirement_v562() -> None:
     if _installed:
         return
 
-    # Start retirement of the reconstructable flight_route_samples collection at
-    # process startup instead of waiting for the first route sample. The v5.6.1
-    # migrator writes any readable recent history to the volume, then drops only
-    # that explicitly non-user collection. It never touches users/locations/
-    # profiles/preferences/settings.
+    # This import-time call is opportunistic. If no asyncio loop exists yet the
+    # v5.6.1 scheduler safely does nothing; the migration_verified wrapper below
+    # calls it again from the live sentinel event loop.
     _schedule_route_migration()
 
-    # The file spool is already authoritative. Never retry the old Prediction
-    # Lab Mongo export from the live sentinel loop, because Atlas quota/latency
-    # must not affect shadow collection or flood production logs.
+    # New operational evidence is permanently file-backed. Any compatibility
+    # check also starts retirement of the reconstructable route collection from
+    # the running loop, so cleanup cannot depend on a later aircraft sample.
+    lab_files.migration_verified = _volume_authoritative_and_schedule_retirement
     lab_files.migrate_prediction_lab_mongo = _retired_prediction_lab_migration
 
     sentinel = sys.modules.get("app.sentinel_network")
     if sentinel is not None:
+        setattr(sentinel, "migration_verified", _volume_authoritative_and_schedule_retirement)
         setattr(sentinel, "_ensure_migration", _migration_already_retired)
         setattr(sentinel, "migrate_prediction_lab_mongo", _retired_prediction_lab_migration)
 
