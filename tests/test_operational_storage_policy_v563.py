@@ -52,6 +52,7 @@ async def test_legacy_notification_migration_copies_then_drops_only_operational_
     volume._db = None
     volume._ready = False
     volume._ready_lock = None
+    volume._retirement_complete = False
 
     touched: list[tuple[str, str]] = []
     legacy_doc = {
@@ -98,6 +99,7 @@ async def test_legacy_notification_migration_copies_then_drops_only_operational_
     assert state["imported"] == 1
     assert state["normal_application_data_untouched"] is True
     assert touched == [("drop", "notification_history"), ("drop", "flight_route_samples")]
+    assert volume._retirement_complete is True
     await volume.close()
 
 
@@ -109,6 +111,7 @@ async def test_migration_count_mismatch_never_drops_legacy_collection(tmp_path, 
     volume._db = None
     volume._ready = False
     volume._ready_lock = None
+    volume._retirement_complete = False
     dropped: list[str] = []
 
     class EmptyCursor:
@@ -129,7 +132,55 @@ async def test_migration_count_mismatch_never_drops_legacy_collection(tmp_path, 
     with pytest.raises(RuntimeError, match="count mismatch"):
         await volume.retire_legacy_mongo()
     assert dropped == []
+    assert volume._retirement_complete is False
     await volume.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_retirement_marker_never_reopens_mongo(tmp_path, monkeypatch):
+    from app import notification_volume_v563 as volume
+
+    monkeypatch.setenv("PREDICTION_LAB_ROOT", str(tmp_path))
+    volume._db = None
+    volume._ready = False
+    volume._ready_lock = None
+    volume._retirement_complete = False
+    marker = {
+        "schema": "plane-alerts-notification-volume-migration-v563",
+        "source_count": 132,
+        "imported": 132,
+        "migration_verified": True,
+        "legacy_notification_collection_dropped": True,
+        "legacy_route_collection_dropped": True,
+        "mongo_runtime_writes_disabled": True,
+        "normal_application_data_untouched": True,
+        "volume_path": str(tmp_path / "runtime" / "notification_history.sqlite3"),
+        "completed_at": "2026-09-25T06:17:00Z",
+    }
+    volume._write_state(marker)
+
+    def mongo_forbidden():
+        raise AssertionError("completed operational retirement must never reopen Mongo")
+
+    monkeypatch.setattr("app.database.get_db", mongo_forbidden)
+    state = await volume.retire_legacy_mongo()
+    assert state == marker
+    assert volume._retirement_complete is True
+    await volume.close()
+
+
+def test_completed_retirement_is_not_rescheduled(monkeypatch):
+    from app import notification_volume_v563 as volume
+
+    monkeypatch.setattr(volume, "_retirement_complete", True)
+    monkeypatch.setattr(volume, "_retirement_task", None)
+
+    async def forbidden_runner():
+        raise AssertionError("completed operational retirement must not create another task")
+
+    monkeypatch.setattr(volume, "_retirement_runner", forbidden_runner)
+    volume.schedule_legacy_retirement()
+    assert volume._retirement_task is None
 
 
 def test_policy_forbids_all_known_high_volume_operational_mongo_collections():
