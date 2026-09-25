@@ -30,7 +30,7 @@ def _config(**overrides: object) -> Settings:
 
 
 def test_runtime_uses_current_minor_release_version() -> None:
-    assert VERSION == "5.6.8"
+    assert VERSION == "5.6.9"
 
 
 def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:
@@ -90,7 +90,7 @@ def test_community_runtime_is_not_used_by_railway_workflow() -> None:
     assert "community_main_v55" not in workflow
 
 
-def test_v552_railway_volume_selectors_precede_subcommands() -> None:
+def test_v569_railway_volume_check_and_service_file_selectors_are_explicit() -> None:
     deploy = (ROOT / ".github" / "workflows" / "deploy-railway.yml").read_text(encoding="utf-8")
     sync = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
     bad = 'railway volume list --project'
@@ -98,4 +98,5 @@ def test_v552_railway_volume_selectors_precede_subcommands() -> None:
     assert bad not in sync
     assert 'railway volume --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" list --json' in deploy
     assert 'railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json' in sync
-    assert "'railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume" in sync
+    assert "['railway','service','files','--project',project,'--environment',environment,'--service',service,*args]" in sync
+    assert "PREDICTION_LAB_MOUNT: /data/prediction_lab" in sync
