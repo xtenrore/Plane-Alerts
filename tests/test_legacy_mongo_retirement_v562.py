@@ -22,7 +22,7 @@ def test_v562_installer_schedules_narrow_retirement_and_disables_legacy_migrator
 
     route_scheduled: list[bool] = []
     prediction_scheduled: list[bool] = []
-    monkeypatch.setattr(retirement, "_schedule_route_migration", lambda: route_scheduled.append(True))
+    monkeypatch.setattr(retirement, "_schedule_route_cleanup_once", lambda: route_scheduled.append(True))
     monkeypatch.setattr(retirement, "_schedule_prediction_cleanup", lambda: prediction_scheduled.append(True))
     monkeypatch.setattr(retirement, "_installed", False)
     monkeypatch.setattr(prediction_lab_files_v55, "migrate_prediction_lab_mongo", prediction_lab_files_v55.migrate_prediction_lab_mongo)
@@ -43,12 +43,34 @@ def test_authoritative_check_schedules_both_operational_retirements(monkeypatch)
 
     route_scheduled: list[bool] = []
     prediction_scheduled: list[bool] = []
-    monkeypatch.setattr(retirement, "_schedule_route_migration", lambda: route_scheduled.append(True))
+    monkeypatch.setattr(retirement, "_schedule_route_cleanup_once", lambda: route_scheduled.append(True))
     monkeypatch.setattr(retirement, "_schedule_prediction_cleanup", lambda: prediction_scheduled.append(True))
 
     assert retirement._volume_authoritative_and_schedule_retirement() is True
     assert route_scheduled == [True]
     assert prediction_scheduled == [True]
+
+
+def test_route_cleanup_scheduler_starts_underlying_runner_only_once(monkeypatch):
+    from app import legacy_mongo_retirement_v562 as retirement
+
+    class FakeTask:
+        pass
+
+    calls: list[bool] = []
+    monkeypatch.setattr(retirement, "_route_schedule_started", False)
+    monkeypatch.setattr(retirement.operational_volume, "_migration_task", None)
+
+    def schedule():
+        calls.append(True)
+        retirement.operational_volume._migration_task = FakeTask()
+
+    monkeypatch.setattr(retirement.operational_volume, "_schedule_route_migration", schedule)
+    retirement._schedule_route_cleanup_once()
+    retirement._schedule_route_cleanup_once()
+
+    assert calls == [True]
+    assert retirement._route_schedule_started is True
 
 
 @pytest.mark.asyncio
