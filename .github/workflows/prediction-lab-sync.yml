@@ -2,7 +2,7 @@ name: Sync Prediction Lab evidence
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -22,8 +22,9 @@ jobs:
       MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-      MAX_FILES: "80"
+      MAX_FILES: "500"
       MAX_BYTES: "26214400"
+      TRANSFER_WORKERS: "12"
     steps:
       - name: Checkout evidence branch
         uses: actions/checkout@v4
@@ -52,8 +53,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Railway CLI v4 defines target selectors on the `volume` parent
-          # command, so they must precede list/files subcommands.
           railway volume --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" list --json > /tmp/volumes.json
           VOLUME_ID="$(python - <<'PY'
           import json
@@ -89,46 +88,72 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/prediction-lab-incoming
           python - <<'PY'
-          import json, os, pathlib, subprocess
+          import concurrent.futures, json, os, pathlib, subprocess
+
           volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
-          max_files=int(os.environ['MAX_FILES']); max_bytes=int(os.environ['MAX_BYTES']); root=pathlib.Path('/tmp/prediction-lab-incoming')
-          chosen=[]; total=0
+          max_files=int(os.environ['MAX_FILES']); max_bytes=int(os.environ['MAX_BYTES']); workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
+          root=pathlib.Path('/tmp/prediction-lab-incoming')
+          chosen=[]; estimated_bytes=0
+
           def cmd(*args):
               return ['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,*args]
+
           def list_dir(remote):
-              try: data=json.loads(subprocess.check_output(cmd('list',remote,'--json'), text=True))
-              except subprocess.CalledProcessError: return []
-              entries=[]; seen=set()
-              def walk(value):
-                  if isinstance(value, dict):
-                      path=value.get('path') or value.get('remotePath') or value.get('name')
-                      if isinstance(path,str) and path not in seen:
-                          name=value.get('name') or pathlib.PurePosixPath(path).name
-                          kind=str(value.get('type') or value.get('kind') or '').lower()
-                          is_dir=bool(value.get('isDirectory') or value.get('is_dir') or kind in {'dir','directory','folder'})
-                          size=value.get('size') or value.get('bytes') or 0
-                          try: size=int(size or 0)
-                          except (TypeError,ValueError): size=0
-                          if not str(path).startswith('/'): path=str(pathlib.PurePosixPath(remote) / str(name))
-                          entries.append((str(path),is_dir,size)); seen.add(str(path))
-                      for child in value.values(): walk(child)
-                  elif isinstance(value,list):
-                      for child in value: walk(child)
-              walk(data); return entries
+              try:
+                  raw=subprocess.check_output(cmd('list',remote,'--json'), text=True, stderr=subprocess.STDOUT)
+                  data=json.loads(raw)
+              except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+                  raise SystemExit(f'volume listing failed for {remote}: {type(exc).__name__}') from exc
+              files=data.get('files') if isinstance(data,dict) else None
+              if not isinstance(files,list):
+                  raise SystemExit(f'malformed Railway volume listing for {remote}: missing files[]')
+              entries=[]
+              base=pathlib.PurePosixPath(remote if remote.startswith('/') else '/' + remote)
+              for value in files:
+                  if not isinstance(value,dict):
+                      continue
+                  name=str(value.get('name') or '').strip()
+                  if not name or name in {'.','..'}:
+                      continue
+                  kind=str(value.get('type') or value.get('kind') or '').strip().lower()
+                  size=value.get('size') or value.get('bytes') or 0
+                  try: size=int(size or 0)
+                  except (TypeError,ValueError): size=0
+                  # Railway may expose a mount-absolute `path`. File operations,
+                  # however, are rooted at the selected volume, so always rebuild
+                  # the child remote path from the directory we actually listed.
+                  path=str(base / name)
+                  is_dir=kind in {'dir','directory','folder'} or (not kind and '.' not in name and size == 0)
+                  entries.append((path,is_dir,size))
+              print(f'volume listing remote={remote} entries={len(entries)}')
+              return entries
+
           def collect_tree(start):
+              global estimated_bytes
               stack=[start]; visited=set()
               while stack and len(chosen)<max_files:
                   current=stack.pop(0)
-                  if current in visited: continue
+                  if current in visited:
+                      continue
                   visited.add(current)
                   for path,is_dir,size in sorted(list_dir(current)):
-                      if path.rstrip('/')==current.rstrip('/'): continue
-                      if is_dir or ('.' not in pathlib.PurePosixPath(path).name and path.count('/') <= 5):
-                          stack.append(path.rstrip('/')); continue
-                      if not (path.endswith('.json') or path.endswith('.ndjson')): continue
-                      if path.endswith('.synced'): continue
+                      name=pathlib.PurePosixPath(path).name
+                      if is_dir:
+                          stack.append(path.rstrip('/'))
+                          continue
+                      if name.startswith('.') or path.endswith('.synced'):
+                          continue
+                      if not (path.endswith('.json') or path.endswith('.ndjson')):
+                          continue
+                      if chosen and size > 0 and estimated_bytes + size > max_bytes:
+                          return
+                      if size > max_bytes:
+                          raise SystemExit(f'single evidence file exceeds bounded sync size: {path} ({size})')
                       chosen.append((path,size))
-                      if len(chosen)>=max_files: break
+                      estimated_bytes += max(0,size)
+                      if len(chosen)>=max_files:
+                          return
+
           def archive_is_verified():
               remote='/archive/mongo-import/manifest.json'
               local=root/'__archive_manifest_probe.json'
@@ -140,19 +165,36 @@ jobs:
                   return False
               finally:
                   local.unlink(missing_ok=True)
+
           if archive_is_verified():
               collect_tree('/archive/mongo-import')
           else:
               print('historical archive is not verified yet; skipping archive sync this run')
-          if len(chosen)<max_files: collect_tree('/raw')
-          manifest=[]
-          for remote,_ in chosen:
-              if len(manifest)>=max_files: break
+          if len(chosen)<max_files and estimated_bytes<max_bytes:
+              collect_tree('/raw')
+
+          print(f'bounded sync candidates files={len(chosen)} estimated_bytes={estimated_bytes}')
+
+          def download(item):
+              remote,_=item
               rel=remote.lstrip('/'); local=root/rel; local.parent.mkdir(parents=True, exist_ok=True)
-              subprocess.check_call(cmd('download',remote,str(local),'--overwrite'))
-              size=local.stat().st_size
-              if manifest and total+size>max_bytes: local.unlink(); break
-              if size>max_bytes: raise SystemExit(f'single evidence file exceeds bounded sync size: {remote} ({size})')
+              subprocess.check_call(cmd('download',remote,str(local),'--overwrite'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              return remote,rel,local.stat().st_size
+
+          downloaded=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+              futures=[pool.submit(download,item) for item in chosen]
+              for future in concurrent.futures.as_completed(futures):
+                  downloaded.append(future.result())
+
+          manifest=[]; total=0
+          for remote,rel,size in sorted(downloaded):
+              local=root/rel
+              if manifest and total+size>max_bytes:
+                  local.unlink(missing_ok=True)
+                  continue
+              if size>max_bytes:
+                  raise SystemExit(f'single evidence file exceeds bounded sync size: {remote} ({size})')
               total+=size; manifest.append({'remote':remote,'relative':rel,'bytes':size})
           (root/'manifest.json').write_text(json.dumps(manifest,sort_keys=True),encoding='utf-8')
           print(f'bounded sync selected files={len(manifest)} bytes={total}')
@@ -178,7 +220,10 @@ jobs:
                   if item['relative'].startswith('raw/') and parsed.get('schema')!='plane-alerts-prediction-evidence-v1': raise SystemExit(f'unsupported evidence schema: {item["relative"]}')
               else:
                   for line in raw.splitlines():
-                      if line.strip(): json.loads(line)
+                      if not line.strip():
+                          continue
+                      parsed=json.loads(line)
+                      if item['relative'].startswith('raw/') and parsed.get('schema')!='plane-alerts-prediction-evidence-v1': raise SystemExit(f'unsupported evidence schema in bundle: {item["relative"]}')
               target=root/item['relative']; target.parent.mkdir(parents=True,exist_ok=True)
               if target.exists():
                   if hashlib.sha256(target.read_bytes()).digest()!=hashlib.sha256(source.read_bytes()).digest(): raise SystemExit(f'conflicting evidence path: {target}')
@@ -218,11 +263,17 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os, pathlib, subprocess
+          import concurrent.futures, json, os, pathlib, subprocess
           accepted=json.load(open('/tmp/prediction-lab-accepted.json')) if pathlib.Path('/tmp/prediction-lab-accepted.json').exists() else []
           volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
-          for item in accepted:
+          workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
+          def acknowledge(item):
               old=item['remote']; new=old+'.synced'
-              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'rename',old,new,'--json'])
+              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'rename',old,new,'--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              return old
+          with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+              futures=[pool.submit(acknowledge,item) for item in accepted]
+              for future in concurrent.futures.as_completed(futures):
+                  future.result()
           print(f'acknowledged files={len(accepted)}')
           PY
