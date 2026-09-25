@@ -1,0 +1,19 @@
+{
+  "schema": "plane-alerts-prediction-case-v1",
+  "case_id": "cancel-4bb26f-20260925T092920Z",
+  "event_id": "railway-approach_alert_cancelled-4bb26f-20260925T092920Z",
+  "status": "unchecked",
+  "priority": "high",
+  "classification": "terminal_veto_then_requalification_cancel_candidate",
+  "aircraft": {"icao": "4bb26f", "callsign": "THY3ZY"},
+  "cancel": {"timestamp_utc": "2026-09-25T09:29:20.768Z", "stable_cpa_km": 0.8309952476735778, "new_cpa_km": 17.81, "confirmations": 3, "route_veto": false},
+  "destination_lifecycle": [
+    {"timestamp_utc": "2026-09-25T09:16:19.828Z", "destination": null, "state": "lookup_pending_initial_alert_held"},
+    {"timestamp_utc": "2026-09-25T09:16:24.569Z", "destination": "IST", "state": "route_veto", "reason": "adsb.lol+adsbdb destination physically reached before observer pass"},
+    {"timestamp_utc": "2026-09-25T09:16:29.606Z", "destination": "IST", "state": "route_veto", "reason": "adsb.lol+adsbdb destination physically reached before observer pass"}
+  ],
+  "investigation_flags": ["known_IST_destination", "provider_agreed_destination", "prior_route_veto_true", "later_cancel_route_veto_false", "extreme_CPA_jump_0.83_to_17.81", "possible_requalification_state_loss"],
+  "evidence_quality": {"subsequent_reality": "inconclusive", "reason": "Prediction Lab file writes are failing; missing persistence cannot be scored"},
+  "source": "Railway production logs reconstructed by collector fallback",
+  "notes": "Candidate only, not a proven defect. Telegram alert existence and detailed accepted/rejected provider progression were not determinable from the filtered log evidence retained in this reconstruction."
+}
