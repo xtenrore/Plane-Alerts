@@ -1,8 +1,12 @@
-"""Authenticated, bounded Prediction Lab repository sync bridge for v5.6.10.
+"""Authenticated, bounded Prediction Lab repository sync bridge for v5.6.10+.
 
 The bridge is deliberately outside the alert-critical path. It exports only sanitized
 raw Prediction Lab evidence and deletes an evidence file only after an authenticated
 caller presents the exact repository-acknowledged path, size and SHA-256.
+
+v5.6.11 makes export resilient to isolated malformed/legacy/sensitive raw objects:
+those objects remain untouched on the volume and no longer block valid evidence behind
+them from being synchronized.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -22,9 +27,10 @@ from typing import Any, Iterable
 
 from app.prediction_lab_files_v55 import SCHEMA_VERSION, root_path
 
-BRIDGE_VERSION = "5.6.10"
+BRIDGE_VERSION = "5.6.11"
 MAX_BATCH_FILES = 500
 MAX_BATCH_BYTES = 25 * 1024 * 1024
+MAX_SCAN_FILES = 5000
 SYNC_GUARD_TTL_S = 20 * 60.0
 _SYNC_GUARD = Path(tempfile.gettempdir()) / "plane-alerts-prediction-lab-sync.guard"
 _SECRET_PATTERN = re.compile(
@@ -100,6 +106,21 @@ def _validate_payload(path: Path) -> bytes:
     return raw
 
 
+def _rejection_class(exc: SyncBridgeError) -> str:
+    message = str(exc).casefold()
+    if "credential-like" in message:
+        return "credential_like"
+    if "unsupported evidence schema" in message:
+        return "schema"
+    if "empty evidence bundle" in message:
+        return "empty_bundle"
+    if "invalid evidence json" in message:
+        return "invalid_json"
+    if "could not read evidence" in message:
+        return "read_error"
+    return "validation_error"
+
+
 def _iter_candidates(raw: Path) -> Iterable[Path]:
     if not raw.exists():
         return
@@ -142,32 +163,48 @@ def build_batch_zip(
     max_files: int = MAX_BATCH_FILES,
     max_bytes: int = MAX_BATCH_BYTES,
 ) -> tuple[Path, dict[str, Any]]:
-    """Build a bounded validated ZIP in ephemeral storage without mutating the spool."""
+    """Build a bounded validated ZIP in ephemeral storage without mutating the spool.
+
+    Invalid/legacy/sensitive objects are deliberately left untouched and skipped so
+    one bad raw object cannot prevent valid evidence behind it from being archived.
+    """
     count_limit = max(1, min(MAX_BATCH_FILES, int(max_files)))
     byte_limit = max(1, min(MAX_BATCH_BYTES, int(max_bytes)))
     base = _base(root)
     raw_root = _raw_root(root)
     selected: list[tuple[Path, EvidenceItem, bytes]] = []
     total = 0
+    scanned = 0
+    deferred_for_batch_limit = 0
+    rejected: Counter[str] = Counter()
 
     with _bridge_lock:
         _touch_sync_guard()
         try:
             for path in _iter_candidates(raw_root):
-                if len(selected) >= count_limit:
+                if len(selected) >= count_limit or scanned >= MAX_SCAN_FILES:
                     break
+                scanned += 1
                 resolved = path.resolve()
                 if raw_root not in resolved.parents:
+                    rejected["path_escape"] += 1
                     continue
                 try:
                     size = int(resolved.stat().st_size)
                 except OSError:
+                    rejected["stat_error"] += 1
                     continue
                 if size > byte_limit:
-                    raise SyncBridgeError(f"single evidence file exceeds bounded sync size: {resolved.name} ({size})")
+                    rejected["oversized"] += 1
+                    continue
                 if selected and total + size > byte_limit:
-                    break
-                data = _validate_payload(resolved)
+                    deferred_for_batch_limit += 1
+                    continue
+                try:
+                    data = _validate_payload(resolved)
+                except SyncBridgeError as exc:
+                    rejected[_rejection_class(exc)] += 1
+                    continue
                 digest = hashlib.sha256(data).hexdigest()
                 relative = resolved.relative_to(base).as_posix()
                 selected.append((resolved, EvidenceItem(relative=relative, bytes=len(data), sha256=digest), data))
@@ -175,6 +212,13 @@ def build_batch_zip(
         except Exception:
             clear_sync_guard()
             raise
+
+        if not selected and rejected:
+            summary=",".join(f"{key}:{rejected[key]}" for key in sorted(rejected))
+            clear_sync_guard()
+            raise SyncBridgeError(
+                f"no exportable raw evidence in bounded scan; scanned={scanned}; rejected={summary}"
+            )
 
         fd, name = tempfile.mkstemp(prefix="plane-alerts-sync-", suffix=".zip")
         os.close(fd)
@@ -186,6 +230,10 @@ def build_batch_zip(
             "files": [item.as_dict() for _, item, _ in selected],
             "total_files": len(selected),
             "total_bytes": total,
+            "scanned_files": scanned,
+            "rejected_files": sum(rejected.values()),
+            "rejected_by_reason": dict(sorted(rejected.items())),
+            "deferred_for_batch_limit": deferred_for_batch_limit,
         }
         try:
             with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
