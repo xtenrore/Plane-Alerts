@@ -27,16 +27,26 @@ def test_prediction_data_branch_cannot_trigger_production_deploy():
     assert deploy["permissions"]["contents"] == "read"
 
 
-def test_sync_is_bounded_and_acknowledges_only_after_successful_push():
+def test_sync_is_bounded_and_removes_only_after_successful_repository_push():
     text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
     assert "prediction-lab-data" in text
     assert 'MAX_FILES: "500"' in text and 'MAX_BYTES: "26214400"' in text
     assert 'cron: "*/5 * * * *"' in text
     assert "git pull --rebase" in text and "git push origin HEAD:prediction-lab-data" in text
-    acknowledgement = "new=old+'.synced'"
-    assert acknowledgement in text
-    assert text.index(acknowledgement) > text.index("git push origin HEAD:prediction-lab-data")
-    assert "secrets.GITHUB_TOKEN" not in text
+    removal = "'delete',old,'--json'"
+    assert removal in text
+    assert text.index(removal) > text.index("git push origin HEAD:prediction-lab-data")
+    assert "steps.push.outputs.ok == 'true'" in text
+    assert "actions: write" in text
+
+
+def test_sync_self_drains_only_after_a_large_acknowledged_batch():
+    text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
+    assert "continue_drain={\"true\" if count >= max(100, max_files // 2) else \"false\"}" in text
+    condition = "steps.acknowledge.outputs.continue_drain == 'true'"
+    dispatch = "actions/workflows/prediction-lab-sync.yml/dispatches"
+    assert condition in text and dispatch in text
+    assert text.index(dispatch) > text.index("acknowledged_and_removed")
 
 
 def test_sync_refuses_partial_historical_archive_before_verified_manifest():
