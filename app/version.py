@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.7"
+VERSION = "5.6.8"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -48,6 +48,10 @@ VERSION = "5.6.7"
 # v5.6.7 fixes Prediction Lab raw-spool discovery/drain, adds lossless NDJSON
 # compaction, and reserves disk headroom by shedding optional analytical evidence
 # before it can starve operational storage or create an ENOSPC traceback storm.
+# v5.6.8 removes only repository-acknowledged spool objects immediately after a
+# successful evidence-branch push and chains bounded workflow-dispatch drain passes
+# while a saturated backlog remains. A main-workflow push trigger bootstraps the
+# first drain pass instead of relying solely on delayed GitHub schedule delivery.
 # No v5.6.x storage patch changes trajectory, CPA, ETA, qualification,
 # cancellation, destination-path logic or alert timing.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"

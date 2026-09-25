@@ -1,12 +1,17 @@
 name: Sync Prediction Lab evidence
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/prediction-lab-sync.yml"
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: prediction-lab-data-sync
@@ -255,8 +260,9 @@ jobs:
           fi
           echo "ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Acknowledge committed spool files
+      - name: Remove repository-acknowledged spool files
         if: steps.volume.outputs.available == 'true' && steps.push.outputs.ok == 'true'
+        id: acknowledge
         shell: bash
         env:
           VOLUME_ID: ${{ steps.volume.outputs.id }}
@@ -267,13 +273,27 @@ jobs:
           accepted=json.load(open('/tmp/prediction-lab-accepted.json')) if pathlib.Path('/tmp/prediction-lab-accepted.json').exists() else []
           volume=os.environ['VOLUME_ID']; project=os.environ['PROJECT_ID']; environment=os.environ['ENVIRONMENT_ID']; service=os.environ['MAIN_SERVICE_ID']
           workers=max(1,min(16,int(os.environ['TRANSFER_WORKERS'])))
-          def acknowledge(item):
-              old=item['remote']; new=old+'.synced'
-              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'rename',old,new,'--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+          max_files=int(os.environ['MAX_FILES'])
+          def remove_acknowledged(item):
+              old=item['remote']
+              subprocess.check_call(['railway','volume','--project',project,'--environment',environment,'--service',service,'files','--volume',volume,'delete',old,'--yes','--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
               return old
           with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-              futures=[pool.submit(acknowledge,item) for item in accepted]
+              futures=[pool.submit(remove_acknowledged,item) for item in accepted]
               for future in concurrent.futures.as_completed(futures):
                   future.result()
-          print(f'acknowledged files={len(accepted)}')
+          count=len(accepted)
+          print(f'acknowledged_and_removed files={count}')
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as handle:
+              handle.write(f'count={count}\n')
+              handle.write(f'continue_drain={"true" if count >= max(100, max_files // 2) else "false"}\n')
           PY
+
+      - name: Continue draining a saturated backlog
+        if: steps.acknowledge.outputs.continue_drain == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "Large acknowledged batch removed; dispatching the next bounded drain pass."
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/prediction-lab-sync.yml/dispatches" -f ref=main

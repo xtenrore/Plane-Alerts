@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.6.7**  
+**Current code version: Plane Alerts v5.6.8**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,14 @@ ADS-B ingestion
 Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.6.8 — Repository-Acknowledged Spool Drain
+
+v5.6.8 completes the storage-recovery path for a Prediction Lab volume that has already reached zero free bytes. Each bounded sync batch is still validated and pushed to `prediction-lab-data` first; only then are the exact repository-acknowledged remote objects removed from the Railway volume with a confirmed non-interactive delete.
+
+A workflow-file merge to `main` bootstraps an immediate drain pass so emergency recovery does not rely only on delayed scheduled execution. Large successful batches dispatch another bounded pass, while workflow concurrency keeps drain passes serialized and the chain stops automatically once the backlog is no longer large. The five-minute schedule remains the steady-state fallback.
+
+The v5.6.7 low-space backpressure and lossless NDJSON compaction remain active. No route-history SQLite, notification-history SQLite, state, user/profile/location/settings or durable application data is selected for cleanup. No trajectory, CPA, ETA, confidence, destination/path qualification, cancellation or alert-timing behavior changes in v5.6.8; the physical prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.6.7 — Prediction Lab Spool Drain & Storage Backpressure
 
