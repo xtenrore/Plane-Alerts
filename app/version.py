@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.4"
+VERSION = "5.6.5"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -38,6 +38,9 @@ VERSION = "5.6.4"
 # v5.6.4 makes the v5.6.3 operational-Mongo retirement strictly idempotent so
 # completed cleanup never reopens Mongo, re-drops retired collections or emits
 # repeated retirement logs during normal notification processing.
+# v5.6.5 restores and maintains persistent-volume headroom by pruning only
+# repository-acknowledged *.synced Prediction Lab evidence; unsynced evidence,
+# route/notification SQLite data and durable application data remain untouched.
 # No v5.6.x storage patch changes trajectory, CPA, ETA, qualification,
 # cancellation, destination-path logic or alert timing.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
