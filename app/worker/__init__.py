@@ -81,15 +81,17 @@ if "pytest" not in sys.modules:
 
     install_cadence_due_guard_v424()
 
-    # v4.8 installs last so it can replace only the remaining storage-facing
-    # hooks from v4.2.3/v4.4. Prediction, destination/path and notification
-    # semantics are deliberately left untouched.
+    # v4.8 installs late so it can replace only remaining storage-facing hooks.
     from app.worker.storage_guard_v48 import install_storage_guard_v48
 
     install_storage_guard_v48()
 
-    # Notification telemetry is integrated directly in notifications.py and
-    # runs through its own bounded post-delivery queue. Do not wrap it again.
+    # v5.6.2 owns all short-lived/high-churn operational state. Install after
+    # v4.8 so its bounded queues remain intact while their persistence target is
+    # swapped from Mongo to the Plane Alerts persistent volume.
+    from app.operational_state_patch_v562 import install_operational_state_v562
+
+    install_operational_state_v562()
 
     # app.main imports the Telegram modules before app.worker. Install the
     # interaction layer only in that runtime shape to avoid pulling bot/UI code
