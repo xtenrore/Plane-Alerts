@@ -1,0 +1,19 @@
+{
+  "schema":"plane-alerts-prediction-case-v1",
+  "case_id":"infra-file-spool-write-failure-20260925T0704Z",
+  "category":["infrastructure","prediction_lab_evidence_loss","file_spool_write_failure"],
+  "status":"unchecked",
+  "source":"Railway production logs fallback",
+  "observed_interval":{"start":"2026-09-25T07:01:11Z","end":"2026-09-25T07:06:29Z"},
+  "evidence":[
+    "Repeated prediction_lab_file_write_failed kind=prediction across normal monitor cycles",
+    "prediction_lab_file_write_failed kind=sentinel_poll at 07:02:21, 07:04:22 and 07:04:51 UTC",
+    "prediction_lab_file_write_failed kind=outcome immediately after THY2MH/4ba9c1 cancellation at 07:03:25 UTC",
+    "Repeated prediction_lab_file_write_failed kind=shadow_evaluation immediately after that outcome",
+    "File-backed failures continued through at least 07:06:29 UTC"
+  ],
+  "impact":"The authoritative file spool is failing to persist prediction, outcome, sentinel and shadow evidence. Normal sync cannot be treated as complete; Railway logs are required as fallback and missing persisted evidence is evidence-loss unknown.",
+  "monitor_cadence_control":{"timestamp":"2026-09-25T07:06:04Z","start_interval_p50_ms":5000.2,"start_interval_p95_ms":5001.2,"start_interval_p99_ms":5002.7,"max_ms":5009.0,"prediction_p95_ms":5.3},
+  "classification":"infrastructure evidence-loss incident; does not by itself classify any aircraft prediction as success or failure",
+  "privacy":"No user identity or observer coordinates persisted."
+}
