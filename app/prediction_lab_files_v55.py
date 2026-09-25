@@ -7,6 +7,7 @@ GitHub Actions sync job moves completed files to the prediction-lab-data branch.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import logging
@@ -17,6 +18,8 @@ import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from app.prediction_lab_spool_v567 import compact_unsynced_raw, log_pressure, pressure_snapshot, should_write
 
 logger = logging.getLogger(__name__)
 
@@ -239,10 +242,27 @@ def write_evidence(doc: dict[str, Any], *, root: Path | None = None) -> Path:
 
 
 async def append_evidence(doc: dict[str, Any], *, root: Path | None = None) -> Path | None:
+    base = root_path() if root is None else root
+    kind = doc.get("kind")
+    allowed, reason, free = await asyncio.to_thread(should_write, kind, root=base)
+    if not allowed:
+        # Compaction is evidence-preserving and bounded. At zero headroom it is a
+        # no-op; once the repository sync frees a small amount of space it starts
+        # turning thousands of tiny raw files into efficiently drainable NDJSON.
+        await asyncio.to_thread(compact_unsynced_raw, root=base)
+        log_pressure(kind, reason, free)
+        return None
     try:
-        return await asyncio.to_thread(write_evidence, doc, root=root)
+        return await asyncio.to_thread(write_evidence, doc, root=base)
+    except OSError as exc:
+        if exc.errno == errno.ENOSPC:
+            await asyncio.to_thread(compact_unsynced_raw, root=base)
+            log_pressure(kind, "enospc", 0)
+            return None
+        logger.exception("prediction_lab_file_write_failed kind=%s", kind)
+        return None
     except Exception:
-        logger.exception("prediction_lab_file_write_failed kind=%s", doc.get("kind"))
+        logger.exception("prediction_lab_file_write_failed kind=%s", kind)
         return None
 
 
@@ -250,6 +270,7 @@ def spool_snapshot(root: Path | None = None) -> dict[str, Any]:
     base = root_path() if root is None else root
     state = migration_state(base)
     result = dict(_stats)
+    result.update(pressure_snapshot())
     result.update({"root": str(base), "migration_verified": bool(state.get("verified")), "migration_dropped": bool(state.get("legacy_collections_dropped")), "migration_counts": state.get("collections", {})})
     return result
 

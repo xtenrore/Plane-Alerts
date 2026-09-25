@@ -30,7 +30,7 @@ def _config(**overrides: object) -> Settings:
 
 
 def test_runtime_uses_current_minor_release_version() -> None:
-    assert VERSION == "5.6.6"
+    assert VERSION == "5.6.7"
 
 
 def test_community_runtime_installs_receiver_guard_before_loading_main() -> None:

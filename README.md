@@ -4,7 +4,7 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.6**  
+**Current code version: Plane Alerts v5.6.7**  
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
@@ -27,6 +27,14 @@ ADS-B ingestion
 Destination provider calls never block the five-second monitoring loop. Provider metadata only supplies intended airport information; deterministic live geometry decides whether that destination is compatible with a genuine observer pass. Provider outage or genuinely ambiguous conflict safely falls back to live trajectory behavior; when disagreement contains one clearly supported nearby terminal destination and a materially distant alternative, live terminal geometry may resolve the conflict without trusting provider priority. Historical route samples and airport/runway inference remain available for Prediction Lab, analytics and diagnostics, but they are not live alert authorities.
 
 Non-critical persistence, photography enrichment, historical learning and Prediction Lab evidence are isolated from the five-second monitoring path. A slow provider, database query, filesystem write or analytical service must not unnecessarily delay live aircraft evaluation.
+
+## v5.6.7 — Prediction Lab Spool Drain & Storage Backpressure
+
+v5.6.7 fixes the persistent-volume failure exposed after v5.6.6. The Prediction Lab repository sync now parses Railway's volume-relative file listing directly, drains bounded evidence batches every five minutes, and supports lossless NDJSON bundles so a large raw backlog can be synchronized efficiently.
+
+Optional Prediction Lab telemetry now reserves disk headroom for operational storage. Routine analytical snapshots are shed before the volume reaches the critical reserve, all optional evidence is shed at critical pressure, and repeated low-space/ENOSPC failures are rate-limited instead of generating traceback storms. Unsynced evidence is never deleted merely to make space: raw JSON may be atomically compacted into a verified NDJSON bundle, with originals removed only after the bundle has been written and read back successfully. Repository acknowledgement still happens only after validation and a successful Git push.
+
+No trajectory, CPA, ETA, confidence, destination/path qualification, cancellation or alert-timing behavior changes in v5.6.7. The physical prediction version remains `5.3-3d-proximity-age-aware`.
 
 ## v5.6 — Retired Integration Cleanup
 
