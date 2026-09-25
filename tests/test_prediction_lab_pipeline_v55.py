@@ -30,7 +30,8 @@ def test_prediction_data_branch_cannot_trigger_production_deploy():
 def test_sync_is_bounded_and_acknowledges_only_after_successful_push():
     text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
     assert "prediction-lab-data" in text
-    assert 'MAX_FILES: "80"' in text and 'MAX_BYTES: "26214400"' in text
+    assert 'MAX_FILES: "500"' in text and 'MAX_BYTES: "26214400"' in text
+    assert 'cron: "*/5 * * * *"' in text
     assert "git pull --rebase" in text and "git push origin HEAD:prediction-lab-data" in text
     acknowledgement = "new=old+'.synced'"
     assert acknowledgement in text
