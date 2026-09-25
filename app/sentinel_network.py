@@ -166,6 +166,13 @@ async def _record_region(region: SentinelRegion, aircraft: list[Any], provider_n
 
 
 async def _ensure_migration() -> bool:
+    # Railway v5.6.1+ marks the persistent file spool authoritative before this
+    # coroutine runs. In that mode the legacy Mongo exporter is retired: retrying
+    # a historical export against a full/slow Atlas cluster must never affect
+    # live sentinel collection or flood production logs.
+    if migration_verified():
+        logger.info("prediction_lab_migration_retired file_backed_authoritative=true mongo_operational_writes=false")
+        return True
     try:
         state = await migrate_prediction_lab_mongo(get_db())
         verified = bool(state.get("verified")); dropped = bool(state.get("legacy_collections_dropped"))
