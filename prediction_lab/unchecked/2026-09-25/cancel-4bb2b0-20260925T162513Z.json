@@ -1,0 +1,28 @@
+{
+  "case_id":"cancel-4bb2b0-20260925T162513Z",
+  "kind":"approach_alert_cancelled",
+  "status":"unchecked",
+  "classification":"rapid_requalification_investigation_candidate",
+  "source":"railway_production_logs_fallback",
+  "icao":"4bb2b0",
+  "callsign":"THY5SX",
+  "event_time_utc":"2026-09-25T16:25:13.387Z",
+  "stable_cpa_km":2.5890066731050685,
+  "new_cpa_km":15.86,
+  "confirmations":3,
+  "route_veto_at_cancel":false,
+  "trajectory":[
+    {"time_utc":"2026-09-25T16:24:43.647Z","stable_cpa_km":2.5890066731050685,"candidate_cpa_km":9.65,"state":"Will not approach","confirmation":"0/3","route_veto":false},
+    {"time_utc":"2026-09-25T16:24:53.761Z","stable_cpa_km":2.5890066731050685,"candidate_cpa_km":18.42,"state":"Will not approach","confirmation":"1/3","route_veto":false},
+    {"time_utc":"2026-09-25T16:25:03.568Z","stable_cpa_km":2.5890066731050685,"candidate_cpa_km":14.99,"state":"Will not approach","confirmation":"2/3","route_veto":false},
+    {"time_utc":"2026-09-25T16:25:12.284Z","stable_cpa_km":2.5890066731050685,"candidate_cpa_km":14.99,"state":"Will not approach","confirmation":"2/3","route_veto":false},
+    {"time_utc":"2026-09-25T16:25:13.387Z","stable_cpa_km":2.5890066731050685,"candidate_cpa_km":15.86,"state":"cancelled","confirmation":"3/3","route_veto":false}
+  ],
+  "prior_lifecycle":{"cancel_time_utc":"2026-09-25T16:23:08.423Z","stable_cpa_km":5.855735372803716,"new_cpa_km":15.87,"route_veto":false},
+  "route_veto_history":[{"time_utc":"2026-09-25T16:14:43.024Z","destination":"","reason":"destination lookup pending in background; initial alert held without blocking"}],
+  "destination_resolution":"not observed in retrieved event-specific Railway interval after pending lookup",
+  "telegram_alert_existed":"not determinable from retrieved logs",
+  "adsb_quality":{"assessment":"degraded/stale observations before and after lifecycles; subsequent reality not safely scoreable"},
+  "subsequent_reality":"inconclusive",
+  "notes":"Second distinct cancellation approximately 125 seconds after the prior cancellation. Strong qualify/requalify oscillation candidate; not a proven bug until replay/subsequent reality supports it."
+}
