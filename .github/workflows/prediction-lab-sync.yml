@@ -31,7 +31,7 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       MAX_FILES: "500"
       MAX_BYTES: "26214400"
-      REQUIRED_BRIDGE_VERSION: "5.6.10"
+      REQUIRED_BRIDGE_VERSION: "5.6.11"
     steps:
       - name: Checkout evidence branch
         uses: actions/checkout@v4
@@ -115,21 +115,34 @@ jobs:
           set -euo pipefail
           ADMIN_PASSWORD="$(cat /tmp/plane-alerts-admin-password)"
           SERVICE_URL="$(cat /tmp/plane-alerts-service-url)"
-          curl --fail --silent --show-error --connect-timeout 5 --max-time 180 --retry 2 \
+          HTTP_CODE="$(curl --silent --show-error --connect-timeout 5 --max-time 180 --retry 2 \
             --user "plane-alerts-sync:${ADMIN_PASSWORD}" \
+            --write-out '%{http_code}' \
             "$SERVICE_URL/admin/api/prediction-lab/sync-batch?max_files=$MAX_FILES&max_bytes=$MAX_BYTES" \
-            --output /tmp/prediction-lab-batch.zip
+            --output /tmp/prediction-lab-batch.zip)"
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Prediction Lab sync batch request failed with HTTP $HTTP_CODE"
+            python - <<'PY'
+          import json, pathlib
+          path=pathlib.Path('/tmp/prediction-lab-batch.zip')
+          try:
+              payload=json.loads(path.read_text(encoding='utf-8'))
+          except Exception:
+              print('Prediction Lab bridge returned a non-JSON error body.')
+          else:
+              print('Prediction Lab bridge detail:', payload.get('detail','unknown'))
+          PY
+            exit 1
+          fi
 
       - name: Independently validate and stage evidence
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, pathlib, re, shutil, zipfile
+          import hashlib, json, pathlib, re, zipfile
 
           archive=pathlib.Path('/tmp/prediction-lab-batch.zip')
-          incoming=pathlib.Path('/tmp/prediction-lab-incoming')
-          incoming.mkdir(parents=True,exist_ok=True)
           repo_root=pathlib.Path('prediction_lab')
           max_files=int('${{ env.MAX_FILES }}')
           max_bytes=int('${{ env.MAX_BYTES }}')
@@ -204,7 +217,7 @@ jobs:
                   raise SystemExit('unexpected ZIP members rejected')
 
           pathlib.Path('/tmp/prediction-lab-accepted.json').write_text(json.dumps(accepted,sort_keys=True),encoding='utf-8')
-          print(f'validated files={len(accepted)} bytes={total}')
+          print(f"validated files={len(accepted)} bytes={total} scanned={manifest.get('scanned_files')} rejected={manifest.get('rejected_files')} rejected_by_reason={manifest.get('rejected_by_reason')} deferred={manifest.get('deferred_for_batch_limit')}")
           PY
           git config user.name "plane-alerts-evidence"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
