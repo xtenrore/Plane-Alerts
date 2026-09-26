@@ -65,8 +65,8 @@ def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     assert "  self-hosting:" not in workflow
     assert "docker/setup-qemu-action" not in workflow
     assert "--platform linux/arm64" not in workflow
-    assert "Run v5.5.4 destination-path arrival regressions" in workflow
-    assert "Benchmark v5.5.4 non-blocking destination path gate" in workflow
+    assert "Run canonical route guard destination-path regressions" in workflow
+    assert "Benchmark canonical non-blocking route guard" in workflow
 
 
 def test_community_matrix_is_manual_and_owned_by_chatgpt_weekly_task():

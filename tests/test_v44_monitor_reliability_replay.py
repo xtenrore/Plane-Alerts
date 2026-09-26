@@ -3,81 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.intelligence.route_guard_v42 import ArrivalAssessment, EncounterState, _apply_qualification
 from app.intelligence.route_history import RouteGateResult
 from app.intelligence.trajectory import HistorySample
 from app.worker import monitor
-
-
-def _assessment(score: float = 0.90) -> ArrivalAssessment:
-    return ArrivalAssessment(
-        terminal_state="NOT_TERMINAL",
-        terminal_score=0.1,
-        pass_score=score,
-        median_cpa_km=4.0,
-        p10_cpa_km=3.0,
-        p90_cpa_km=5.0,
-        prediction_spread_km=2.0,
-        expected_turn_state="NONE",
-        expected_turn_direction="",
-        expected_turn_eta_s=None,
-        airport_path_cpa_km=None,
-        historical_match_score=0.0,
-        historical_cluster="none",
-        live_pass_score=score,
-        hypotheses=(),
-    )
-
-
-def test_same_observation_cannot_double_count_shared_confirmation():
-    """Two user evaluations of the same ADS-B sample must count as one confirmation."""
-    encounter = EncounterState(last_seen_mono=100.0, first_seen_mono=100.0)
-    prediction = SimpleNamespace(
-        stale=False,
-        already_passed=False,
-        state="Approaching",
-        time_to_cpa_s=170.0,
-        distance_trend_km_s=-0.03,
-    )
-    base = RouteGateResult(False, "THY1017", "live CPA remains authoritative")
-
-    first = _apply_qualification(
-        base=base,
-        assessment=_assessment(),
-        encounter=encounter,
-        pred=prediction,
-        current_distance_km=15.0,
-        radius_km=8.0,
-        active=False,
-        now_mono=100.0,
-        observed_at=1_000.0,
-    )
-    repeated = _apply_qualification(
-        base=base,
-        assessment=_assessment(),
-        encounter=encounter,
-        pred=prediction,
-        current_distance_km=14.8,
-        radius_km=8.0,
-        active=False,
-        now_mono=105.0,
-        observed_at=1_000.0,
-    )
-    fresh = _apply_qualification(
-        base=base,
-        assessment=_assessment(),
-        encounter=encounter,
-        pred=prediction,
-        current_distance_km=14.2,
-        radius_km=8.0,
-        active=False,
-        now_mono=110.0,
-        observed_at=1_005.0,
-    )
-
-    assert first == (True, "TRAJECTORY_CONFIRMING", 1)
-    assert repeated == (True, "TRAJECTORY_CONFIRMING", 1)
-    assert fresh == (False, "QUALIFIED_PASS", 2)
 
 
 class _ApproachStates:
@@ -195,13 +123,10 @@ async def test_failed_cancellation_delivery_retries_without_closing_alert(monkey
         velocity=130.0,
     )
 
-    # First cancellation delivery fails: the persisted alert must remain active.
     await monitor._match_user_aircraft(user, [aircraft], {})
     assert len(send_calls) == 1
     assert states.updates == []
 
-    # The next evaluation retries the same logical cancellation. Only a
-    # successful Telegram delivery is allowed to close the encounter.
     await monitor._match_user_aircraft(user, [aircraft], {})
     assert len(send_calls) == 2
     assert len(states.updates) == 1

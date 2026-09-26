@@ -1,13 +1,9 @@
 """Bound route-history persistence behind a small fixed worker queue.
 
 Route samples are useful telemetry, but they must never create one asyncio task
-per visible aircraft or compete with live alert work. Production verification
-showed the v2 per-callsign task pool repeatedly filling all 24 slots even after
-individual Mongo writes were given timeouts.
-
-This layer replaces that fan-out with a bounded, deduplicated queue and a fixed
-number of workers. Queue overflow or stale queued samples are safely dropped;
-route history can recover on a later observation and never controls live CPA.
+per visible aircraft or compete with live alert work. This layer keeps the
+background route-history writer bounded, deduplicated and isolated from the
+live alert path.
 """
 from __future__ import annotations
 
@@ -18,8 +14,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.config import settings
-from app.intelligence import route_guard_v2 as v2
 from app.intelligence import route_history as route_mod
+from app.intelligence.route_intelligence_v46 import observe_v46
 from app.intelligence.trajectory import haversine_km
 
 logger = logging.getLogger(__name__)
@@ -29,7 +25,7 @@ _OBSERVE_WORKERS = 6
 _OBSERVE_QUEUE_LIMIT = 96
 _MAX_QUEUE_AGE_S = 20.0
 _QUEUE_FULL_LOG_INTERVAL_S = 30.0
-_BASE_OBSERVE = v2._ORIGINAL_OBSERVE
+_BASE_OBSERVE = observe_v46
 _INSTALLED = False
 
 
@@ -122,8 +118,6 @@ async def observe_queued(
     if key in queued_keys:
         return
 
-    # Keep only the fields RouteHistoryService.observe consumes so queued work
-    # cannot retain a large/mutable provider object graph.
     snapshot = SimpleNamespace(
         callsign=key,
         latitude=lat,
@@ -151,8 +145,6 @@ def install_route_observe_guard_v44() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    # v2 is installed first, then this replaces its per-callsign task fan-out
-    # with a fixed queue. Evaluation/route-lookup behavior remains untouched.
     route_mod.RouteHistoryService.observe = observe_queued
     _INSTALLED = True
     logger.info(

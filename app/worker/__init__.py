@@ -65,7 +65,10 @@ if "pytest" not in sys.modules:
 
     install_operational_storage_policy_v563()
 
-    from app.intelligence.destination_path_guard_v554 import install_destination_path_guard
+    # v5.8.2 makes the live provider-first destination/path authority the single
+    # canonical route-guard module. This is the same deterministic implementation
+    # previously shipped as destination_path_guard_v554.
+    from app.intelligence.route_guard import install_destination_path_guard
 
     install_destination_path_guard()
 

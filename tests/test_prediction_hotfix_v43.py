@@ -6,12 +6,7 @@ import pytest
 
 from app.intelligence.direct_presence_guard_v44 import _confirmed_fresh_direct_presence
 from app.intelligence.lifecycle import should_cancel_active_alert
-from app.intelligence.requalification_guard_v43 import (
-    CancellationLatch,
-    _apply_latch,
-)
 from app.intelligence import route_observe_guard_v44
-from app.intelligence.route_guard_v42 import RouteGateResultV42
 from app.intelligence.trajectory import HistorySample
 from app.intelligence.trajectory_hotfix_v43 import (
     _midpoint_motion_step,
@@ -32,66 +27,6 @@ def test_low_confidence_turn_away_can_accumulate_cancellation_evidence():
         confidence_score=0.20,
     )
     assert should_cancel_active_alert(prediction, 5.0, 9.0)
-
-
-def test_cancelled_encounter_cannot_predictively_requalify_until_inside_radius():
-    state = CancellationLatch(last_seen_mono=0.0)
-    outside = SimpleNamespace(stale=False, current_distance_km=12.0)
-    suppressed = RouteGateResultV42(
-        suppress_alert=True,
-        callsign="THY1017",
-        reason="v4.2 ACTIVE_BELOW_CANCEL_HYSTERESIS",
-        qualification_state="ACTIVE_BELOW_CANCEL_HYSTERESIS",
-    )
-
-    for _ in range(2):
-        result = _apply_latch(
-            suppressed,
-            pred=outside,
-            encounter_was_qualified=True,
-            state=state,
-            radius_km=9.0,
-        )
-        assert result.suppress_alert
-        assert not state.latched
-
-    result = _apply_latch(
-        suppressed,
-        pred=outside,
-        encounter_was_qualified=True,
-        state=state,
-        radius_km=9.0,
-    )
-    assert state.latched
-    assert result.qualification_state == "CANCEL_LATCHED"
-
-    recovered_prediction = RouteGateResultV42(
-        suppress_alert=False,
-        callsign="THY1017",
-        reason="v4.2 QUALIFIED_PASS",
-        qualification_state="QUALIFIED_PASS",
-    )
-    result = _apply_latch(
-        recovered_prediction,
-        pred=outside,
-        encounter_was_qualified=True,
-        state=state,
-        radius_km=9.0,
-    )
-    assert result.suppress_alert
-    assert result.qualification_state == "CANCEL_LATCHED"
-
-    inside = SimpleNamespace(stale=False, current_distance_km=8.8)
-    result = _apply_latch(
-        recovered_prediction,
-        pred=inside,
-        encounter_was_qualified=True,
-        state=state,
-        radius_km=9.0,
-    )
-    assert not result.suppress_alert
-    assert not state.latched
-    assert state.suppress_count == 0
 
 
 def test_midpoint_step_uses_average_speed_and_heading():
@@ -301,7 +236,7 @@ async def test_route_history_queue_uses_fixed_workers_and_dedupes(monkeypatch):
     await asyncio.gather(*workers, return_exceptions=True)
 
 
-def test_route_history_guard_replaces_v2_task_fanout_with_queue():
+def test_route_history_guard_uses_fixed_bounded_queue():
     source = Path("app/intelligence/route_observe_guard_v44.py").read_text()
     assert "RouteHistoryService.observe = observe_queued" in source
     assert "asyncio.Queue(maxsize=_OBSERVE_QUEUE_LIMIT)" in source

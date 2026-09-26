@@ -60,7 +60,7 @@ jobs:
         run: pytest -q tests/test_interaction_v46.py
 
       - name: Run v4.7 airport, runway and Error Museum suite
-        run: pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_route_guard_v47.py tests/test_error_museum_v47.py
+        run: pytest -q tests/test_airport_terminal_v47.py tests/test_runway_data_v47.py tests/test_error_museum_v47.py
 
       - name: Run v4.7.1 global airport data suite
         run: pytest -q tests/test_global_airport_data_v471.py
@@ -98,8 +98,8 @@ jobs:
       - name: Run v5.5 file-backed Prediction Lab, migration, pipeline and cadence suite
         run: pytest -q tests/test_prediction_lab_files_v55.py tests/test_prediction_lab_pipeline_v55.py tests/test_next60_file_history_v55.py tests/test_prediction_lab_cadence_v55.py tests/test_next60_outcomes_v55.py tests/test_startup_storage_maintenance_v553.py
 
-      - name: Run v5.5.4 destination-path arrival regressions
-        run: pytest -q tests/test_destination_path_guard_v554.py tests/test_error_museum_v42.py
+      - name: Run canonical route guard destination-path regressions
+        run: pytest -q tests/test_route_guard.py tests/test_route_guard_architecture.py tests/test_error_museum_v42.py
 
       - name: Benchmark v4.2 terminal-arrival ensemble
         run: python scripts/benchmark_v42.py
@@ -146,7 +146,7 @@ jobs:
       - name: Benchmark v5.5 Prediction Lab atomic persistence
         run: python scripts/benchmark_v55_prediction_lab.py
 
-      - name: Benchmark v5.5.4 non-blocking destination path gate
+      - name: Benchmark canonical non-blocking route guard
         run: python scripts/benchmark_v554_destination_path.py
 
       - name: Verify dependency consistency

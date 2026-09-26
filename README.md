@@ -4,22 +4,23 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.1**
+**Current code version: Plane Alerts v5.8.2**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v5.8.1 — Telegram detail and recovery reliability
+## v5.8.2 — Route guard consolidation
 
-The Next 60 Minutes **More Info** action now opens aircraft details correctly with a Flightradar24 button. The callback installed at startup had retained a removed tracker helper after v5.8.0, causing an exception whenever a matching aircraft was found.
+The live provider-first destination/path authority now lives in one canonical non-versioned `app/intelligence/route_guard.py` module. The v5.8.1 production decision behavior is preserved; this release removes obsolete route-guard generations and compatibility shims that were no longer mounted by the live worker.
 
-- Failed detail requests can be retried; successfully delivered requests remain deduplicated.
-- Callback acknowledgement records remain bounded and expired records are removed. Failed acknowledgements do not count as successful latency samples.
-- Unexpected Telegram errors provide a recovery message. Logs include bounded code locations without recording message contents, exception text, credentials or private coordinates.
-- Aircraft links continue to use callsign-based Flightradar24 URLs, with the aircraft-data page as the ICAO24-only fallback.
+- Production startup imports only the canonical route guard.
+- Historical v2, v4.2 and v4.7 route-guard modules and the obsolete requalification/arrival compatibility shims are removed.
+- Architecture tests prevent removed guard generations from being imported again.
+- Regression coverage preserves IST/LTFM and LTBA terminal-arrival protection, genuine observer passes, provider conflict/outage fail-open behavior, late destination resolution, go-around/diversion recovery, physical-radius override and missing/stale evidence semantics.
+- The non-blocking destination lookup benchmark remains part of Railway CI and continues to protect the five-second monitoring path.
 
-This Railway patch preserves the existing trajectory, CPA, ETA, qualification, cancellation and alert-timing behavior. Community platform validation remains part of the weekly community release.
+This Railway release changes architecture only. The prediction version and deterministic trajectory, CPA, ETA, qualification/cancellation thresholds and alert timing remain unchanged. Community platform validation remains part of the weekly community release.
 
 ## Real-time architecture
 

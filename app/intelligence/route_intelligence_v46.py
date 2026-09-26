@@ -1,8 +1,8 @@
 """Plane Alerts v4.6 decayed route evidence and bounded route clustering.
 
-Route history is built in the existing background refresh path.  Live geometry
-remains authoritative: history and destination context may reduce certainty, but
-old routes and destination labels are not hard physical vetoes.
+Route history is built in the existing background refresh path. Live geometry
+remains authoritative: history and destination context are supporting analytics
+and must not become a second live route-guard authority.
 """
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from typing import Any, Iterable
 
 from app.config import settings
 from app.database import get_db
-from app.intelligence import route_guard_v2 as v2
-from app.intelligence import route_guard_v42 as v42
 from app.intelligence import route_history as route_mod
 from app.intelligence.trajectory import haversine_km
 
@@ -143,7 +141,7 @@ async def historical_paths_v46(
     *,
     now: datetime | None = None,
 ) -> RouteHistoryBundle:
-    """Load and cluster bounded history. Called by v2 only in a background task."""
+    """Load and cluster bounded history for analytics and shadow evidence."""
     current = now or datetime.now(timezone.utc)
     wanted = [
         (current.date() - timedelta(days=offset)).isoformat()
@@ -215,7 +213,7 @@ def history_features_v46(
     aircraft_lat: float,
     aircraft_lon: float,
 ) -> tuple[float, str, float | None]:
-    """Return decayed, cluster-aware supporting evidence for the v4.2 ensemble."""
+    """Return decayed, cluster-aware supporting route evidence."""
     current = route_mod._clean_points(current_path)
     if len(current) < 2:
         return 0.0, "none", None
@@ -277,8 +275,6 @@ def history_features_v46(
     elif len(cluster_rows) == 1:
         label = "single-route-cluster"
     else:
-        # Contradictory clusters are intentionally weaker than one stable
-        # route family. Do not emit percentages for small or ambiguous samples.
         outcomes: set[bool] = set()
         for _, _, weight, future in cluster_rows:
             if weight < total_decayed * 0.18 or not future:
@@ -291,7 +287,6 @@ def history_features_v46(
             match_score *= max(0.70, min(1.0, dominance + 0.20))
             label = "multiple-clusters"
 
-    # Very old history fades naturally and can never dominate current geometry.
     freshness_weight = min(1.0, total_decayed / max(1.0, min(4.0, sample_count)))
     match_score *= max(0.35, freshness_weight)
     history_cpa = _weighted_median(all_future)
@@ -299,6 +294,7 @@ def history_features_v46(
 
 
 def neutralize_hard_route_veto_v46(result: route_mod.RouteGateResult) -> route_mod.RouteGateResult:
+    """Compatibility helper retained for historical analytics/replay code only."""
     reason = str(result.reason or "").lower()
     unsafe_history = (
         "today's route diverges" in reason
@@ -311,8 +307,7 @@ def neutralize_hard_route_veto_v46(result: route_mod.RouteGateResult) -> route_m
             suppress_alert=False,
             expected_turn_pending=bool(destination_only),
             reason=(
-                "terminal destination/history is supporting uncertainty evidence; "
-                "live geometry remains authoritative"
+                "terminal destination/history is supporting uncertainty evidence; live geometry remains authoritative"
                 if destination_only
                 else "historical routes are inconsistent/diverged; live trajectory regains authority"
             ),
@@ -324,10 +319,7 @@ def install_route_intelligence_v46() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    # v2 invokes _ORIGINAL_OBSERVE in its bounded background writer. Repoint
-    # that function rather than replacing the non-blocking public observe hook.
-    v2._ORIGINAL_OBSERVE = observe_v46
+    # Route clustering/history remains available to Prediction Lab, Next 60 and
+    # diagnostics. It no longer patches any historical live route-guard layer.
     route_mod.RouteHistoryService._historical_paths = historical_paths_v46
-    v42._history_features = history_features_v46
-    v42._neutralize_unsafe_history_veto = neutralize_hard_route_veto_v46
     _INSTALLED = True

@@ -1,22 +1,17 @@
-"""Destination-aware route guard for Plane? predictive approach alerts.
+"""Single provider-first destination/path authority for live approach alerts.
 
-This guard fixes a specific class of false positives near major airports: a simple
-short-horizon CPA extrapolation can extend an arriving aircraft through the
-observer even though the flight is about to turn toward its known destination.
-
-The guard is deliberately conservative:
-* live geometry still creates the candidate;
-* flight-route data may only veto a projected alert, never create one;
-* a fresh aircraft physically inside the user's radius always wins;
-* route lookup has a short grace period and then fails open, so a provider
-  outage cannot permanently silence alerts.
+Route history and runway inference remain useful diagnostics, but they do not decide
+live alert qualification here. Destination lookups are bounded background work:
+the five-second monitor never awaits an external route provider.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
-from dataclasses import replace
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Iterable
 from urllib.parse import quote
 
@@ -27,33 +22,48 @@ from app.intelligence.trajectory import bearing_deg, haversine_km
 
 logger = logging.getLogger(__name__)
 
-_ADSB_IM_ROUTESET = "https://adsb.im/api/0/routeset"
 _ADSBDB_CALLSIGN = "https://api.adsbdb.com/v0/callsign"
-_SOURCE_TIMEOUT_S = 2.2
-_NEGATIVE_CACHE_S = 20.0
-_INITIAL_ROUTE_GRACE_S = 12.0
-_TERMINAL_DESTINATION_KM = 160.0
-_TERMINAL_ALTITUDE_M = 8000.0
+_LOOKUP_TIMEOUT_S = 2.2
+_NEGATIVE_TTL_S = 30.0
+_CONFLICT_TTL_S = 60.0
+_MAX_CACHE = 4096
+_MAX_INFLIGHT = 24
+_MAX_CONCURRENT = 4
+_TERMINAL_CONTEXT_KM = 180.0
+_TERMINAL_ALTITUDE_M = 8500.0
+_LANDING_AREA_KM = 5.0
+_AIRPORT_FIRST_MARGIN_S = 35.0
+_INSTALLED = False
 
 
-def _angle_delta(a: float, b: float) -> float:
-    return (a - b + 180.0) % 360.0 - 180.0
+@dataclass(slots=True, frozen=True)
+class DestinationResolution:
+    route: route_mod.FlightRouteInfo
+    source: str
+    authority: str
 
 
-def _airport_from_adsbdb(raw: Any) -> route_mod.AirportInfo | None:
-    if not isinstance(raw, dict):
-        return None
-    try:
-        lat = float(raw["latitude"]) if raw.get("latitude") is not None else None
-        lon = float(raw["longitude"]) if raw.get("longitude") is not None else None
-    except (TypeError, ValueError):
-        lat = lon = None
-    return route_mod.AirportInfo(
-        icao=str(raw.get("icao_code") or "").upper(),
-        iata=str(raw.get("iata_code") or "").upper(),
-        name=str(raw.get("name") or ""),
-        latitude=lat,
-        longitude=lon,
+@dataclass(slots=True)
+class CacheEntry:
+    resolution: DestinationResolution | None
+    state: str
+    expires_at: float
+
+
+def _same_airport(
+    a: route_mod.AirportInfo | None,
+    b: route_mod.AirportInfo | None,
+) -> bool:
+    if a is None or b is None:
+        return False
+    codes_a = {value.upper() for value in (a.icao, a.iata) if value}
+    codes_b = {value.upper() for value in (b.icao, b.iata) if value}
+    if codes_a and codes_b:
+        return bool(codes_a & codes_b)
+    return bool(
+        a.name
+        and b.name
+        and a.name.strip().casefold() == b.name.strip().casefold()
     )
 
 
@@ -63,7 +73,7 @@ def _route_is_position_plausible(
     latitude: float,
     longitude: float,
 ) -> bool:
-    """Sanity-check static callsign data against the live aircraft position."""
+    """Reject static callsign rows that are physically unrelated to the live aircraft."""
     if (
         origin is None
         or destination is None
@@ -74,7 +84,9 @@ def _route_is_position_plausible(
     ):
         return False
 
-    to_origin = haversine_km(latitude, longitude, origin.latitude, origin.longitude)
+    to_origin = haversine_km(
+        latitude, longitude, origin.latitude, origin.longitude
+    )
     to_destination = haversine_km(
         latitude, longitude, destination.latitude, destination.longitude
     )
@@ -82,13 +94,57 @@ def _route_is_position_plausible(
         return True
 
     direct = haversine_km(
-        origin.latitude, origin.longitude, destination.latitude, destination.longitude
+        origin.latitude,
+        origin.longitude,
+        destination.latitude,
+        destination.longitude,
     )
     if direct < 25.0:
         return False
     route_via_aircraft = to_origin + to_destination
     excess = max(0.0, route_via_aircraft - direct)
     return excess <= max(180.0, direct * 0.18)
+
+
+def _usable(
+    route: route_mod.FlightRouteInfo | None,
+    latitude: float,
+    longitude: float,
+) -> bool:
+    return bool(
+        route
+        and route.plausible
+        and route.destination
+        and route.destination.latitude is not None
+        and route.destination.longitude is not None
+        and _route_is_position_plausible(
+            route.origin,
+            route.destination,
+            latitude,
+            longitude,
+        )
+    )
+
+
+def _airport_from_adsbdb(raw: Any) -> route_mod.AirportInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        latitude = (
+            float(raw["latitude"]) if raw.get("latitude") is not None else None
+        )
+        longitude = (
+            float(raw["longitude"]) if raw.get("longitude") is not None else None
+        )
+    except (TypeError, ValueError):
+        latitude = longitude = None
+    return route_mod.AirportInfo(
+        icao=str(raw.get("icao_code") or "").upper(),
+        iata=str(raw.get("iata_code") or "").upper(),
+        name=str(raw.get("name") or ""),
+        latitude=latitude,
+        longitude=longitude,
+    )
 
 
 def _route_from_adsbdb(
@@ -114,368 +170,620 @@ def _route_from_adsbdb(
     plausible = _route_is_position_plausible(
         origin, destination, float(latitude), float(longitude)
     )
-    codes = f"{origin.code}-{destination.code}"
     return route_mod.FlightRouteInfo(
         callsign=callsign,
-        airport_codes=codes,
+        airport_codes=f"{origin.code}-{destination.code}",
         plausible=plausible,
         origin=origin,
         destination=destination,
     )
 
 
-async def _fetch_routeset(
-    client: Any,
-    url: str,
-    callsign: str,
-    latitude: float,
-    longitude: float,
-) -> route_mod.FlightRouteInfo | None:
-    response = None
-    try:
-        response = await client.post(
-            url,
-            json={
-                "planes": [
-                    {"callsign": callsign, "lat": latitude, "lng": longitude}
-                ]
-            },
-            timeout=_SOURCE_TIMEOUT_S,
-        )
-        response.raise_for_status()
-        return route_mod._route_info(callsign, response.json())
-    except Exception as exc:
-        logger.info(
-            "route_guard_routeset_failed callsign=%s host=%s status=%s error=%s",
-            callsign,
-            url,
-            getattr(response, "status_code", "na"),
-            type(exc).__name__,
-        )
-        return None
-
-
-async def _fetch_adsbdb(
-    client: Any,
-    callsign: str,
-    latitude: float,
-    longitude: float,
-) -> route_mod.FlightRouteInfo | None:
-    response = None
-    try:
-        response = await client.get(
-            f"{_ADSBDB_CALLSIGN}/{quote(callsign, safe='')}",
-            timeout=_SOURCE_TIMEOUT_S,
-        )
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        return _route_from_adsbdb(
-            callsign,
-            response.json(),
-            latitude=latitude,
-            longitude=longitude,
-        )
-    except Exception as exc:
-        logger.info(
-            "route_guard_adsbdb_failed callsign=%s status=%s error=%s",
-            callsign,
-            getattr(response, "status_code", "na"),
-            type(exc).__name__,
-        )
-        return None
-
-
-def _choose_route(
-    callsign: str,
-    candidates: list[tuple[str, route_mod.FlightRouteInfo | None]],
-) -> tuple[route_mod.FlightRouteInfo | None, str]:
-    usable = [(source, route) for source, route in candidates if route is not None]
-    if not usable:
-        return None, ""
-
-    plausible = [(source, route) for source, route in usable if route.plausible]
-    pool = plausible or usable
-
-    destinations = {
-        (route.destination.code if route.destination else "").upper()
-        for _, route in plausible
-        if route.destination and route.destination.code
-    }
-    if len(destinations) > 1:
-        logger.warning(
-            "route_guard_source_conflict callsign=%s destinations=%s",
-            callsign,
-            ",".join(sorted(destinations)),
-        )
-        return None, "conflict"
-
-    # Source order is intentional: ADSB.im has live-position plausibility,
-    # ADSBdb gives an independent callsign database fallback, and the configured
-    # endpoint remains a compatibility fallback.
-    return pool[0][1], pool[0][0]
-
-
-async def resolve_route_resilient(
-    self: route_mod.RouteHistoryService,
-    ac: Any,
-) -> route_mod.FlightRouteInfo | None:
-    key = route_mod.normalize_flight_key(getattr(ac, "callsign", ""))
-    if (
-        not key
-        or getattr(ac, "latitude", None) is None
-        or getattr(ac, "longitude", None) is None
-    ):
-        return None
-
-    now = time.monotonic()
-    cached = self._route_cache.get(key)
-    if cached:
-        ttl = (
-            max(60, int(settings.route_lookup_cache_seconds))
-            if cached[1] is not None
-            else _NEGATIVE_CACHE_S
-        )
-        if now - cached[0] < ttl:
-            return cached[1]
-
-    latitude = float(ac.latitude)
-    longitude = float(ac.longitude)
-    client = await get_http_client()
-
-    configured = str(getattr(settings, "route_lookup_url", "") or "").strip()
-    source_urls: list[tuple[str, str]] = [("adsb.im", _ADSB_IM_ROUTESET)]
-    if configured and configured.rstrip("/") != _ADSB_IM_ROUTESET.rstrip("/"):
-        source_urls.append(("configured", configured))
-
-    tasks: list[asyncio.Task] = [
-        asyncio.create_task(
-            _fetch_routeset(client, url, key, latitude, longitude),
-            name=f"route:{key}:{source}",
-        )
-        for source, url in source_urls
-    ]
-    tasks.append(
-        asyncio.create_task(
-            _fetch_adsbdb(client, key, latitude, longitude),
-            name=f"route:{key}:adsbdb",
-        )
-    )
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    candidates: list[tuple[str, route_mod.FlightRouteInfo | None]] = []
-    for (source, _), value in zip(source_urls, results[: len(source_urls)]):
-        candidates.append(
-            (source, value if isinstance(value, route_mod.FlightRouteInfo) else None)
-        )
-    adsbdb_value = results[-1]
-    candidates.insert(
-        1,
-        (
-            "adsbdb",
-            adsbdb_value
-            if isinstance(adsbdb_value, route_mod.FlightRouteInfo)
-            else None,
-        ),
-    )
-
-    route, source = _choose_route(key, candidates)
-    self._route_cache[key] = (time.monotonic(), route)
-    sources: dict[str, str] = getattr(self, "_route_guard_sources", {})
-    sources[key] = source
-    self._route_guard_sources = sources
-
-    if route is not None:
-        logger.info(
-            "route_guard_resolved callsign=%s source=%s airports=%s plausible=%s destination=%s",
-            key,
-            source,
-            route.airport_codes,
-            route.plausible,
-            route.destination.code if route.destination else "unknown",
-        )
-    else:
-        logger.warning(
-            "route_guard_unresolved callsign=%s sources=%s",
-            key,
-            ",".join(source for source, _ in candidates),
-        )
-    return route
-
-
-def _point_values(point: Any) -> tuple[float, float, float | None] | None:
-    try:
-        if isinstance(point, dict):
-            lat = float(point.get("latitude", point.get("lat")))
-            lon = float(point.get("longitude", point.get("lon")))
-            horizontal = point.get("horizontal_km")
-        else:
-            lat = float(point.latitude)
-            lon = float(point.longitude)
-            horizontal = getattr(point, "horizontal_km", None)
-        return lat, lon, float(horizontal) if horizontal is not None else None
-    except (TypeError, ValueError, AttributeError):
-        return None
-
-
-def _projected_cpa_destination_distance(
-    projected_path: Iterable[Any] | None,
+def _terminal_candidate(
+    route: route_mod.FlightRouteInfo,
     *,
-    observer_lat: float,
-    observer_lon: float,
-    destination: route_mod.AirportInfo,
-) -> float | None:
+    latitude: float,
+    longitude: float,
+    altitude_m: float | None,
+    vertical_rate_mps: float | None,
+    velocity_mps: float | None,
+) -> tuple[bool, float]:
+    destination = route.destination
     if (
-        projected_path is None
+        destination is None
         or destination.latitude is None
         or destination.longitude is None
     ):
-        return None
-    candidates: list[tuple[float, float, float]] = []
-    for point in projected_path:
-        values = _point_values(point)
-        if values is None:
-            continue
-        lat, lon, horizontal = values
-        if horizontal is None:
-            horizontal = haversine_km(lat, lon, observer_lat, observer_lon)
-        candidates.append((horizontal, lat, lon))
-    if not candidates:
-        return None
-    _, lat, lon = min(candidates, key=lambda item: item[0])
-    return haversine_km(
-        lat,
-        lon,
-        float(destination.latitude),
-        float(destination.longitude),
-    )
-
-
-def evaluate_route_gate_destination_aware(
-    *,
-    callsign: str,
-    current_path: Iterable[Any],
-    historical_paths: Iterable[Iterable[Any]],
-    observer_lat: float,
-    observer_lon: float,
-    alert_radius_km: float,
-    destination: route_mod.AirportInfo | None = None,
-    route_plausible: bool = False,
-    aircraft_lat: float | None = None,
-    aircraft_lon: float | None = None,
-    altitude_m: float | None = None,
-    vertical_rate_mps: float | None = None,
-    speed_kts: float | None = None,
-    time_to_cpa_s: float | None = None,
-    projected_path: Iterable[Any] | None = None,
-    heading_deg: float | None = None,
-) -> route_mod.RouteGateResult:
-    base = route_mod.evaluate_route_gate(
-        callsign=callsign,
-        current_path=current_path,
-        historical_paths=historical_paths,
-        observer_lat=observer_lat,
-        observer_lon=observer_lon,
-        alert_radius_km=alert_radius_km,
-        destination=destination,
-        route_plausible=route_plausible,
-        aircraft_lat=aircraft_lat,
-        aircraft_lon=aircraft_lon,
-        altitude_m=altitude_m,
-        vertical_rate_mps=vertical_rate_mps,
-        speed_kts=speed_kts,
-        time_to_cpa_s=time_to_cpa_s,
-    )
-    if base.suppress_alert:
-        return base
-    if (
-        not route_plausible
-        or destination is None
-        or destination.latitude is None
-        or destination.longitude is None
-        or aircraft_lat is None
-        or aircraft_lon is None
-        or time_to_cpa_s is None
-        or time_to_cpa_s <= 20.0
-    ):
-        return base
-
-    current_observer = haversine_km(
-        float(aircraft_lat), float(aircraft_lon), observer_lat, observer_lon
-    )
-    # Once the aircraft is physically inside the requested radius, observed
-    # presence is authoritative; route knowledge must not hide it.
-    if current_observer <= alert_radius_km:
-        return base
+        return False, math.inf
 
     destination_distance = haversine_km(
-        float(aircraft_lat),
-        float(aircraft_lon),
-        float(destination.latitude),
-        float(destination.longitude),
+        latitude,
+        longitude,
+        destination.latitude,
+        destination.longitude,
     )
-    observer_destination = haversine_km(
-        observer_lat,
-        observer_lon,
-        float(destination.latitude),
-        float(destination.longitude),
+    if destination_distance > _TERMINAL_CONTEXT_KM:
+        return False, destination_distance
+
+    try:
+        altitude = float(altitude_m) if altitude_m is not None else math.inf
+    except (TypeError, ValueError):
+        altitude = math.inf
+    try:
+        vertical_rate = (
+            float(vertical_rate_mps) if vertical_rate_mps is not None else 0.0
+        )
+    except (TypeError, ValueError):
+        vertical_rate = 0.0
+    try:
+        speed = float(velocity_mps) / 1000.0 if velocity_mps is not None else 0.0
+    except (TypeError, ValueError):
+        speed = 0.0
+
+    descending = vertical_rate <= -0.35
+    low = altitude <= _TERMINAL_ALTITUDE_M
+    eta_destination = (
+        destination_distance / speed if speed > 0.04 else math.inf
     )
-    terminal_phase = (
-        destination_distance <= _TERMINAL_DESTINATION_KM
+
+    origin_distance = math.inf
+    origin = route.origin
+    if (
+        origin is not None
+        and origin.latitude is not None
+        and origin.longitude is not None
+    ):
+        origin_distance = haversine_km(
+            latitude, longitude, origin.latitude, origin.longitude
+        )
+
+    arrival_side = (
+        destination_distance + 20.0 < origin_distance
+        or descending
+        or destination_distance <= 55.0
+    )
+    terminal = (
+        arrival_side
         and (
-            (altitude_m is not None and float(altitude_m) <= _TERMINAL_ALTITUDE_M)
-            or (
-                vertical_rate_mps is not None
-                and float(vertical_rate_mps) <= -0.25
+            descending
+            or low
+            or eta_destination <= 22.0 * 60.0
+        )
+    )
+    return terminal, destination_distance
+
+
+class DestinationResolver:
+    """Bounded ADSB.lol + ADSBDB resolver with no monitor-path network awaits."""
+
+    def __init__(self) -> None:
+        self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
+        self._inflight: dict[str, asyncio.Task] = {}
+        self._semaphore: asyncio.Semaphore | None = None
+
+    def clear(self) -> None:
+        for task in self._inflight.values():
+            if not task.done():
+                task.cancel()
+        self._cache.clear()
+        self._inflight.clear()
+        self._semaphore = None
+
+    def _put(
+        self,
+        key: str,
+        resolution: DestinationResolution | None,
+        state: str,
+        ttl_s: float,
+    ) -> None:
+        self._cache[key] = CacheEntry(
+            resolution=resolution,
+            state=state,
+            expires_at=time.monotonic() + max(1.0, ttl_s),
+        )
+        self._cache.move_to_end(key)
+        while len(self._cache) > _MAX_CACHE:
+            self._cache.popitem(last=False)
+
+    def cached(self, key: str) -> CacheEntry | None:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if entry.expires_at <= time.monotonic():
+            self._cache.pop(key, None)
+            return None
+        self._cache.move_to_end(key)
+        return entry
+
+    async def _fetch_adsb_lol(
+        self,
+        callsign: str,
+        latitude: float,
+        longitude: float,
+    ) -> route_mod.FlightRouteInfo | None:
+        client = await get_http_client()
+
+        single_url = str(
+            getattr(settings, "route_lookup_single_url", "") or ""
+        ).strip()
+        if single_url:
+            response = None
+            try:
+                url = (
+                    f"{single_url.rstrip('/')}/{quote(callsign, safe='')}"
+                    f"/{latitude:.5f}/{longitude:.5f}"
+                )
+                response = await client.get(url, timeout=_LOOKUP_TIMEOUT_S)
+                response.raise_for_status()
+                route = route_mod._route_info(callsign, response.json())
+                if _usable(route, latitude, longitude):
+                    return route
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.info(
+                    "destination_source_attempt_failed callsign=%s "
+                    "source=adsb.lol-single status=%s error=%s",
+                    callsign,
+                    getattr(response, "status_code", "na"),
+                    type(exc).__name__,
+                )
+
+        bulk_url = str(getattr(settings, "route_lookup_url", "") or "").strip()
+        if not bulk_url:
+            return None
+        response = None
+        try:
+            response = await client.post(
+                bulk_url,
+                json={
+                    "planes": [
+                        {
+                            "callsign": callsign,
+                            "lat": latitude,
+                            "lng": longitude,
+                        }
+                    ]
+                },
+                timeout=_LOOKUP_TIMEOUT_S,
             )
+            response.raise_for_status()
+            route = route_mod._route_info(callsign, response.json())
+            return route if _usable(route, latitude, longitude) else None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info(
+                "destination_source_failed callsign=%s source=adsb.lol "
+                "status=%s error=%s",
+                callsign,
+                getattr(response, "status_code", "na"),
+                type(exc).__name__,
+            )
+            return None
+
+    async def _fetch_adsbdb(
+        self,
+        callsign: str,
+        latitude: float,
+        longitude: float,
+    ) -> route_mod.FlightRouteInfo | None:
+        client = await get_http_client()
+        response = None
+        try:
+            response = await client.get(
+                f"{_ADSBDB_CALLSIGN}/{quote(callsign, safe='')}",
+                timeout=_LOOKUP_TIMEOUT_S,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            route = _route_from_adsbdb(
+                callsign,
+                response.json(),
+                latitude=latitude,
+                longitude=longitude,
+            )
+            return route if _usable(route, latitude, longitude) else None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info(
+                "destination_source_failed callsign=%s source=adsbdb "
+                "status=%s error=%s",
+                callsign,
+                getattr(response, "status_code", "na"),
+                type(exc).__name__,
+            )
+            return None
+
+    @staticmethod
+    def choose(
+        callsign: str,
+        adsb_lol: route_mod.FlightRouteInfo | None,
+        adsbdb: route_mod.FlightRouteInfo | None,
+        *,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        altitude_m: float | None = None,
+        vertical_rate_mps: float | None = None,
+        velocity_mps: float | None = None,
+    ) -> tuple[DestinationResolution | None, str]:
+        if adsb_lol and adsbdb:
+            if _same_airport(adsb_lol.destination, adsbdb.destination):
+                return (
+                    DestinationResolution(
+                        adsb_lol,
+                        "adsb.lol+adsbdb",
+                        "provider-agreement",
+                    ),
+                    "resolved",
+                )
+
+            logger.warning(
+                "destination_source_conflict callsign=%s adsb_lol=%s adsbdb=%s",
+                callsign,
+                adsb_lol.destination.code if adsb_lol.destination else "unknown",
+                adsbdb.destination.code if adsbdb.destination else "unknown",
+            )
+
+            # Provider disagreement is normally ambiguous and fails open. One
+            # exception is intentionally deterministic: if exactly one provider
+            # points at a physically strong nearby terminal destination while
+            # the competing destination is far away, live position/descent can
+            # resolve the conflict without trusting provider brand priority.
+            if latitude is not None and longitude is not None:
+                rows: list[
+                    tuple[
+                        str,
+                        route_mod.FlightRouteInfo,
+                        bool,
+                        float,
+                    ]
+                ] = []
+                for source, route in (
+                    ("adsb.lol", adsb_lol),
+                    ("adsbdb", adsbdb),
+                ):
+                    terminal, distance = _terminal_candidate(
+                        route,
+                        latitude=float(latitude),
+                        longitude=float(longitude),
+                        altitude_m=altitude_m,
+                        vertical_rate_mps=vertical_rate_mps,
+                        velocity_mps=velocity_mps,
+                    )
+                    rows.append((source, route, terminal, distance))
+
+                strong = [row for row in rows if row[2]]
+                if len(strong) == 1:
+                    selected = strong[0]
+                    other = rows[0] if rows[1] is selected else rows[1]
+                    if other[3] >= max(
+                        _TERMINAL_CONTEXT_KM,
+                        selected[3] + 120.0,
+                        selected[3] * 2.5,
+                    ):
+                        logger.warning(
+                            "destination_conflict_resolved_by_live_geometry "
+                            "callsign=%s source=%s destination=%s "
+                            "destination_km=%.1f competing_km=%.1f",
+                            callsign,
+                            selected[0],
+                            selected[1].destination.code,
+                            selected[3],
+                            other[3],
+                        )
+                        return (
+                            DestinationResolution(
+                                selected[1],
+                                selected[0],
+                                "live-terminal-conflict-resolution",
+                            ),
+                            "resolved",
+                        )
+            return None, "conflict"
+
+        route = adsb_lol or adsbdb
+        if route is None:
+            return None, "unavailable"
+        source = "adsb.lol" if adsb_lol else "adsbdb"
+        return (
+            DestinationResolution(route, source, "single-provider"),
+            "resolved",
         )
+
+    async def _refresh(
+        self,
+        key: str,
+        latitude: float,
+        longitude: float,
+        *,
+        altitude_m: float | None = None,
+        vertical_rate_mps: float | None = None,
+        velocity_mps: float | None = None,
+    ) -> None:
+        started = time.monotonic()
+        try:
+            if self._semaphore is None:
+                self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+            async with self._semaphore:
+                adsb_lol, adsbdb = await asyncio.gather(
+                    self._fetch_adsb_lol(key, latitude, longitude),
+                    self._fetch_adsbdb(key, latitude, longitude),
+                )
+            resolution, state = self.choose(
+                key,
+                adsb_lol,
+                adsbdb,
+                latitude=latitude,
+                longitude=longitude,
+                altitude_m=altitude_m,
+                vertical_rate_mps=vertical_rate_mps,
+                velocity_mps=velocity_mps,
+            )
+            if resolution is not None:
+                self._put(
+                    key,
+                    resolution,
+                    "resolved",
+                    float(max(60, int(settings.route_lookup_cache_seconds))),
+                )
+                logger.info(
+                    "destination_resolved callsign=%s source=%s authority=%s "
+                    "destination=%s latency_ms=%.1f",
+                    key,
+                    resolution.source,
+                    resolution.authority,
+                    resolution.route.destination.code,
+                    (time.monotonic() - started) * 1000.0,
+                )
+            elif state == "conflict":
+                self._put(key, None, state, _CONFLICT_TTL_S)
+            else:
+                self._put(key, None, "unavailable", _NEGATIVE_TTL_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("destination_refresh_failed callsign=%s", key)
+            self._put(key, None, "unavailable", _NEGATIVE_TTL_S)
+
+    def lookup(self, ac: Any) -> tuple[CacheEntry | None, bool]:
+        key = route_mod.normalize_flight_key(getattr(ac, "callsign", ""))
+        latitude = getattr(ac, "latitude", None)
+        longitude = getattr(ac, "longitude", None)
+        if not key or latitude is None or longitude is None:
+            return None, False
+
+        cached = self.cached(key)
+        if cached is not None:
+            return cached, False
+
+        task = self._inflight.get(key)
+        if task is not None and not task.done():
+            return None, True
+        if len(self._inflight) >= _MAX_INFLIGHT:
+            return None, False
+
+        try:
+            task = asyncio.create_task(
+                self._refresh(
+                    key,
+                    float(latitude),
+                    float(longitude),
+                    altitude_m=getattr(ac, "altitude", None),
+                    vertical_rate_mps=getattr(ac, "vertical_rate_mps", None),
+                    velocity_mps=getattr(ac, "velocity", None),
+                ),
+                name=f"destination-refresh:{key}",
+            )
+        except RuntimeError:
+            return None, False
+        self._inflight[key] = task
+
+        def done(
+            finished: asyncio.Task,
+            callsign: str = key,
+        ) -> None:
+            if self._inflight.get(callsign) is finished:
+                self._inflight.pop(callsign, None)
+            if finished.cancelled():
+                return
+            try:
+                finished.exception()
+            except Exception:
+                logger.exception(
+                    "destination_background_task_failed callsign=%s",
+                    callsign,
+                )
+
+        task.add_done_callback(done)
+        return None, True
+
+
+destination_resolver = DestinationResolver()
+
+
+def _result(
+    key: str,
+    suppress: bool,
+    reason: str,
+    destination: route_mod.AirportInfo | None = None,
+    destination_distance: float | None = None,
+) -> route_mod.RouteGateResult:
+    return route_mod.RouteGateResult(
+        suppress_alert=suppress,
+        callsign=key,
+        reason=reason,
+        destination_code=destination.code if destination else "",
+        destination_distance_km=destination_distance,
+        expected_turn_pending=suppress,
+        route_plausible=destination is not None,
     )
-    if not terminal_phase:
-        return base
-    if observer_destination <= alert_radius_km + max(4.0, alert_radius_km * 0.25):
-        return base
 
-    cpa_destination = _projected_cpa_destination_distance(
-        projected_path,
-        observer_lat=observer_lat,
-        observer_lon=observer_lon,
-        destination=destination,
+
+def _angle_delta(a: float, b: float) -> float:
+    return (a - b + 180.0) % 360.0 - 180.0
+
+
+def _diverged(
+    ac: Any,
+    samples: Iterable[Any],
+    destination: route_mod.AirportInfo,
+) -> bool:
+    """Require sustained divergence, except a clear climbing go-around."""
+    rows = []
+    for sample in samples:
+        try:
+            rows.append(
+                (
+                    float(sample.timestamp),
+                    float(sample.latitude),
+                    float(sample.longitude),
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+    rows.sort()
+    if len(rows) < 2:
+        return False
+
+    newest = rows[-1]
+    oldest = next(
+        (row for row in rows if newest[0] - row[0] >= 8.0),
+        None,
     )
-    if cpa_destination is None:
-        return base
+    if oldest is None:
+        return False
 
-    outward_growth = cpa_destination - destination_distance
-    required_growth = max(3.5, min(10.0, destination_distance * 0.10))
+    span = newest[0] - oldest[0]
+    old_distance = haversine_km(
+        oldest[1],
+        oldest[2],
+        destination.latitude,
+        destination.longitude,
+    )
+    new_distance = haversine_km(
+        newest[1],
+        newest[2],
+        destination.latitude,
+        destination.longitude,
+    )
+    increase = new_distance - old_distance
 
-    heading_conflict = True
-    if heading_deg is not None:
+    try:
+        track = float(getattr(ac, "heading"))
         destination_bearing = bearing_deg(
-            float(aircraft_lat),
-            float(aircraft_lon),
-            float(destination.latitude),
-            float(destination.longitude),
+            newest[1],
+            newest[2],
+            destination.latitude,
+            destination.longitude,
         )
-        heading_conflict = (
-            abs(_angle_delta(float(heading_deg), destination_bearing)) >= 18.0
+        heading_away = (
+            abs(_angle_delta(track, destination_bearing)) >= 70.0
         )
+    except (TypeError, ValueError):
+        heading_away = False
 
-    if outward_growth >= required_growth and heading_conflict:
-        return replace(
-            base,
-            suppress_alert=True,
-            reason=(
-                f"known destination {destination.code} requires a terminal turn: "
-                "straight-line observer CPA moves the aircraft away from its destination"
-            ),
-            destination_code=destination.code,
-            destination_distance_km=destination_distance,
-            expected_turn_pending=True,
-            route_plausible=True,
+    try:
+        climbing = float(getattr(ac, "vertical_rate_mps")) >= 2.0
+    except (TypeError, ValueError):
+        climbing = False
+
+    # Climb + increasing airport distance is a general missed-approach/diversion
+    # signal and may release quickly. Ordinary terminal vectoring cannot.
+    if climbing and increase >= max(
+        0.8,
+        min(2.0, new_distance * 0.015),
+    ):
+        return True
+
+    if span < 30.0:
+        return False
+    return (
+        heading_away
+        and increase >= max(
+            3.0,
+            min(8.0, new_distance * 0.05),
         )
-    return base
+    )
 
 
-async def evaluate_route_resilient(
+def _speed_km_s(ac: Any) -> float:
+    try:
+        velocity = float(getattr(ac, "velocity"))
+        if velocity > 1.0:
+            return velocity / 1000.0
+    except (TypeError, ValueError):
+        pass
+    try:
+        knots = float(getattr(ac, "ground_speed"))
+        if knots > 1.0:
+            return knots * 0.0005144444444444444
+    except (TypeError, ValueError):
+        pass
+    return 0.0
+
+
+def _candidate_time(pred: Any) -> float | None:
+    for name in ("radius_entry_s", "time_to_cpa_s"):
+        try:
+            value = float(getattr(pred, name))
+            if math.isfinite(value) and value >= 0.0:
+                return value
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _path_geometry(
+    pred: Any,
+    destination: route_mod.AirportInfo,
+    candidate_time: float | None,
+) -> tuple[float | None, float | None]:
+    """Return destination distance at observer CPA and first airport-area time."""
+    rows = []
+    for point in list(getattr(pred, "path", None) or []):
+        try:
+            rows.append(
+                (
+                    float(point.seconds),
+                    haversine_km(
+                        float(point.latitude),
+                        float(point.longitude),
+                        destination.latitude,
+                        destination.longitude,
+                    ),
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+    if not rows:
+        return None, None
+
+    try:
+        cpa_time = float(getattr(pred, "time_to_cpa_s"))
+        cpa_destination = min(
+            rows,
+            key=lambda row: abs(row[0] - cpa_time),
+        )[1]
+    except (TypeError, ValueError):
+        cpa_destination = None
+
+    horizon = (
+        candidate_time
+        if candidate_time is not None
+        else math.inf
+    )
+    landing = [
+        seconds
+        for seconds, distance in rows
+        if seconds <= horizon and distance <= _LANDING_AREA_KM
+    ]
+    return cpa_destination, min(landing) if landing else None
+
+
+async def evaluate_destination_path(
     self: route_mod.RouteHistoryService,
     ac: Any,
     pred: Any,
@@ -484,123 +792,238 @@ async def evaluate_route_resilient(
     user_lon: float,
     alert_radius_km: float,
     current_samples: Iterable[Any],
+    notification_sent: bool = False,
 ) -> route_mod.RouteGateResult:
+    """One deterministic destination/path decision; performs no network await."""
     key = route_mod.normalize_flight_key(getattr(ac, "callsign", ""))
     if not key:
-        return route_mod.RouteGateResult(
-            False, "", "no usable flight-number callsign"
+        return _result(
+            "",
+            False,
+            "no route callsign; live trajectory authoritative",
         )
 
-    try:
-        history = await self._historical_paths(key)
-    except Exception:
-        logger.exception("flight_route_history_read_failed callsign=%s", key)
-        history = []
+    latitude = getattr(ac, "latitude", None)
+    longitude = getattr(ac, "longitude", None)
 
-    try:
-        directly_inside = (
-            not bool(getattr(pred, "stale", False))
-            and float(getattr(pred, "current_distance_km"))
-            <= float(alert_radius_km)
+    current_distance = math.inf
+    if latitude is not None and longitude is not None:
+        current_distance = haversine_km(
+            float(latitude),
+            float(longitude),
+            float(user_lat),
+            float(user_lon),
         )
-    except (TypeError, ValueError):
-        directly_inside = False
-
-    now = time.monotonic()
-    cached = self._route_cache.get(key)
-    route = None
-    if cached:
-        ttl = (
-            max(60, int(settings.route_lookup_cache_seconds))
-            if cached[1] is not None
-            else _NEGATIVE_CACHE_S
-        )
-        if now - cached[0] < ttl:
-            route = cached[1]
-        else:
-            cached = None
-
-    pending: dict[str, float] = getattr(self, "_route_guard_pending_since", {})
-    if route is None and not directly_inside:
-        pending.setdefault(key, now)
-        self._route_guard_pending_since = pending
-
-        # On the first predictive candidate, spend a small bounded amount of
-        # time resolving the route. All sources are queried concurrently.
-        if cached is None:
-            try:
-                route = await asyncio.wait_for(
-                    asyncio.shield(resolve_route_resilient(self, ac)),
-                    timeout=_SOURCE_TIMEOUT_S + 0.35,
-                )
-            except asyncio.TimeoutError:
-                logger.info("route_guard_initial_lookup_timeout callsign=%s", key)
-            except Exception:
-                logger.exception("route_guard_initial_lookup_failed callsign=%s", key)
-
-        if route is None and time.monotonic() - pending[key] < _INITIAL_ROUTE_GRACE_S:
-            return route_mod.RouteGateResult(
-                True,
-                key,
-                "route resolution pending before first projected approach alert",
-                history_days=len(history),
-            )
     else:
-        pending.pop(key, None)
+        try:
+            current_distance = float(pred.current_distance_km)
+        except (AttributeError, TypeError, ValueError):
+            pass
 
-    if route is not None:
-        pending.pop(key, None)
-
-    result = evaluate_route_gate_destination_aware(
-        callsign=key,
-        current_path=current_samples,
-        historical_paths=history,
-        observer_lat=user_lat,
-        observer_lon=user_lon,
-        alert_radius_km=alert_radius_km,
-        destination=route.destination if route else None,
-        route_plausible=bool(route and route.plausible),
-        aircraft_lat=getattr(ac, "latitude", None),
-        aircraft_lon=getattr(ac, "longitude", None),
-        altitude_m=getattr(ac, "altitude", None),
-        vertical_rate_mps=getattr(ac, "vertical_rate_mps", None),
-        speed_kts=getattr(ac, "ground_speed", None),
-        time_to_cpa_s=getattr(pred, "time_to_cpa_s", None),
-        projected_path=getattr(pred, "path", None),
-        heading_deg=getattr(ac, "heading", None),
-    )
-
-    if directly_inside and result.suppress_alert:
-        result = replace(
-            result,
-            suppress_alert=False,
-            reason="direct observed presence inside alert radius overrides route veto",
-            expected_turn_pending=False,
+    # Accepted live ADS-B position is physical truth. Destination metadata can
+    # never hide a fresh aircraft that has already entered the user's radius.
+    if current_distance <= float(alert_radius_km):
+        return _result(
+            key,
+            False,
+            "fresh physical presence inside alert radius overrides destination metadata",
         )
 
-    source = getattr(self, "_route_guard_sources", {}).get(key, "")
-    logger.info(
-        "route_gate callsign=%s suppress=%s history_days=%d similar_days=%d "
-        "similarity_km=%s destination=%s expected_turn=%s source=%s reason=%s",
-        result.callsign,
-        result.suppress_alert,
-        result.history_days,
-        result.similar_days,
-        f"{result.similarity_km:.2f}" if result.similarity_km is not None else "na",
-        result.destination_code or "unknown",
-        result.expected_turn_pending,
-        source or "none",
-        result.reason,
+    entry, pending = destination_resolver.lookup(ac)
+    if entry is None:
+        # A brand-new candidate can wait one monitor cycle for bounded
+        # background resolution. Existing alerts are never cancelled only
+        # because provider work is pending.
+        hold = bool(pending and not notification_sent)
+        return _result(
+            key,
+            hold,
+            (
+                "destination lookup pending in background; "
+                "initial alert held without blocking"
+            )
+            if hold
+            else "destination unavailable; live trajectory authoritative",
+        )
+
+    if entry.resolution is None:
+        return _result(
+            key,
+            False,
+            (
+                "destination providers disagree; live trajectory authoritative"
+                if entry.state == "conflict"
+                else "destination unavailable; live trajectory authoritative"
+            ),
+        )
+
+    resolution = entry.resolution
+    destination = resolution.route.destination
+    if (
+        destination is None
+        or latitude is None
+        or longitude is None
+    ):
+        return _result(
+            key,
+            False,
+            "destination geometry incomplete; live trajectory authoritative",
+        )
+
+    destination_distance = haversine_km(
+        float(latitude),
+        float(longitude),
+        destination.latitude,
+        destination.longitude,
     )
-    return result
+
+    if _diverged(ac, current_samples, destination):
+        return _result(
+            key,
+            False,
+            (
+                "live movement diverges from reported destination; "
+                "live trajectory regained authority"
+            ),
+            destination,
+            destination_distance,
+        )
+
+    observer_destination = haversine_km(
+        float(user_lat),
+        float(user_lon),
+        destination.latitude,
+        destination.longitude,
+    )
+    # If the airport itself is within the configured radius, an arrival can
+    # genuinely enter that radius while landing. Fail open rather than using
+    # destination metadata to hide that real nearby presence.
+    if observer_destination <= float(alert_radius_km):
+        return _result(
+            key,
+            False,
+            (
+                "destination airport lies inside observer radius; "
+                "live trajectory authoritative"
+            ),
+            destination,
+            destination_distance,
+        )
+
+    speed = _speed_km_s(ac)
+    eta_destination = (
+        destination_distance / speed if speed > 0.04 else None
+    )
+    candidate_time = _candidate_time(pred)
+    cpa_destination, landing_time = _path_geometry(
+        pred,
+        destination,
+        candidate_time,
+    )
+
+    try:
+        altitude = float(getattr(ac, "altitude"))
+    except (TypeError, ValueError):
+        altitude = math.inf
+    try:
+        vertical_rate = float(getattr(ac, "vertical_rate_mps"))
+    except (TypeError, ValueError):
+        vertical_rate = 0.0
+
+    descending = vertical_rate <= -0.35
+    low = altitude <= _TERMINAL_ALTITUDE_M
+    terminal = (
+        destination_distance <= _TERMINAL_CONTEXT_KM
+        and (
+            descending
+            or low
+            or (
+                eta_destination is not None
+                and eta_destination <= 22.0 * 60.0
+            )
+        )
+    )
+    if not terminal:
+        return _result(
+            key,
+            False,
+            (
+                "destination is not yet strong terminal-arrival evidence; "
+                "live trajectory authoritative"
+            ),
+            destination,
+            destination_distance,
+        )
+
+    if (
+        landing_time is not None
+        and candidate_time is not None
+        and landing_time + 5.0 < candidate_time
+    ):
+        return _result(
+            key,
+            True,
+            (
+                f"{resolution.source}: projected path reaches destination "
+                "landing area before observer pass"
+            ),
+            destination,
+            destination_distance,
+        )
+
+    if (
+        eta_destination is not None
+        and candidate_time is not None
+        and eta_destination + _AIRPORT_FIRST_MARGIN_S < candidate_time
+        and (descending or low)
+    ):
+        return _result(
+            key,
+            True,
+            (
+                f"{resolution.source}: destination airport is physically "
+                "reached before projected observer pass"
+            ),
+            destination,
+            destination_distance,
+        )
+
+    if cpa_destination is not None:
+        away_margin = max(
+            5.0,
+            min(18.0, destination_distance * 0.10),
+        )
+        if cpa_destination >= destination_distance + away_margin:
+            return _result(
+                key,
+                True,
+                (
+                    f"{resolution.source}: observer CPA would move aircraft "
+                    "significantly away from known destination"
+                ),
+                destination,
+                destination_distance,
+            )
+
+    return _result(
+        key,
+        False,
+        (
+            f"{resolution.source}: destination path remains compatible with "
+            "a genuine observer pass before landing"
+        ),
+        destination,
+        destination_distance,
+    )
 
 
-def install_route_guard() -> None:
-    """Install the destination-aware guard after the reliability monkey patches."""
-    route_mod.RouteHistoryService.resolve_route = resolve_route_resilient
-    route_mod.RouteHistoryService.evaluate = evaluate_route_resilient
+def install_destination_path_guard() -> None:
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    route_mod.RouteHistoryService.evaluate = evaluate_destination_path
+    _INSTALLED = True
     logger.info(
-        "Destination-aware route guard enabled: adsb.im + ADSBdb fallback, "
-        "%.0fs first-alert grace, terminal-turn veto",
-        _INITIAL_ROUTE_GRACE_S,
+        "Destination path guard enabled providers=adsb.lol,adsbdb "
+        "history_authority=false runway_authority=false nonblocking=true"
     )

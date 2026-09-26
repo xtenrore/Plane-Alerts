@@ -2,6 +2,16 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.2 — Route Guard Consolidation
+
+- Consolidated the live provider-first destination/path authority into one canonical non-versioned `app/intelligence/route_guard.py` module.
+- Removed obsolete v2/v4.2/v4.7 route-guard generations and retired requalification/arrival compatibility shims from the production codebase.
+- Decoupled bounded route-history persistence and clustering from the removed guard modules while preserving persistent-volume storage and non-blocking queue behavior.
+- Migrated live destination/path regressions to the canonical guard and added architecture checks preventing removed guard imports from returning.
+- Preserved IST/LTFM and LTBA arrival protection, genuine pass-before-airport behavior, provider conflict/outage fail-open semantics, physical-radius override, late destination resolution, and go-around/diversion recovery.
+- Prediction version remains `5.3-3d-proximity-age-aware`; no trajectory, CPA, ETA, qualification/cancellation threshold, alert timing, dependency, configuration, storage schema, or installer behavior changed.
+- Railway-only architecture release; community platform validation remains owned by the weekly community-release workflow.
+
 ## v5.8.1 — Telegram Detail and Recovery Reliability
 
 - Fixed `/next60` More Info crashing in the callback actually installed at startup; aircraft details now use the current Flightradar24 helper and label.
@@ -36,7 +46,7 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 
 - Replaced the stacked route-history, expected-turn and runway/terminal live alert-veto chain with one cached provider-first destination/path qualification layer.
 - Uses existing ADSB.lol destination data plus ADSBDB as an independent additional/fallback source, with bounded background lookups that never block the five-second monitor path.
-- Added deterministic airport-before-observer, landing-area-before-observer and destination-path conflict checks while preserving fresh physical entry as authoritative.
+- Added deterministic airport-before-observer, landing-area-before-observer and destination/path conflict checks while preserving fresh physical entry as authoritative.
 - Provider outages and genuinely ambiguous conflicts fail open to live trajectory; a disagreement can be resolved only when live terminal geometry clearly supports one nearby destination over a materially farther alternative. Sustained divergence and climbing go-around/diversion evidence release destination suppression.
 - Route history and airport/runway inference remain available for Prediction Lab, analytics and diagnostics but are no longer live alert authorities.
 - Added exact IST/LTFM, LTBA, genuine-pass, bad-destination, outage, slow-provider, physical-entry and go-around regressions plus a non-blocking destination-path benchmark.
