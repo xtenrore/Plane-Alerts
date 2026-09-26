@@ -1,4 +1,4 @@
-"""Small deterministic performance guard for the Plane Alerts v4.2 ensemble."""
+"""Deterministic compatibility benchmark for the canonical route guard."""
 from __future__ import annotations
 
 import json
@@ -8,83 +8,62 @@ import tracemalloc
 from pathlib import Path
 from types import SimpleNamespace
 
-# Executing a file under scripts/ puts scripts/ first on sys.path. Add the
-# repository root explicitly so this benchmark behaves the same in CI/local use.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.intelligence.route_guard_v42 import (  # noqa: E402
-    _evaluate_motion_path,
-    _motion_paths,
-    _path_cache,
-    reset_v42_state_for_tests,
-)
+from app.intelligence.route_guard import _path_geometry  # noqa: E402
 from app.intelligence.route_history import AirportInfo  # noqa: E402
+from app.intelligence.trajectory import ProjectedPoint  # noqa: E402
 
 
 def main() -> None:
-    reset_v42_state_for_tests()
-    aircraft = SimpleNamespace(
-        icao24="bench42",
-        latitude=41.0,
-        longitude=29.15,
-        heading=270.0,
-        ground_speed=260.0,
+    destination = AirportInfo(
+        icao="LTFM",
+        iata="IST",
+        latitude=41.2753,
+        longitude=28.7519,
     )
-    prediction = SimpleNamespace(turn_rate_deg_s=0.0)
-    destination = AirportInfo(icao="LTFM", iata="IST", latitude=41.2753, longitude=28.7519)
+    path = [
+        ProjectedPoint(
+            seconds=float(seconds),
+            latitude=41.0 + seconds * 0.0002,
+            longitude=29.15 - seconds * 0.0005,
+            horizontal_km=1.0,
+            slant_km=1.0,
+            altitude_m=3000.0,
+            heading_deg=270.0,
+        )
+        for seconds in range(0, 301, 5)
+    ]
+    prediction = SimpleNamespace(path=path, time_to_cpa_s=180.0)
 
     tracemalloc.start()
     started = time.perf_counter()
-    paths = _motion_paths(
-        ac=aircraft,
-        pred=prediction,
-        destination=destination,
-        terminal_state="TERMINAL_ARRIVAL",
-    )
-    first_path_identity = id(paths)
-
-    # 250 virtual users share the same aircraft-global motion paths. Only the
-    # cheap observer-specific CPA reduction is repeated per user.
     evaluations = 0
-    for index in range(250):
-        observer_lat = 40.90 + (index % 25) * 0.008
-        observer_lon = 28.75 + (index // 25) * 0.012
-        reused = _motion_paths(
-            ac=aircraft,
-            pred=prediction,
-            destination=destination,
-            terminal_state="TERMINAL_ARRIVAL",
+    for _ in range(2500):
+        cpa_destination, landing_time = _path_geometry(
+            prediction,
+            destination,
+            180.0,
         )
-        assert id(reused) == first_path_identity
-        for path in reused:
-            _evaluate_motion_path(
-                path,
-                observer_lat=observer_lat,
-                observer_lon=observer_lon,
-                radius_km=15.0,
-            )
-            evaluations += 1
-
+        assert cpa_destination is not None
+        assert landing_time is None or landing_time >= 0.0
+        evaluations += 1
     elapsed = time.perf_counter() - started
     current_bytes, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
+
     report = {
-        "users": 250,
-        "motion_paths": len(paths),
-        "observer_path_evaluations": evaluations,
+        "evaluations": evaluations,
         "elapsed_ms": round(elapsed * 1000.0, 3),
         "evaluations_per_second": round(evaluations / max(elapsed, 1e-9), 1),
         "current_kib": round(current_bytes / 1024.0, 1),
         "peak_kib": round(peak_bytes / 1024.0, 1),
-        "path_cache_entries": len(_path_cache),
-        "shared_path_reuse": True,
+        "canonical_route_guard": True,
     }
-    print("V42_BENCHMARK_JSON=" + json.dumps(report, sort_keys=True))
+    print("ROUTE_GUARD_COMPAT_BENCHMARK_JSON=" + json.dumps(report, sort_keys=True))
 
-    assert len(paths) <= 9
-    assert len(_path_cache) <= 128
     assert peak_bytes < 64 * 1024 * 1024
     assert elapsed < 10.0
 
