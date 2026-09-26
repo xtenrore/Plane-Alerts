@@ -9,6 +9,12 @@ if "pytest" not in sys.modules:
 
     install_reliability_guards()
 
+    # Bound repetitive cached zero-jump rejection diagnostics without changing
+    # rejection decisions or non-zero-jump diagnostics.
+    from app.worker.outlier_log_guard_v582 import install_outlier_log_guard_v582
+
+    install_outlier_log_guard_v582()
+
     # v5.3 changes only the observer-independent base motion projection. Install
     # it before every established trajectory safety wrapper is imported so the
     # wrapper chain remains: shared base -> v4.3 -> v4.4 -> v4.6 -> critical
