@@ -1,22 +1,27 @@
 """Inline keyboard additions for v3.2 photography actions."""
 from __future__ import annotations
 
-from urllib.parse import quote
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from app.bot.flight_links import flightradar24_url
 from app.bot.keyboards import CB_FB_DISLIKE_PREFIX, CB_FB_LIKE_PREFIX
 
 PHOTO_CALLBACK_PREFIX = "photo:"
 
 
-def notification_actions_keyboard(notification_id: str, icao24: str | None = None) -> InlineKeyboardMarkup:
-    """Aircraft alert actions: ADSB.fi, camera settings, and feedback."""
+def notification_actions_keyboard(
+    notification_id: str,
+    icao24: str | None = None,
+    callsign: str | None = None,
+) -> InlineKeyboardMarkup:
+    """Aircraft alert actions: Flightradar24, camera settings, and feedback."""
     rows: list[list[InlineKeyboardButton]] = []
-    if icao24:
+    tracker_url = flightradar24_url(callsign=callsign, icao24=icao24)
+    if tracker_url:
         rows.append([
             InlineKeyboardButton(
-                "Open in ADSB.fi",
-                url=f"https://globe.adsb.fi/?icao={quote(str(icao24).lower(), safe='')}",
+                "Open in Flightradar24",
+                url=tracker_url,
             )
         ])
     rows.extend([
