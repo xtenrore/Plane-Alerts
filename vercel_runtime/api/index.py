@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from pymongo import MongoClient
 from vercel.workflow import start
 
-from plane_workflows_fixed import (
+from plane_workflows import (
     TelegramUpdate,
     monitor_workflow,
     telegram_secret_header,
@@ -228,8 +228,6 @@ async def telegram_ingress(
     )
 
     if callback_id:
-        # Telegram executes this Bot API method from the webhook response itself. This
-        # removes the client-side button spinner before the durable handler completes.
         return JSONResponse(
             content={
                 "method": "answerCallbackQuery",
