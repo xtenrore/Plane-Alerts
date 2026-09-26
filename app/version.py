@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.1"
+VERSION = "5.8.2"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -69,6 +69,8 @@ VERSION = "5.8.1"
 # changing ADS-B ingestion, trajectory, CPA, ETA, qualification, cancellation or timing.
 # v5.8.1 repairs the installed Next 60 detail callback, permits failed callback
 # retries, bounds acknowledgement bookkeeping, and adds safe Telegram recovery.
+# v5.8.2 consolidates the live provider-first destination/path authority into the
+# single canonical non-versioned route_guard module without changing its decisions.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 

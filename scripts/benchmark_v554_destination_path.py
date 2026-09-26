@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.intelligence.destination_path_guard_v554 import (  # noqa: E402
+from app.intelligence.route_guard import (  # noqa: E402
     CacheEntry,
     DestinationResolution,
     destination_resolver,
@@ -79,8 +79,8 @@ async def main() -> None:
     p99 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.99))]
     maximum = max(ordered)
     median = statistics.median(ordered)
-    assert p99 < 20.0, f"destination gate p99 too slow: {p99:.3f} ms"
-    assert maximum < 50.0, f"destination gate max too slow: {maximum:.3f} ms"
+    assert p99 < 20.0, f"route guard p99 too slow: {p99:.3f} ms"
+    assert maximum < 50.0, f"route guard max too slow: {maximum:.3f} ms"
 
     # Prove a deliberately slow provider refresh is scheduled rather than awaited.
     destination_resolver.clear()
@@ -112,7 +112,7 @@ async def main() -> None:
         await asyncio.sleep(0)
 
     print(
-        "DESTINATION_PATH_BENCHMARK "
+        "ROUTE_GUARD_BENCHMARK "
         f"median_ms={median:.4f} p99_ms={p99:.4f} max_ms={maximum:.4f} "
         f"slow_provider_return_ms={nonblocking_ms:.4f}"
     )
