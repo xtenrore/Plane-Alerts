@@ -21,4 +21,4 @@ dependencies = [
 ]
 
 [[tool.vercel.workflows]]
-entrypoint = "plane_workflows_fixed:wf"
+entrypoint = "plane_workflows:wf"
