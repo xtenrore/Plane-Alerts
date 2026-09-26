@@ -18,6 +18,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, ContextTypes
 
+from app.bot.flight_links import flightradar24_url
 from app.database import get_db, users_col
 from app.prediction_lab_files_v55 import append_evidence
 from app.worker.optional_work import OptionalCache
@@ -58,11 +59,8 @@ def _icao24(doc: dict[str, Any]) -> str:
     return raw if re.fullmatch(r"[0-9a-f]{6}", raw) else ""
 
 
-def _adsb_url(doc: dict[str, Any]) -> str | None:
-    icao = _icao24(doc)
-    if icao: return f"https://adsb.lol/?icao={icao}"
-    callsign = re.sub(r"[^A-Z0-9]", "", _identity(doc))[:24]
-    return f"https://adsb.lol/?filterCallSign=%5E{callsign}%24" if callsign else None
+def _tracker_url(doc: dict[str, Any]) -> str | None:
+    return flightradar24_url(callsign=str(doc.get("callsign") or ""), icao24=_icao24(doc))
 
 
 def _aircraft_label(doc: dict[str, Any]) -> str:
@@ -119,8 +117,8 @@ def render_next60_native(now: datetime, docs: list[dict[str, Any]]) -> tuple[str
     for doc in visible:
         token = _callback_token(doc)
         if not token: continue
-        callsign = (_identity(doc) or "Plane")[:12]; row: list[InlineKeyboardButton] = []; adsb_url = _adsb_url(doc)
-        if adsb_url: row.append(InlineKeyboardButton(f"ADSB · {callsign}", url=adsb_url))
+        callsign = (_identity(doc) or "Plane")[:12]; row: list[InlineKeyboardButton] = []; tracker_url = _tracker_url(doc)
+        if tracker_url: row.append(InlineKeyboardButton(f"FR24 · {callsign}", url=tracker_url))
         row.append(InlineKeyboardButton(f"More Info · {callsign}", callback_data=f"{MORE_PREFIX}{token}")); keyboard_rows.append(row)
     lines.append("\n<i>Live CPA is authoritative. 30–60 min history entries remain shadow forecasts.</i>")
     return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
@@ -282,7 +280,7 @@ async def cb_next60_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.answer("Forecast changed. Run /next60 again.", show_alert=True); raise ApplicationHandlerStop
     await query.answer()
     if query.message is not None:
-        adsb_url = _adsb_url(selected); detail_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Open in ADSB", url=adsb_url)]]) if adsb_url else None
+        tracker_url = _tracker_url(selected); detail_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Open in Flightradar24", url=tracker_url)]]) if tracker_url else None
         await query.message.reply_text(_detail_text(now, selected), parse_mode=ParseMode.HTML, reply_markup=detail_keyboard, disable_web_page_preview=True)
     raise ApplicationHandlerStop
 
