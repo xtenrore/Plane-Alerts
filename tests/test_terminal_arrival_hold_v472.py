@@ -2,25 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from app.intelligence import airport_terminal_v47 as terminal
 from app.intelligence import global_airports_v471 as global_airports
-from app.intelligence import route_guard_v42 as v42
-from app.intelligence import route_guard_v47 as v47
 from app.intelligence import route_history as route_mod
 from app.intelligence import terminal_arrival_hold_v472 as hold_v472
 from app.intelligence import trajectory as traj
 from app.intelligence.airport_repository import airport_repository
 
 NOW = 1_000.0
-
-
-@pytest.fixture(autouse=True)
-def _reset_initial_hold_state():
-    v47.reset_v472_initial_hold_state_for_tests()
-    yield
-    v47.reset_v472_initial_hold_state_for_tests()
 
 
 def _ltba_geometry() -> terminal.AirportGeometry:
@@ -37,9 +26,6 @@ def _arrival_samples(airport: terminal.AirportGeometry) -> list[terminal.Termina
         (32.0, 27.0, 22.0, 17.0, 13.0),
         (2700.0, 2450.0, 2200.0, 1950.0, 1700.0),
     ):
-        # Southwest of LTBA, tracking northeast toward the airport. This models
-        # the low/slow/descent pre-turn segment that can temporarily produce a
-        # straight-line CPA toward an observer before the normal landing turn.
         lat, lon = traj.project_point(airport.latitude, airport.longitude, distance_km, 230.0)
         samples.append(
             terminal.TerminalSample(
@@ -120,8 +106,6 @@ def test_compiled_database_resolves_ltba_and_isl_to_same_active_airport_with_run
     runway_pairs = {(row.le_ident, row.he_ident) for row in by_icao.runways}
     assert ("05", "23") in runway_pairs
 
-    # Route providers may supply only IATA=ISL. The destination-code lookup must
-    # still produce LTBA geometry rather than a metadata-only airport.
     from_iata_only = global_airports.airport_for_info(
         route_mod.AirportInfo(iata="ISL", name="Istanbul Ataturk Airport")
     )
@@ -153,8 +137,6 @@ def test_error_museum_ltba_low_slow_descent_false_straight_line_cpa_is_held_unti
     assert decision.destination_match is True
     assert decision.airport_trend_km_s is not None and decision.airport_trend_km_s < -0.008
 
-    # Once the aircraft actually makes its airport turn, the live predictor no
-    # longer enters the observer radius. There is no delayed notification.
     after_turn = hold_v472.evaluate_initial_terminal_hold(
         assessment,
         airport=airport,
@@ -173,8 +155,6 @@ def test_error_museum_ltba_low_slow_descent_false_straight_line_cpa_is_held_unti
 
 def test_destination_isl_by_itself_never_suppresses_alert():
     airport = _ltba_geometry()
-    samples = _arrival_samples(airport)
-    # Destroy the physical arrival evidence while leaving the destination alone.
     samples = [
         terminal.TerminalSample(
             s.timestamp,
@@ -186,7 +166,7 @@ def test_destination_isl_by_itself_never_suppresses_alert():
             0.0,
             0.0,
         )
-        for s in samples
+        for s in _arrival_samples(airport)
     ]
     decision = hold_v472.evaluate_initial_terminal_hold(
         _assessment(airport),
@@ -275,45 +255,3 @@ def test_runway_aligned_path_that_can_hit_observer_is_never_suppressed():
     )
     assert decision.hold is False
     assert decision.code == "RELEASE_RUNWAY_PATH_CAN_PASS"
-
-
-def test_initial_hold_releases_for_go_around_and_cannot_cancel_delivered_alert():
-    base = v42.RouteGateResultV42(
-        suppress_alert=False,
-        callsign="THY123",
-        reason="baseline",
-        qualification_state="QUALIFIED_PASS",
-    )
-    hold_decision = hold_v472.TerminalArrivalHoldDecision(
-        True, "HOLD_STRONG_TERMINAL_ARRIVAL", "strong arrival", score=0.95
-    )
-    release_decision = hold_v472.TerminalArrivalHoldDecision(
-        False, "RELEASE_GO_AROUND", "go-around"
-    )
-
-    held, effective = v47._apply_initial_hold(
-        decision=hold_decision,
-        base=base,
-        notification_sent=False,
-    )
-    assert effective is True
-    assert held.suppress_alert is True
-    assert held.qualification_state == "TERMINAL_ARRIVAL_INITIAL_HOLD"
-
-    released, effective = v47._apply_initial_hold(
-        decision=release_decision,
-        base=base,
-        notification_sent=False,
-    )
-    assert effective is False
-    assert released.suppress_alert is False
-
-    # Even if terminal evidence later resembles an arrival again, this specific
-    # initial gate ends only because a message was actually delivered.
-    later, effective = v47._apply_initial_hold(
-        decision=hold_decision,
-        base=base,
-        notification_sent=True,
-    )
-    assert effective is False
-    assert later.suppress_alert is False

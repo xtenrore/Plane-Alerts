@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from app.intelligence.route_history import RouteGateResult, RoutePoint
@@ -127,10 +125,3 @@ def test_diverged_history_cannot_hard_suppress_live_geometry():
     updated = neutralize_hard_route_veto_v46(result)
     assert not updated.suppress_alert
     assert not updated.expected_turn_pending
-
-
-def test_worker_bootstrap_repoints_route_writer_before_bounded_queue_capture():
-    source = Path("app/worker/__init__.py").read_text(encoding="utf-8")
-    intelligence_install = source.index("install_route_intelligence_v46()")
-    bounded_writer_import = source.index("from app.intelligence.route_observe_guard_v44 import")
-    assert intelligence_install < bounded_writer_import

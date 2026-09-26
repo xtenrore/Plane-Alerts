@@ -54,7 +54,11 @@ async def test_live_route_write_never_needs_mongo(tmp_path, monkeypatch):
         heading=100.0,
         aircraft_type="A20N",
     )
-    await volume.observe_route_volume(service, ac, now=datetime(2026, 9, 24, 13, 0, tzinfo=timezone.utc).timestamp())
+    await volume.observe_route_volume(
+        service,
+        ac,
+        now=datetime(2026, 9, 24, 13, 0, tzinfo=timezone.utc).timestamp(),
+    )
     assert volume.route_db_path().exists()
 
 
@@ -135,14 +139,11 @@ def test_operational_writer_compatibility_is_permanently_file_backed():
     assert volume._operational_migration_verified() is True
 
 
-def test_install_rebinds_route_consumers_and_disables_prediction_mongo_fallback(monkeypatch):
+def test_install_rebinds_route_consumers_without_old_guard_aliases(monkeypatch):
     from app import next60_outcomes_v55, prediction_lab_audit, prediction_lab_files_v55, sentinel_network
-    from app.intelligence import route_guard_v2, route_history, route_intelligence_v46, route_observe_guard_v44
+    from app.intelligence import route_history, route_intelligence_v46, route_observe_guard_v44
 
-    # Register restoration for every global the installer intentionally replaces
-    # so this composition test cannot affect unrelated tests in the same process.
     for target, name in (
-        (route_guard_v2, "_ORIGINAL_OBSERVE"),
         (route_observe_guard_v44, "_BASE_OBSERVE"),
         (route_history.RouteHistoryService, "_historical_paths"),
         (route_intelligence_v46, "observe_v46"),
@@ -157,7 +158,6 @@ def test_install_rebinds_route_consumers_and_disables_prediction_mongo_fallback(
 
     volume.install_operational_volume_v561()
 
-    assert route_guard_v2._ORIGINAL_OBSERVE is volume.observe_route_volume
     assert route_observe_guard_v44._BASE_OBSERVE is volume.observe_route_volume
     assert route_history.RouteHistoryService._historical_paths is volume.historical_paths_volume
     assert route_intelligence_v46.observe_v46 is volume.observe_route_volume

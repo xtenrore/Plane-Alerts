@@ -21,7 +21,6 @@ from typing import Any
 
 from app.config import settings
 from app.database import get_db
-from app.intelligence import route_guard_v2 as route_v2
 from app.intelligence import route_history as route_mod
 from app.intelligence import route_intelligence_v46 as route_v46
 from app.intelligence import route_observe_guard_v44 as route_observe_guard
@@ -187,9 +186,6 @@ async def append_route_sample(
         captured_at=float(captured_at),
         aircraft_type=str(aircraft_type or ""),
     )
-    # Once the volume has accepted a live sample, retire the legacy Mongo route
-    # collection in a separate bounded background task. This never blocks the
-    # five-second monitor.
     _schedule_route_migration()
 
 
@@ -283,18 +279,12 @@ def _import_batch_sync(rows: list[dict[str, Any]]) -> int:
 
 
 async def migrate_route_history_mongo(db: Any) -> dict[str, Any]:
-    """Best-effort copy of useful route history, then permanently retire its Mongo collection.
-
-    `flight_route_samples` is explicitly non-user operational telemetry. New runtime
-    reads/writes already use the persistent volume before this migration runs, so
-    dropping the old collection cannot remove user/profile/location/config data.
-    """
+    """Best-effort copy of useful route history, then permanently retire its Mongo collection."""
     previous = await asyncio.to_thread(_read_state)
     if previous.get("legacy_collection_dropped"):
         return previous
 
     await asyncio.to_thread(lambda: _connect().close())
-
     collection = db["flight_route_samples"]
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=ROUTE_RETENTION_DAYS)).isoformat()
     imported = int(previous.get("imported_docs") or 0)
@@ -441,9 +431,6 @@ async def _next60_route_from_volume(db: Any, callsign: str, utc_date: str) -> di
 
 
 def _operational_migration_verified() -> bool:
-    # New high-volume Prediction Lab writes are permanently file-backed. This
-    # compatibility hook exists only so older modules never write those records
-    # back to Mongo while the old collections are being exported/dropped.
     return True
 
 
@@ -477,20 +464,14 @@ def install_operational_volume_v561() -> None:
     if _installed:
         return
 
-    # Route history: replace both the v4.6 implementation and the v4.4 worker's
-    # captured function so no live route read/write reaches MongoDB. The core
-    # functions themselves also use this volume backend; these assignments are
-    # a belt-and-suspenders guard for versioned wrapper composition.
+    # Route history remains background-only. Rebind the historical loader and
+    # the bounded queue's captured writer directly; no live guard generation is
+    # involved in operational persistence anymore.
     route_v46.observe_v46 = observe_route_volume
     route_v46.historical_paths_v46 = historical_paths_volume
-    route_v2._ORIGINAL_OBSERVE = observe_route_volume
     route_observe_guard._BASE_OBSERVE = observe_route_volume
     route_mod.RouteHistoryService._historical_paths = historical_paths_volume
 
-    # High-volume Prediction Lab evidence has been file-backed since v5.5.
-    # Permanently report the compatibility migration as complete to writer-side
-    # checks so they can never fall back to Mongo. The migration routine itself
-    # remains available to export/drop old collections and reclaim Atlas space.
     lab_files.migration_verified = _operational_migration_verified
 
     sentinel = sys.modules.get("app.sentinel_network")
