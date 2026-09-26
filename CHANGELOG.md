@@ -2,6 +2,16 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.3 — Dead Workflow Cleanup
+
+- Canonicalized the active Vercel v3.3 durable workflow implementation as `vercel_runtime/plane_workflows.py`.
+- Updated Vercel ingress and `pyproject.toml` to use `plane_workflows` rather than the temporary-looking `plane_workflows_fixed` module.
+- Removed the retired v3.2 workflow implementation and deleted the obsolete `plane_workflows_fixed.py` filename.
+- Retargeted latency/shared-runtime regressions to the canonical workflow plus `plane_runtime_support.py`.
+- Added architecture coverage preventing obsolete workflow references from returning and pinning the durable graph to the `planev33` namespace rather than retired `planev32`.
+- Prediction version remains `5.3-3d-proximity-age-aware`; no Railway configuration, dependency, storage-schema, provider, installer, trajectory, CPA, ETA, qualification/cancellation threshold or alert-timing behavior changed.
+- Railway-only maintenance release; community platform validation remains owned by the weekly community-release workflow.
+
 ## v5.8.2 — Route Guard Consolidation
 
 - Consolidated the live provider-first destination/path authority into one canonical non-versioned `app/intelligence/route_guard.py` module.

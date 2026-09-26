@@ -4,23 +4,23 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.2**
+**Current code version: Plane Alerts v5.8.3**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v5.8.2 — Route guard consolidation
+## v5.8.3 — Dead workflow cleanup
 
-The live provider-first destination/path authority now lives in one canonical non-versioned `app/intelligence/route_guard.py` module. The v5.8.1 production decision behavior is preserved; this release removes obsolete route-guard generations and compatibility shims that were no longer mounted by the live worker.
+The Vercel workflow runtime now has one unambiguous active module: `vercel_runtime/plane_workflows.py`. The active v3.3 workflow implementation previously lived beside an obsolete v3.2 implementation under the temporary-looking `plane_workflows_fixed.py` name.
 
-- Production startup imports only the canonical route guard.
-- Historical v2, v4.2 and v4.7 route-guard modules and the obsolete requalification/arrival compatibility shims are removed.
-- Architecture tests prevent removed guard generations from being imported again.
-- Regression coverage preserves IST/LTFM and LTBA terminal-arrival protection, genuine observer passes, provider conflict/outage fail-open behavior, late destination resolution, go-around/diversion recovery, physical-radius override and missing/stale evidence semantics.
-- The non-blocking destination lookup benchmark remains part of Railway CI and continues to protect the five-second monitoring path.
+- The exact active v3.3 workflow implementation now owns the stable `plane_workflows.py` filename.
+- Vercel ingress imports the canonical module and `pyproject.toml` registers `plane_workflows:wf` as the workflow entrypoint.
+- The retired v3.2 workflow implementation and the misleading `plane_workflows_fixed.py` filename are removed.
+- Vercel latency regressions now test the canonical workflow together with `plane_runtime_support.py` instead of depending on both old and new workflow files.
+- Architecture coverage prevents `plane_workflows_fixed` references from returning and verifies the canonical workflow remains on the `planev33` durable namespace rather than the retired `planev32` graph.
 
-This Railway release changes architecture only. The prediction version and deterministic trajectory, CPA, ETA, qualification/cancellation thresholds and alert timing remain unchanged. Community platform validation remains part of the weekly community release.
+This is an architecture/maintenance release. Railway runtime configuration, dependencies, storage schema, providers, installer behavior and the deterministic prediction/alert path are unchanged. The prediction version remains `5.3-3d-proximity-age-aware`. Full community platform validation remains part of the weekly community release process.
 
 ## Real-time architecture
 
