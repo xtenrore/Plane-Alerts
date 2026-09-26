@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.0"
+VERSION = "5.8.1"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -67,6 +67,8 @@ VERSION = "5.8.0"
 # trajectory, CPA, ETA, qualification, cancellation, destination-path or timing logic.
 # v5.8.0 standardizes user-facing aircraft tracking links on Flightradar24 without
 # changing ADS-B ingestion, trajectory, CPA, ETA, qualification, cancellation or timing.
+# v5.8.1 repairs the installed Next 60 detail callback, permits failed callback
+# retries, bounds acknowledgement bookkeeping, and adds safe Telegram recovery.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 

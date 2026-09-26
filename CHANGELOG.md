@@ -2,6 +2,15 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.1 — Telegram Detail and Recovery Reliability
+
+- Fixed `/next60` More Info crashing in the callback actually installed at startup; aircraft details now use the current Flightradar24 helper and label.
+- Allowed failed/cancelled detail attempts to retry while preserving deduplication after confirmed success.
+- Stopped untracked callback IDs accumulating in acknowledgement telemetry; retained first-receipt expiry order and excluded failed acknowledgements from success metrics.
+- Added understandable recovery messages for unexpected Telegram errors and bounded module/function/line diagnostics without exception text or user content.
+- Added regressions exercising production callback registration, aircraft details, retries, duplicate delivery, expiry, cancellation and diagnostic privacy.
+- Railway-only patch; no dependency, configuration, storage schema, installer or physical prediction change.
+
 ## v5.8.0 — Flightradar24 Aircraft Links
 
 - Standardized user-facing aircraft tracking links on Flightradar24 across live alert buttons, legacy alert text and `/next60`.
