@@ -1,6 +1,7 @@
 """Plane Alerts v4.6 Telegram interaction latency guards and telemetry."""
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 import logging
@@ -77,22 +78,23 @@ def mark_callback_received(query: Any, handler: str) -> float:
         _received[key] = (now, handler)
     else:
         now = existing[0]
-    _received.move_to_end(key)
+    # Preserve insertion order: timestamps are first receipt times, including
+    # duplicate delivery. Moving an old entry would break TTL pruning order.
     _prune(time.monotonic())
     return now
 
 
 async def _answer_with_timing(self: CallbackQuery, *args: Any, **kwargs: Any) -> Any:
     key = str(getattr(self, "id", "") or "")
-    try:
-        return await _original_answer(self, *args, **kwargs)
-    finally:
-        if key and key not in _acked:
-            entry = _received.get(key)
-            if entry is not None:
-                started, handler = entry
-                _metrics[handler]["ack_ms"].append(max(0.0, (time.monotonic() - started) * 1000.0))
-            _acked.add(key)
+    result = await _original_answer(self, *args, **kwargs)
+    entry = _received.get(key)
+    # Only tracked successful answers belong here. Uninstrumented callbacks
+    # have no bounded/expiring _received entry to retire their acknowledgement.
+    if entry is not None and key not in _acked:
+        started, handler = entry
+        _metrics[handler]["ack_ms"].append(max(0.0, (time.monotonic() - started) * 1000.0))
+        _acked.add(key)
+    return result
 
 
 def _percentile(values: list[float], q: float) -> float | None:
@@ -179,30 +181,36 @@ async def next60_more_v46(update: Any, context: Any) -> None:
         _record_handler("next60_more", started)
         raise ApplicationHandlerStop
 
-    # This must remain the first awaited external operation.
-    await query.answer()
+    try:
+        # This must remain the first awaited external operation.
+        await query.answer()
 
-    token = query.data[len(next60.MORE_PREFIX):]
-    now_dt = next60.datetime.now(next60.timezone.utc)
-    docs = await next60.build_next60_docs(user.id, now_dt)
-    selected = next((doc for doc in docs if next60._callback_token(doc) == token), None)
+        token = query.data[len(next60.MORE_PREFIX):]
+        now_dt = next60.datetime.now(next60.timezone.utc)
+        docs = await next60.build_next60_docs(user.id, now_dt)
+        selected = next((doc for doc in docs if next60._callback_token(doc) == token), None)
 
-    if query.message is not None:
-        if selected is None:
-            await query.message.reply_text("Forecast changed. Run /next60 again.")
-        else:
-            adsb_url = next60._adsb_url(selected)
-            detail_keyboard = (
-                InlineKeyboardMarkup([[InlineKeyboardButton("Open in ADSB", url=adsb_url)]])
-                if adsb_url
-                else None
-            )
-            await query.message.reply_text(
-                next60._detail_text(now_dt, selected),
-                parse_mode=ParseMode.HTML,
-                reply_markup=detail_keyboard,
-                disable_web_page_preview=True,
-            )
+        if query.message is not None:
+            if selected is None:
+                await query.message.reply_text("Forecast changed. Run /next60 again.")
+            else:
+                tracker_url = next60._tracker_url(selected)
+                detail_keyboard = (
+                    InlineKeyboardMarkup([[InlineKeyboardButton("Open in Flightradar24", url=tracker_url)]])
+                    if tracker_url
+                    else None
+                )
+                await query.message.reply_text(
+                    next60._detail_text(now_dt, selected),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=detail_keyboard,
+                    disable_web_page_preview=True,
+                )
+    except (Exception, asyncio.CancelledError):
+        # A failed/cancelled attempt is not a completed action. Allow Telegram
+        # redelivery to retry, while successful deliveries stay deduplicated.
+        _seen.pop(str(getattr(query, "id", "") or ""), None)
+        raise
     _record_handler("next60_more", started, message_complete=True)
     raise ApplicationHandlerStop
 

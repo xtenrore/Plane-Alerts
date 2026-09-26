@@ -4,23 +4,22 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.0**  
+**Current code version: Plane Alerts v5.8.1**
+
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
 
-## v5.8.0 — Flightradar24 aircraft links
+## v5.8.1 — Telegram detail and recovery reliability
 
-Plane Alerts v5.8.0 standardizes user-facing aircraft tracking links on Flightradar24.
+The Next 60 Minutes **More Info** action now opens aircraft details correctly with a Flightradar24 button. The callback installed at startup had retained a removed tracker helper after v5.8.0, causing an exception whenever a matching aircraft was found.
 
-- Live alert action buttons open Flightradar24 instead of ADSB.fi.
-- Legacy aircraft alert text opens Flightradar24.
-- `/next60` aircraft buttons open Flightradar24 instead of adsb.lol.
-- When a usable callsign is available, Plane Alerts opens the matching Flightradar24 flight URL directly.
-- ICAO24-only observations fall back to Flightradar24's aircraft-data search page rather than inventing an invalid live-flight URL.
-- Flightradar24 is only a user-facing external link target. It is not added as an ADS-B provider or runtime API dependency.
+- Failed detail requests can be retried; successfully delivered requests remain deduplicated.
+- Callback acknowledgement records remain bounded and expired records are removed. Failed acknowledgements do not count as successful latency samples.
+- Unexpected Telegram errors provide a recovery message. Logs include bounded code locations without recording message contents, exception text, credentials or private coordinates.
+- Aircraft links continue to use callsign-based Flightradar24 URLs, with the aircraft-data page as the ICAO24-only fallback.
 
-No trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or alert-timing behavior changes in v5.8.0.
+This Railway patch preserves the existing trajectory, CPA, ETA, qualification, cancellation and alert-timing behavior. Community platform validation remains part of the weekly community release.
 
 ## Real-time architecture
 
