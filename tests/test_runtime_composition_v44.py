@@ -9,12 +9,12 @@ def test_production_guard_stack_installs_in_fresh_interpreter():
         """
         import app.worker.monitor  # installs production worker guard composition
         from app.intelligence.route_history import RouteHistoryService
-        from app.intelligence import destination_path_guard_v554, route_observe_guard_v44
+        from app.intelligence import route_guard, route_observe_guard_v44
         from app.worker import notifications
 
-        # One destination/path evaluator is the live arrival authority. Route
-        # history remains a bounded observation/analytics path only.
-        assert RouteHistoryService.evaluate is destination_path_guard_v554.evaluate_destination_path
+        # One canonical destination/path evaluator is the live arrival authority.
+        # Route history remains a bounded observation/analytics path only.
+        assert RouteHistoryService.evaluate is route_guard.evaluate_destination_path
         assert RouteHistoryService.observe is route_observe_guard_v44.observe_queued
         assert notifications.send_or_update_approach.__module__ == "app.worker.notifications"
         print("production-guard-stack-ok")
