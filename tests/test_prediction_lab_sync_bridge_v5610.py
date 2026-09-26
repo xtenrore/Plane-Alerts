@@ -135,7 +135,7 @@ def test_bridge_validates_ndjson_rows(tmp_path: Path) -> None:
 def test_bridge_status_reports_version_and_disk_headroom(tmp_path: Path) -> None:
     (tmp_path / "raw").mkdir()
     result = status(root=tmp_path)
-    assert result["bridge_version"] == "5.6.11"
+    assert result["bridge_version"] == "5.7.1"
     assert result["raw_exists"] is True
     assert result["total_bytes"] > 0
     assert result["free_bytes"] >= 0
