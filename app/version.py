@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.2"
+VERSION = "5.8.3"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -71,6 +71,8 @@ VERSION = "5.8.2"
 # retries, bounds acknowledgement bookkeeping, and adds safe Telegram recovery.
 # v5.8.2 consolidates the live provider-first destination/path authority into the
 # single canonical non-versioned route_guard module without changing its decisions.
+# v5.8.3 removes the retired Vercel v3.2 workflow implementation and canonicalizes
+# the active v3.3 workflow module/entrypoint without changing live prediction behavior.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
