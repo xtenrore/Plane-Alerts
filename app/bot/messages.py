@@ -7,6 +7,7 @@ without touching handler logic.
 from __future__ import annotations
 
 from app.aircraft.categories import CATEGORY_EMOJIS, get_all_types_for_categories
+from app.bot.flight_links import flightradar24_url
 from app.worker.geo import heading_to_cardinal, metres_to_feet, ms_to_knots
 
 
@@ -221,7 +222,9 @@ def aircraft_alert_message(
     if origin_country:
         lines.append(f"\n<b>Origin:</b> {origin_country}")
 
-    lines.append(f"\n<a href=\"https://globe.adsb.fi/?icao={icao24}\">🌍 Track on ADSB.fi</a>")
+    tracker_url = flightradar24_url(callsign=callsign, icao24=icao24)
+    if tracker_url:
+        lines.append(f'\n<a href="{tracker_url}">🌍 Track on Flightradar24</a>')
     return "\n".join(lines)
 
 
