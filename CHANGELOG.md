@@ -2,6 +2,21 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.0 — Flightradar24 Aircraft Links
+
+- Standardized user-facing aircraft tracking links on Flightradar24 across live alert buttons, legacy alert text and `/next60`.
+- Uses a sanitized callsign for direct Flightradar24 flight links when available.
+- ICAO24-only observations fall back to Flightradar24's aircraft-data page rather than fabricating a live-flight URL.
+- Flightradar24 remains an external user-facing link target only; no Flightradar24 API/runtime provider dependency was added.
+- No trajectory, CPA, ETA, qualification, cancellation, destination-path or alert-timing behavior changed; prediction version remains `5.3-3d-proximity-age-aware`.
+
+## v5.7.1 — Bug Fixes Update
+
+- Promoted the verified v5.6.x storage and reliability recovery into the next release line without changing the physical prediction model.
+- Preserved bounded persistent-volume route/notification/Prediction Lab storage, authenticated evidence synchronization, low-space backpressure and exact repository acknowledgement before evidence deletion.
+- Kept MongoDB for durable user/account/location/profile/preferences/configuration state rather than high-volume operational telemetry.
+- No trajectory, CPA, ETA, qualification, cancellation, destination-path or alert-timing behavior changed; prediction version remains `5.3-3d-proximity-age-aware`.
+
 ## v5.6 — Retired Integration Cleanup
 
 - Removed remaining retired external-agent names and hand-off labels from active source comments, tests and historical documentation.
