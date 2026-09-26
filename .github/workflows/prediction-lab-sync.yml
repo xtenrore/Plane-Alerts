@@ -31,7 +31,7 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       MAX_FILES: "500"
       MAX_BYTES: "26214400"
-      REQUIRED_BRIDGE_VERSION: "5.6.11"
+      REQUIRED_BRIDGE_VERSION: "5.7.1"
     steps:
       - name: Checkout evidence branch
         uses: actions/checkout@v4
