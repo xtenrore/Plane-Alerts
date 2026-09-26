@@ -1,0 +1,23 @@
+{
+  "case_id": "infra-adsb-zero-jump-log-storm-20260926",
+  "event_ids": [],
+  "status": "reviewed",
+  "disposition": "confirmed_bug_candidate_created",
+  "investigated_at": "2026-09-26T18:21:45Z",
+  "summary": "Railway production telemetry repeatedly emits one adsb_outlier_rejected WARNING per rejected aircraft on five-second cycles, overwhelmingly for jump_km=0.00. The rejection behavior itself is retained; the defect is unbounded repetitive diagnostics capable of flooding Railway logs.",
+  "conclusion": "Confirmed logging/reliability defect. The smallest safe correction rate-limits only repetitive zero-jump diagnostics, preserves every ADS-B rejection decision, preserves non-zero-jump warnings, and reports the suppressed repeat count on the next emitted diagnostic.",
+  "evidence": {
+    "source": "Railway production telemetry inspected by TASK 2",
+    "production_symptom": "adsb_outlier_rejected warning bursts recurring on the five-second monitoring cadence, dominated by jump_km=0.00",
+    "candidate_pr": 122,
+    "candidate_branch": "fix/bound-adsb-outlier-logging",
+    "candidate_sha": "b0e61196c3f34ce06cea977def1eebc9e1df0561"
+  },
+  "regression_references": [
+    "PR #122 exact regression coverage for zero-jump bounding/summarization",
+    "PR #122 exact regression coverage preserving non-zero-jump diagnostics"
+  ],
+  "error_museum_references": [],
+  "resolution_owner": "Prediction Lab Release task",
+  "solved": false
+}
