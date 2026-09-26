@@ -302,7 +302,11 @@ async def send_or_update_approach(
         prediction_changed,
     )
     markup = (
-        notification_actions_keyboard(notification_id, getattr(aircraft, "icao24", None))
+        notification_actions_keyboard(
+            notification_id,
+            getattr(aircraft, "icao24", None),
+            getattr(aircraft, "callsign", None),
+        )
         if notification_id
         else None
     )
@@ -420,7 +424,7 @@ async def send_aircraft_notification(
     sent = await _send_message(
         user_id,
         msg,
-        notification_actions_keyboard(notification_id, aircraft.icao24) if notification_id else None,
+        notification_actions_keyboard(notification_id, aircraft.icao24, aircraft.callsign) if notification_id else None,
     )
     if sent and notification_id:
         async def _photo_snapshot() -> None:
