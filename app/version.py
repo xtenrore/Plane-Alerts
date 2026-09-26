@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.6.11"
+VERSION = "5.7.1"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -62,8 +62,9 @@ VERSION = "5.6.11"
 # v5.6.11 keeps malformed, legacy, sensitive or oversized raw objects untouched
 # while continuing to export valid evidence behind them, preventing one isolated
 # object from blocking the repository-acknowledged recovery of the full volume.
-# No v5.6.x storage patch changes trajectory, CPA, ETA, qualification,
-# cancellation, destination-path logic or alert timing.
+# v5.7.1 is the cumulative Bug Fixes Update that consolidates the verified v5.6.x
+# storage/reliability recovery as the next public release identity. It adds no new
+# trajectory, CPA, ETA, qualification, cancellation, destination-path or timing logic.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 

@@ -30,9 +30,9 @@ def test_v5610_uses_existing_project_token_only_for_variable_lookup() -> None:
     assert "railway volume" not in text
 
 
-def test_v5611_waits_for_exact_deployed_bridge_before_export() -> None:
+def test_v571_waits_for_exact_deployed_bridge_before_export() -> None:
     text = _text()
-    assert 'REQUIRED_BRIDGE_VERSION: "5.6.11"' in text
+    assert 'REQUIRED_BRIDGE_VERSION: "5.7.1"' in text
     wait_pos = text.index("- name: Wait for exact deployed sync bridge")
     download_pos = text.index("- name: Download bounded authenticated evidence batch")
     assert wait_pos < download_pos

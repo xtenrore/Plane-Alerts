@@ -6,7 +6,8 @@ caller presents the exact repository-acknowledged path, size and SHA-256.
 
 v5.6.11 makes export resilient to isolated malformed/legacy/sensitive raw objects:
 those objects remain untouched on the volume and no longer block valid evidence behind
-them from being synchronized.
+them from being synchronized. v5.7.1 promotes that verified behavior unchanged as the
+cumulative Bug Fixes Update.
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ from typing import Any, Iterable
 
 from app.prediction_lab_files_v55 import SCHEMA_VERSION, root_path
 
-BRIDGE_VERSION = "5.6.11"
+BRIDGE_VERSION = "5.7.1"
 MAX_BATCH_FILES = 500
 MAX_BATCH_BYTES = 25 * 1024 * 1024
 MAX_SCAN_FILES = 5000
