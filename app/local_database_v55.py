@@ -735,4 +735,4 @@ class SQLiteDatabase:
 
 
 def backend_label(database: Any) -> str:
-    return "sqlite" if bool(getattr(database, "is_plane_alerts_sqlite", False)) else "mongodb"
+    return "sqlite" if getattr(database, "is_plane_alerts_sqlite", False) is True else "mongodb"

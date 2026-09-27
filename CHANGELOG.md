@@ -2,6 +2,12 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.5 — Mongo Maintenance Truth Testing
+
+- Removed boolean evaluation of dynamically resolved Motor collection attributes during background index maintenance, shutdown, backend labeling and local-database switching.
+- Added a Motor-like regression that runs migration, indexes and schema in order and tests the shutdown and local-storage paths.
+- No database schema, configuration, dependency, installer, provider or prediction behavior changes. Community storage checks remain in the weekly community workflow.
+
 ## v5.8.4 — Storage Maintenance Recovery
 
 - Stopped background storage maintenance from retrying the retired Prediction Lab Mongo exporter once operational telemetry uses the persistent volume.

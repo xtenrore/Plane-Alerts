@@ -280,7 +280,7 @@ async def _connect_sqlite(*, ensure_indexes: bool) -> Any:
     path = _sqlite_path()
     key = ("sqlite", path)
     storage_metrics.set_state("connecting")
-    if _db is None or not bool(getattr(_db, "is_plane_alerts_sqlite", False)):
+    if _db is None or getattr(_db, "is_plane_alerts_sqlite", False) is not True:
         _db = SQLiteDatabase(path)
     await _db.command("ping")
     storage_metrics.set_state("healthy")
@@ -385,7 +385,7 @@ async def close_db() -> None:
             pass
     _maintenance_task = None
     _maintenance_state.update({"state": "idle", "attempt": 0, "last_error": None, "completed_at": None})
-    if _db is not None and bool(getattr(_db, "is_plane_alerts_sqlite", False)):
+    if _db is not None and getattr(_db, "is_plane_alerts_sqlite", False) is True:
         await _db.close()
         _db = None
     if _client is not None:
