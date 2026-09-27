@@ -85,11 +85,13 @@
     "migration": "schema 1 to 2 preserves Phase 1 jobs and adds independent backup status; local migration test passes; Railway deployment pending",
     "local_tests": "14 passed; no paid provider calls",
     "github_ci_prior_checkpoint": "99cd4cf1baa07b10af0dbc91c77d732c9efe06bb tests passed",
-    "checkpoint_branch_commit": "a9871513c7d03124d00c3e927ab20f7beeb11cd8",
+    "checkpoint_branch_commit": "0d4a1d447713345602032d03882cae8fe4686b17",
     "github_config_projection": "workflow maps GitHub Actions AI_OPS_GITHUB_DR_TOKEN secret into isolated service via Railway CLI, source commit set from github.sha; missing secret disables writer",
     "github_secret_status": "AI_OPS_GITHUB_DR_TOKEN absent from observed GitHub Actions Secrets as of 2026-09-27; no value viewed",
-    "railway_migration": "schema 2 workflow queued; production migration and live volume restore not yet verified",
-    "github_ci_latest": "repository tests succeeded on commit a9871513c7d03124d00c3e927ab20f7beeb11cd8; isolated workflow pending"
+    "railway_migration": "schema 1 to 2 deployed successfully to existing dedicated AI Ops volume; deployment bc4b3fd1-9e54-42db-812c-6250bf346922, PHASE1_VERIFIED_STABLE",
+    "github_ci_latest": "focused isolated workflow run 29 passed on 0d4a1d447713345602032d03882cae8fe4686b17; repository tests passed on a9871513c7d03124d00c3e927ab20f7beeb11cd8",
+    "main_monitor_during_migration": "25 cycles from 15:20-15:22 UTC, mean 5.069 s, max 7.754 s, none over 10 s; main deployment unchanged",
+    "credential_next_action": "action-time confirmation required before creating a fine-grained credential limited to private DR repository contents read/write, then store in source repository GitHub Actions Secret AI_OPS_GITHUB_DR_TOKEN"
   },
   "open_blockers_for_next_phase": [
     "Phase 2 requires a fine-grained GitHub credential with read/write Contents limited to xtenrore/Plane-Alerts-Private-Repo, stored as GitHub Actions Secret AI_OPS_GITHUB_DR_TOKEN; creating/granting this security-sensitive access through the Cloud Browser needs action-time owner confirmation.",
