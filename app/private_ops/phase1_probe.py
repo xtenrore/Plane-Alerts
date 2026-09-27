@@ -8,7 +8,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from .store import Store
+from .store import QueueFull, Store
 
 JOB = "phase1:railway-volume-restart-probe"
 
@@ -41,13 +41,43 @@ def run(store: Store) -> str:
         store.finish_job(JOB, "probe-second")
         store.checkpoint("phase1_probe", "awaiting_second_restart")
         return "PHASE1_RECOVERED_AWAITING_SECOND_RESTART"
-    if stage in ("awaiting_second_restart", "verified"):
+    if stage in ("awaiting_second_restart", "verified", "verified_extended"):
         job = store.db.execute("SELECT status FROM ai_ops_jobs WHERE id=?", (JOB,)).fetchone()
         steps = store.db.execute("SELECT step_id,status,attempts FROM ai_ops_steps WHERE job_id=? ORDER BY step_id", (JOB,)).fetchall()
         assert job and job[0] == "COMPLETE"
         assert [(s[0], s[1], s[2]) for s in steps] == [("completed", "COMPLETE", 1), ("interrupted", "COMPLETE", 2)]
         assert store.claim("probe-third") is None
         assert store.health()["integrity"] == "ok"
-        store.checkpoint("phase1_probe", "verified")
-        return "PHASE1_SECOND_RESTART_VERIFIED" if stage == "awaiting_second_restart" else "PHASE1_VERIFIED_STABLE"
+        if stage == "awaiting_second_restart":
+            store.checkpoint("phase1_probe", "verified")
+            return "PHASE1_SECOND_RESTART_VERIFIED"
+        if stage == "verified":
+            # Exercise independent SQLite connections on the mounted volume.
+            bounded = Store(store.root, max_pending=1)
+            other = Store(store.root, max_pending=1)
+            try:
+                assert bounded.enqueue("phase1:bounded-lease-probe")
+                try:
+                    other.enqueue("phase1:overflow-must-be-rejected")
+                except QueueFull:
+                    pass
+                else:
+                    raise AssertionError("bounded queue accepted overflow")
+                assert bounded.claim("probe-owner") == "phase1:bounded-lease-probe"
+                assert other.claim("probe-contender") is None
+                try:
+                    other.begin_step("phase1:bounded-lease-probe", "protected", "probe-contender", {})
+                except PermissionError:
+                    pass
+                else:
+                    raise AssertionError("lease ownership was bypassed")
+                bounded.finish_job("phase1:bounded-lease-probe", "probe-owner")
+                assert store.health()["schema"] == 1
+                assert store.health()["integrity"] == "ok"
+                store.checkpoint("phase1_probe", "verified_extended")
+                return "PHASE1_BOUNDS_AND_LEASES_VERIFIED"
+            finally:
+                bounded.close()
+                other.close()
+        return "PHASE1_VERIFIED_STABLE"
     raise RuntimeError("unknown Phase 1 probe checkpoint")
