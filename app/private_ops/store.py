@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -79,7 +79,29 @@ class Store:
                 for statement in schema.split(";"):
                     if statement.strip():
                         db.execute(statement)
-                db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                db.execute("PRAGMA user_version=1")
+                version = 1
+            if version == 1:
+                db.execute("""CREATE TABLE ai_ops_dr_sync (
+                    destination TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0,
+                    synced_revision INTEGER NOT NULL DEFAULT 0,
+                    last_attempt REAL, last_verified REAL, last_hash TEXT,
+                    next_attempt REAL NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0,
+                    lease_owner TEXT, lease_until REAL,
+                    CHECK (synced_revision <= revision)
+                )""")
+                db.execute("""INSERT INTO ai_ops_dr_sync(destination) VALUES('github'),('dropbox')""")
+                if db.execute("SELECT 1 FROM ai_ops_jobs LIMIT 1").fetchone() or db.execute("SELECT 1 FROM ai_ops_scheduler LIMIT 1").fetchone():
+                    self._mark_dr_dirty(db)
+                db.execute("PRAGMA user_version=2")
+
+    @staticmethod
+    def _mark_dr_dirty(db: sqlite3.Connection) -> None:
+        # Coalesce bursts while preserving a durable monotonically increasing
+        # revision. Dropbox stays inactive until its own implementation phase.
+        db.execute("""UPDATE ai_ops_dr_sync SET revision=revision+1,
+            next_attempt=CASE WHEN next_attempt=0 THEN ? ELSE next_attempt END
+            WHERE destination='github'""", (time.time() + 60,))
 
     @staticmethod
     def digest(value: object) -> str:
@@ -96,6 +118,7 @@ class Store:
             if count >= self.max_pending:
                 raise QueueFull("Private Operations queue capacity reached")
             db.execute("INSERT INTO ai_ops_jobs(id,status,priority,created,updated) VALUES(?,'PENDING',?,?,?)", (job_id, priority, now, now))
+            self._mark_dr_dirty(db)
         return True
 
     def claim(self, worker: str, *, lease_seconds: int = 300) -> str | None:
@@ -147,6 +170,7 @@ class Store:
                 db.execute("""INSERT INTO ai_ops_steps(job_id,step_id,status,input_hash,attempts,lease_owner,lease_until)
                     VALUES(?,?,'RUNNING',?,1,?,?)""", (job_id, step_id, input_hash, worker, job["lease_until"]))
             db.execute("INSERT INTO ai_ops_attempts(job_id,step_id,worker,started) VALUES(?,?,?,?)", (job_id, step_id, worker, now))
+            self._mark_dr_dirty(db)
             return True
 
     def complete_step(self, job_id: str, step_id: str, worker: str, output: object) -> str:
@@ -169,6 +193,7 @@ class Store:
             db.execute("""UPDATE ai_ops_attempts SET ended=?,result='COMPLETE' WHERE id=(
                 SELECT id FROM ai_ops_attempts WHERE job_id=? AND step_id=? AND worker=? AND ended IS NULL ORDER BY id DESC LIMIT 1)""",
                 (now, job_id, step_id, worker))
+            self._mark_dr_dirty(db)
         return digest
 
     def finish_job(self, job_id: str, worker: str) -> None:
@@ -181,12 +206,14 @@ class Store:
                 WHERE id=? AND lease_owner=? AND lease_until>? AND status='RUNNING'""", (now, job_id, worker, now))
             if result.rowcount != 1:
                 raise PermissionError("worker no longer owns job")
+            self._mark_dr_dirty(db)
 
     def checkpoint(self, name: str, value: str) -> None:
         with self.transaction() as db:
             db.execute("""INSERT INTO ai_ops_scheduler(name,checkpoint,updated) VALUES(?,?,?)
                 ON CONFLICT(name) DO UPDATE SET checkpoint=excluded.checkpoint,updated=excluded.updated""",
                 (name, value, time.time()))
+            self._mark_dr_dirty(db)
 
     def health(self) -> dict[str, object]:
         return {"schema": self.db.execute("PRAGMA user_version").fetchone()[0],
