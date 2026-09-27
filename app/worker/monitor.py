@@ -19,9 +19,12 @@ from app.config import settings
 from app.database import get_db, locations_col, preferences_col, system_status_col, users_col
 from app.intelligence.camera import recommend_camera
 from app.intelligence.lifecycle import (
+    INITIAL_ALERT_CONFIRMATIONS_REQUIRED,
+    cancelled_latch_allows_reactivation,
     decide_lifecycle,
     prediction_changed,
     resolve_cancellation_confirmation,
+    resolve_initial_alert_confirmation,
     should_cancel_active_alert,
     should_finalize_observed_pass,
 )
@@ -417,7 +420,9 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                     or (old_time and (datetime.now(timezone.utc) - old_time).total_seconds() > 1800)):
             old = None
         observed_at = max((sample.timestamp for sample in hist), default=0.0)
-        fresh_observation = observed_at > float((old or {}).get("last_observation_at") or 0.0) + 0.001
+        previous_observed_at = float((old or {}).get("last_observation_at") or 0.0)
+        fresh_observation = observed_at > previous_observed_at + 0.001
+        observation_gap_s = observed_at - previous_observed_at if previous_observed_at > 0 and fresh_observation else None
 
         if old and not old.get("active") and old.get("stage") == "passed":
             passed_at = old.get("updated_at")
@@ -451,7 +456,14 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 route_suppressed = not active and pred.current_distance_km > radius
                 logger.exception("route_gate_failed callsign=%s icao=%s user=%s", ac.callsign, ac.icao24, uid)
 
-        qualifies = live_qualifies and not route_suppressed
+        reactivation_allowed = cancelled_latch_allows_reactivation(
+            (old or {}).get("stage"),
+            bool((old or {}).get("active")),
+            pred,
+            fresh_observation,
+            radius,
+        )
+        qualifies = live_qualifies and not route_suppressed and reactivation_allowed
         route_state = {
             "config_key": config_key,
             "last_observation_at": observed_at,
@@ -494,6 +506,15 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 route_gate.history_days if route_gate else 0,
                 route_gate.reason if route_gate else "route gate",
             )
+        if live_qualifies and not reactivation_allowed:
+            logger.info(
+                "approach_cancelled_latch user=%s icao=%s stage=%s current=%.2f radius=%.2f",
+                uid,
+                ac.icao24,
+                (old or {}).get("stage"),
+                pred.current_distance_km,
+                radius,
+            )
 
         observed_pass = bool(
             old
@@ -521,8 +542,14 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                     "projected_closest_km": pred.projected_closest_km,
                     "observed_closest_km": observed_closest,
                     "cancel_confirmation_count": 0,
+                    "initial_confirmation_count": 0,
                     **route_state,
-                }, "$unset": {"candidate_projected_closest_km": "", "candidate_state": ""}},
+                }, "$unset": {
+                    "candidate_projected_closest_km": "",
+                    "candidate_state": "",
+                    "initial_candidate_projected_closest_km": "",
+                    "initial_candidate_time_to_cpa_s": "",
+                }},
             )
             enqueue_outcome(user_id=uid, aircraft=ac, outcome="passed", observed_closest_km=observed_closest, final_prediction=pred)
             logger.info("approach_passed user=%s icao=%s observed_distance=%.2f", uid, ac.icao24, observed_closest)
@@ -556,8 +583,14 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                         "projected_closest_km": pred.projected_closest_km,
                         "observed_closest_km": observed_closest,
                         "cancel_confirmation_count": 0,
+                        "initial_confirmation_count": 0,
                         **route_state,
-                    }, "$unset": {"candidate_projected_closest_km": "", "candidate_state": ""}},
+                    }, "$unset": {
+                        "candidate_projected_closest_km": "",
+                        "candidate_state": "",
+                        "initial_candidate_projected_closest_km": "",
+                        "initial_candidate_time_to_cpa_s": "",
+                    }},
                 )
                 enqueue_outcome(user_id=uid, aircraft=ac, outcome="cancelled", observed_closest_km=observed_closest,
                     final_prediction=pred, previous_projected_closest_km=stable_previous_cpa, route_suppressed=route_suppressed,
@@ -595,7 +628,42 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                     confirmation_count,
                     route_suppressed,
                 )
+            elif old and not old.get("message_id"):
+                await states.update_one(
+                    {"_id": old["_id"]},
+                    {"$set": {
+                        "active": False,
+                        "stage": "candidate",
+                        "aircraft_type": typ,
+                        "projected_closest_km": pred.projected_closest_km,
+                        "time_to_cpa_s": pred.time_to_cpa_s,
+                        "prediction_at": datetime.now(timezone.utc),
+                        "confidence": pred.confidence,
+                        "updated_at": datetime.now(timezone.utc),
+                        "initial_confirmation_count": 0,
+                        **route_state,
+                    }, "$unset": {
+                        "initial_candidate_projected_closest_km": "",
+                        "initial_candidate_time_to_cpa_s": "",
+                    }},
+                )
             continue
+
+        initial_ready = True
+        initial_count = 0
+        initial_cpa = None
+        initial_eta = None
+        if not active:
+            initial_ready, initial_count, initial_cpa, initial_eta = resolve_initial_alert_confirmation(
+                int((old or {}).get("initial_confirmation_count") or 0),
+                (old or {}).get("initial_candidate_projected_closest_km"),
+                (old or {}).get("initial_candidate_time_to_cpa_s"),
+                qualifies=qualifies,
+                fresh_observation=fresh_observation,
+                prediction=pred,
+                alert_radius_km=radius,
+                observation_gap_s=observation_gap_s,
+            )
 
         env = None
         cam = await _camera(uid, ac, pred, user, spot, None)
@@ -616,7 +684,17 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             or (stage == "camera_ready" and spot["camera_ready_alerts"])
             or (stage == "photo_now" and spot["photo_now_alerts"])
         )
-        should_send = spot["approach_alerts"] and (bool(msgid) or initial_allowed)
+        should_send = spot["approach_alerts"] and (bool(msgid) or (initial_allowed and initial_ready))
+        if not msgid and initial_allowed and not initial_ready:
+            logger.info(
+                "approach_alert_candidate user=%s icao=%s cpa=%.2f t=%s confirmation=%d/%d",
+                uid,
+                ac.icao24,
+                pred.projected_closest_km,
+                f"{pred.time_to_cpa_s:.1f}" if pred.time_to_cpa_s is not None else "na",
+                initial_count,
+                INITIAL_ALERT_CONFIRMATIONS_REQUIRED,
+            )
         if should_send:
             new_msgid = await send_or_update_approach(
                 uid, ac, pred, stage, nid, msgid,
@@ -635,6 +713,7 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
             {"$set": {
                 "user_id": uid,
                 "aircraft_icao24": ac.icao24,
+                "aircraft_type": typ,
                 "notification_id": nid,
                 "message_id": msgid,
                 "stage": stage,
@@ -645,6 +724,9 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
                 "prediction_at": datetime.now(timezone.utc),
                 "confidence": pred.confidence,
                 "cancel_confirmation_count": 0,
+                "initial_confirmation_count": 0 if msgid else initial_count,
+                "initial_candidate_projected_closest_km": None if msgid else initial_cpa,
+                "initial_candidate_time_to_cpa_s": None if msgid else initial_eta,
                 "updated_at": datetime.now(timezone.utc),
                 "expires_at": datetime.now(timezone.utc) + timedelta(hours=2),
                 **route_state,
