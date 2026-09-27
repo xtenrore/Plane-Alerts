@@ -1,0 +1,30 @@
+name: Smoke free maintenance agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/free-maintenance-smoke.yml"
+      - ".github/workflows/free-maintenance-agent.yml"
+      - "scripts/free_maintenance_agent.py"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-read-only-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Dispatch a read-only provider smoke run
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/free-maintenance-agent.yml/dispatches" \
+            -f ref=main \
+            -F 'inputs[allow_patches]=false'
+          echo "Dispatched free-maintenance-agent.yml with patch application disabled." >> "$GITHUB_STEP_SUMMARY"
