@@ -1,0 +1,246 @@
+name: Free maintenance agent
+
+on:
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      allow_patches:
+        description: "Allow a bounded tested candidate patch"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: plane-alerts-free-maintenance-agent
+  cancel-in-progress: false
+
+jobs:
+  investigate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout durable Prediction Lab evidence
+        uses: actions/checkout@v4
+        with:
+          ref: prediction-lab-data
+          path: _prediction_lab_data
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stop if an agent candidate is already open
+        id: queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          COUNT="$(gh pr list --state open --json title --jq '[.[] | select(.title | startswith("[maintenance-agent]"))] | length')"
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "A maintenance-agent candidate is already open; bounded queue prevents another autonomous patch." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.queue.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked application dependencies
+        if: steps.queue.outputs.skip != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Install Railway CLI
+        if: steps.queue.outputs.skip != 'true'
+        run: npm install --global @railway/cli
+
+      - name: Load only maintenance-provider credentials from Railway
+        if: steps.queue.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RAILWAY_TOKEN:-}" ]]; then
+            echo "::error::RAILWAY_API_TOKEN is missing; cannot read the owner-managed free-provider credentials."
+            exit 1
+          fi
+          railway variable list --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --service "$MAIN_SERVICE_ID" --json > /tmp/plane-alerts-vars.json
+          python - <<'PY'
+          import json, os, pathlib
+
+          data = json.load(open('/tmp/plane-alerts-vars.json', encoding='utf-8'))
+          if not isinstance(data, dict):
+              raise SystemExit('Unexpected Railway variable response')
+
+          allowed = (
+              'FREELLMAPI_BASE_URL', 'FREELLMAPI_API_KEY', 'FREELLMAPI_MODEL',
+              'OPENROUTER_API_KEY', 'OPENROUTER_API', 'OPENROUTER_FREE_MODEL',
+              'MAINTENANCE_GROQ_KEY', 'MAINTENANCE_GROQ_MODEL',
+              'MAINTENANCE_GEMINI_KEY', 'MAINTENANCE_GEMINI_MODEL',
+              'GROQ_KEY', 'GROQ_API_KEY', 'GROQ_MODEL', 'GEMINI_API_KEY',
+          )
+          env_file = pathlib.Path(os.environ['GITHUB_ENV'])
+          exported = []
+          with env_file.open('a', encoding='utf-8') as handle:
+              for name in allowed:
+                  value = data.get(name)
+                  if not isinstance(value, str) or not value.strip():
+                      continue
+                  value = value.strip()
+                  if '\n' in value or '\r' in value:
+                      raise SystemExit(f'{name} contains unsupported newline characters')
+                  print(f'::add-mask::{value}')
+                  handle.write(f'{name}={value}\n')
+                  exported.append(name)
+          print('maintenance_provider_variables=' + ','.join(exported))
+          PY
+          rm -f /tmp/plane-alerts-vars.json
+
+      - name: Run bounded investigator and fixer
+        if: steps.queue.outputs.skip != 'true'
+        id: agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_FLAG="--allow-patches"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.allow_patches }}" != "true" ]]; then
+            PATCH_FLAG=""
+          fi
+          python scripts/free_maintenance_agent.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --cases-root "$GITHUB_WORKSPACE/_prediction_lab_data/prediction_lab/unchecked" \
+            --case-limit 1 \
+            --output /tmp/maintenance-agent-result.json \
+            $PATCH_FLAG
+
+      - name: Classify result
+        if: steps.queue.outputs.skip != 'true'
+        id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          data=json.load(open('/tmp/maintenance-agent-result.json', encoding='utf-8'))
+          out=os.environ['GITHUB_OUTPUT']
+          case_ids=data.get('selected_case_ids') or data.get('case_ids') or []
+          case_id=str(case_ids[0] if case_ids else 'none')[:100]
+          summary=' '.join(str(data.get('summary') or '').split())[:500]
+          with open(out,'a',encoding='utf-8') as handle:
+              handle.write(f"status={data.get('status','unknown')}\n")
+              handle.write(f"changed={'true' if data.get('changed') else 'false'}\n")
+              handle.write(f"verdict={data.get('verdict','no_action')}\n")
+              handle.write(f"confidence={data.get('confidence','low')}\n")
+              handle.write(f"case_id={case_id}\n")
+              handle.write(f"provider={data.get('provider','none')}\n")
+              handle.write(f"model={data.get('model','none')}\n")
+              handle.write(f"summary={summary}\n")
+          PY
+
+      - name: Create tested candidate branch and pull request
+        if: steps.queue.outputs.skip != 'true' && steps.result.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CASE_ID: ${{ steps.result.outputs.case_id }}
+          PROVIDER: ${{ steps.result.outputs.provider }}
+          MODEL: ${{ steps.result.outputs.model }}
+          SUMMARY: ${{ steps.result.outputs.summary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAFE_CASE="$(printf '%s' "$CASE_ID" | tr -cs 'A-Za-z0-9._-' '-' | cut -c1-60)"
+          BRANCH="maintenance/free-worker-${SAFE_CASE}-${GITHUB_RUN_ID}"
+          git config user.name "plane-alerts-maintenance"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add app tests scripts
+          if git diff --cached --quiet; then
+            echo "::error::Agent reported changes but no allowed diff was staged."
+            exit 1
+          fi
+          git commit -m "Prepare Prediction Lab candidate ${CASE_ID}"
+          git push origin "HEAD:${BRANCH}"
+          BODY_FILE="$(mktemp)"
+          cat > "$BODY_FILE" <<EOF
+          Automated bounded Prediction Lab candidate for case \`${CASE_ID}\`.
+
+          Evidence summary: ${SUMMARY}
+
+          Inference route: ${PROVIDER} / ${MODEL}
+
+          Safety boundaries:
+          - model output cannot modify workflows, deployment, dependencies, secrets, versioning or Prediction Lab history;
+          - application changes require regression-test changes in the same patch;
+          - the worker ran compile validation and the targeted regression tests before opening this PR;
+          - this PR is **not** auto-merged or auto-deployed; normal Plane Alerts CI/replay and release verification remain authoritative.
+          EOF
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "[maintenance-agent] Prediction Lab candidate: ${CASE_ID}" \
+            --body-file "$BODY_FILE"
+
+      - name: Record an investigation issue when code is not yet justified
+        if: steps.queue.outputs.skip != 'true' && steps.result.outputs.changed != 'true' && steps.result.outputs.verdict == 'investigate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CASE_ID: ${{ steps.result.outputs.case_id }}
+          CONFIDENCE: ${{ steps.result.outputs.confidence }}
+          SUMMARY: ${{ steps.result.outputs.summary }}
+          PROVIDER: ${{ steps.result.outputs.provider }}
+          MODEL: ${{ steps.result.outputs.model }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXISTING="$(gh issue list --state open --limit 100 --json title --jq --arg id "$CASE_ID" '[.[] | select(.title | contains($id))] | length')"
+          if [[ "$EXISTING" -gt 0 ]]; then
+            echo "Existing open issue already references ${CASE_ID}; not duplicating it." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          BODY_FILE="$(mktemp)"
+          cat > "$BODY_FILE" <<EOF
+          Prediction Lab case \`${CASE_ID}\` needs more deterministic evidence before a code change is safe.
+
+          Confidence: ${CONFIDENCE}
+
+          ${SUMMARY}
+
+          Free inference route: ${PROVIDER} / ${MODEL}. This output is advisory; replay, tests, and deterministic Plane Alerts logic remain authoritative.
+          EOF
+          gh issue create --title "Prediction Lab investigation: ${CASE_ID}" --body-file "$BODY_FILE"
+
+      - name: Write run summary
+        if: always() && steps.queue.outputs.skip != 'true' && steps.result.outcome == 'success'
+        shell: bash
+        run: |
+          {
+            echo "### Free maintenance agent"
+            echo "- case: \`${{ steps.result.outputs.case_id }}\`"
+            echo "- verdict: \`${{ steps.result.outputs.verdict }}\`"
+            echo "- confidence: \`${{ steps.result.outputs.confidence }}\`"
+            echo "- provider: \`${{ steps.result.outputs.provider }}\`"
+            echo "- model: \`${{ steps.result.outputs.model }}\`"
+            echo "- changed worktree: \`${{ steps.result.outputs.changed }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
