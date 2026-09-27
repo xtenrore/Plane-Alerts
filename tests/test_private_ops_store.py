@@ -10,6 +10,7 @@ import pytest
 
 from app.private_ops.store import QueueFull, Store
 from app.private_ops.service import create_handler
+from app.private_ops.phase1_probe import run as run_phase1_probe
 
 
 def test_restart_preserves_committed_step_and_reclaims_expired_job(tmp_path, monkeypatch):
@@ -103,3 +104,21 @@ def test_isolated_health_endpoint_exposes_only_bounded_status(tmp_path):
     finally:
         stop.set()
         thread.join(timeout=2)
+
+
+def test_phase1_railway_restart_probe_preserves_idempotent_output(tmp_path, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("app.private_ops.store.time.time", lambda: clock[0])
+    first = Store(tmp_path)
+    assert run_phase1_probe(first) == "PHASE1_INITIALIZED_AWAITING_RESTART"
+    first.close()
+    clock[0] += 2
+    second = Store(tmp_path)
+    assert run_phase1_probe(second) == "PHASE1_RECOVERED_AWAITING_SECOND_RESTART"
+    second.close()
+    third = Store(tmp_path)
+    assert run_phase1_probe(third) == "PHASE1_SECOND_RESTART_VERIFIED"
+    third.close()
+    fourth = Store(tmp_path)
+    assert run_phase1_probe(fourth) == "PHASE1_VERIFIED_STABLE"
+    fourth.close()
