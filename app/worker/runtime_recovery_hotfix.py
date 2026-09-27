@@ -339,20 +339,24 @@ async def _live_docs_route_filtered(user_id: int, now: datetime) -> list[dict[st
     return docs
 
 
-def _install_next60_recovery() -> bool:
+def _install_next60_volume_history() -> bool:
+    """Preserve the v5.8.7 history-only compatibility hook."""
     next60 = sys.modules.get("app.bot.next60")
     if next60 is None:
         return False
     next60._history_docs = _history_docs_from_volume
+    return True
+
+
+def _install_next60_recovery() -> bool:
+    next60 = sys.modules.get("app.bot.next60")
+    if next60 is None:
+        return False
+    _install_next60_volume_history()
     next60._live_docs = _live_docs_route_filtered
     setattr(next60, "_volume_history_recovery_v588", True)
     setattr(next60, "_live_route_veto_filter_v588", True)
     return True
-
-
-def _install_next60_volume_history() -> bool:
-    """Compatibility entry point retained for the v5.8.7 recovery regression."""
-    return _install_next60_recovery()
 
 
 def install_runtime_recovery_hotfix() -> None:
