@@ -46,7 +46,10 @@ def run(source: Store) -> str:
     rows = source.db.execute("""SELECT packet_id,window_start,case_ref,kind,packet_json,content_hash,created
         FROM ai_ops_evidence ORDER BY created DESC,packet_id LIMIT 8""").fetchall()
     if not rows:
-        raise RuntimeError("Phase 5 shadow probe requires persisted Phase-4 evidence")
+        # A newly migrated or clean persistent volume may not have Phase-4 packets
+        # yet. That is a safe no-op, not a startup failure; the hourly scheduler
+        # remains disabled and later evidence can be processed normally.
+        return "PHASE5_SHADOW_SKIPPED_NO_PERSISTED_EVIDENCE"
     before = [(r[0], r[5]) for r in rows]
     with tempfile.TemporaryDirectory(prefix="ai-ops-phase5-") as td:
         temp = Store(Path(td))
