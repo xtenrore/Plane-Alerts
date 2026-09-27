@@ -25,7 +25,8 @@ def test_sanitized_checkpoint_restores_into_clean_directory(tmp_path):
     assert manifest["jobs"] == 1 and manifest["steps"] == 2
     restored = restore_empty(target, data, manifest)
     assert restored.health()["integrity"] == "ok"
-    assert restored.db.execute("SELECT output_json FROM ai_ops_steps WHERE step_id='step-one'").fetchone()[0] == '{"ok":true}'
+    assert restored.db.execute("SELECT output_json FROM ai_ops_steps WHERE step_id='step-one'").fetchone()[0] is None
+    assert restored.db.execute("SELECT output_hash FROM ai_ops_steps WHERE step_id='step-one'").fetchone()[0] == Store.digest({"ok": True})
     assert restored.db.execute("SELECT status FROM ai_ops_steps WHERE step_id='interrupted'").fetchone()[0] == "RETRY"
     assert restored.claim("recovery-worker") == "audit:test"
     assert not restored.begin_step("audit:test", "step-one", "recovery-worker", {"case": 1})
@@ -36,17 +37,17 @@ def test_sanitized_checkpoint_restores_into_clean_directory(tmp_path):
         restore_empty(target, data, manifest)
 
 
-def test_export_fails_closed_on_secrets_and_private_location(tmp_path):
+def test_export_omits_output_payload_even_when_it_contains_secrets_and_coordinates(tmp_path):
     store = Store(tmp_path)
     store.enqueue("audit:test")
     store.claim("worker")
     store.begin_step("audit:test", "step-one", "worker", {})
     store.complete_step("audit:test", "step-one", "worker", {"api_key": "secret"})
-    with pytest.raises(ValueError, match="unsafe"):
-        export(store, source_commit=COMMIT)
+    data, _ = export(store, source_commit=COMMIT)
+    assert b"api_key" not in data and b"secret" not in data
     store.db.execute("UPDATE ai_ops_steps SET output_json=?", (json.dumps({"latitude": 41.0}),))
-    with pytest.raises(ValueError, match="unsafe"):
-        export(store, source_commit=COMMIT)
+    data, _ = export(store, source_commit=COMMIT)
+    assert b"latitude" not in data and b"41.0" not in data
     store.close()
 
 
