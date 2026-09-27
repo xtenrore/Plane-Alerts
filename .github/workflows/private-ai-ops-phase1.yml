@@ -1,4 +1,5 @@
 name: Private Operations Phase 1 isolated validation
+# This workflow targets only the dedicated Private Operations Railway service.
 
 on:
   push:
