@@ -8,8 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import sqlite3
-import statistics
 import sys
 import time
 from collections import defaultdict
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.aircraft.providers import ProviderManager
+from app.bot.replay_history import build_history_doc, history_day_keys
 from app.operational_volume_v561 import route_db_path
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 SOURCE_SWITCH_CONFIRMATIONS = 3
 SOURCE_GUARD_RETENTION_S = 1800.0
 SOURCE_GUARD_MAX_AIRCRAFT = 8192
+NEXT60_CORRIDOR_MARGIN_KM = 40.0
 
 _INSTALLED = False
 
@@ -138,22 +140,81 @@ def _install_provider_source_guard() -> None:
     ProviderManager._plane_source_guard_v589 = True
 
 
-def _read_volume_routes(path: Path, days: list[str], limit: int) -> list[dict[str, Any]]:
-    """Read bounded route-day rows from the authoritative persistent volume."""
+def _volume_route_rows(
+    conn: sqlite3.Connection,
+    days: list[str],
+    limit: int,
+    *,
+    observer_lat: float | None = None,
+    observer_lon: float | None = None,
+    corridor_km: float | None = None,
+) -> list[tuple[Any, ...]]:
+    placeholders = ",".join("?" for _ in days)
+    base = (
+        "SELECT callsign, utc_date, aircraft_type, points_json "
+        f"FROM route_days WHERE utc_date IN ({placeholders}) "
+    )
+    params: list[Any] = list(days)
+
+    if observer_lat is not None and observer_lon is not None and corridor_km is not None:
+        margin = max(1.0, float(corridor_km))
+        lat_delta = margin / 111.0
+        cos_lat = max(0.05, abs(math.cos(math.radians(float(observer_lat)))))
+        lon_delta = min(180.0, margin / (111.0 * cos_lat))
+        min_lat = max(-90.0, float(observer_lat) - lat_delta)
+        max_lat = min(90.0, float(observer_lat) + lat_delta)
+        min_lon = float(observer_lon) - lon_delta
+        max_lon = float(observer_lon) + lon_delta
+        if -180.0 <= min_lon <= max_lon <= 180.0:
+            base += (
+                "AND EXISTS ("
+                "SELECT 1 FROM json_each(route_days.points_json) AS point "
+                "WHERE CAST(COALESCE(json_extract(point.value, '$.lat'), "
+                "json_extract(point.value, '$.latitude')) AS REAL) BETWEEN ? AND ? "
+                "AND CAST(COALESCE(json_extract(point.value, '$.lon'), "
+                "json_extract(point.value, '$.longitude')) AS REAL) BETWEEN ? AND ?"
+                ") "
+            )
+            params.extend((min_lat, max_lat, min_lon, max_lon))
+
+    base += "ORDER BY utc_date DESC, updated_at DESC LIMIT ?"
+    params.append(max(1, int(limit)))
+    return conn.execute(base, tuple(params)).fetchall()
+
+
+def _read_volume_routes(
+    path: Path,
+    days: list[str],
+    limit: int,
+    *,
+    observer_lat: float | None = None,
+    observer_lon: float | None = None,
+    corridor_km: float | None = None,
+) -> list[dict[str, Any]]:
+    """Read bounded route-day rows, preferring an observer-area JSON query.
+
+    SQLite builds without JSON1 fall back to the previous date-bounded query.
+    The fallback is conservative: replay qualification still rejects routes that
+    did not demonstrate a local transit.
+    """
     if not days or not path.exists():
         return []
-    placeholders = ",".join("?" for _ in days)
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
     except sqlite3.Error:
         return []
     try:
-        rows = conn.execute(
-            "SELECT callsign, utc_date, aircraft_type, points_json "
-            f"FROM route_days WHERE utc_date IN ({placeholders}) "
-            "ORDER BY utc_date DESC LIMIT ?",
-            (*days, max(1, int(limit))),
-        ).fetchall()
+        try:
+            rows = _volume_route_rows(
+                conn,
+                days,
+                limit,
+                observer_lat=observer_lat,
+                observer_lon=observer_lon,
+                corridor_km=corridor_km,
+            )
+        except sqlite3.Error:
+            rows = _volume_route_rows(conn, days, limit)
     except sqlite3.Error:
         return []
     finally:
@@ -179,7 +240,7 @@ def _read_volume_routes(path: Path, days: list[str], limit: int) -> list[dict[st
 
 
 async def _history_docs_from_volume(user_id: int, now: datetime) -> list[dict[str, Any]]:
-    """Build the existing Next60 history shadow from volume-backed route days."""
+    """Build conservative Next60 history shadows from volume-backed route days."""
     from app.bot import next60
 
     db = next60.get_db()
@@ -196,15 +257,15 @@ async def _history_docs_from_volume(user_id: int, now: datetime) -> list[dict[st
     except (KeyError, TypeError, ValueError):
         return []
 
-    days = [
-        (now.date() - timedelta(days=i)).isoformat()
-        for i in range(1, int(next60.HISTORY_DAYS) + 1)
-    ]
+    days = history_day_keys(now, int(next60.HISTORY_DAYS))
     routes = await asyncio.to_thread(
         _read_volume_routes,
         route_db_path(),
         days,
         int(next60.MAX_HISTORY_ROUTES),
+        observer_lat=ulat,
+        observer_lon=ulon,
+        corridor_km=radius + NEXT60_CORRIDOR_MARGIN_KM,
     )
     by_callsign: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for route in routes:
@@ -212,55 +273,19 @@ async def _history_docs_from_volume(user_id: int, now: datetime) -> list[dict[st
         if callsign and route.get("points"):
             by_callsign[callsign].append(route)
 
-    midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     docs: list[dict[str, Any]] = []
     for callsign, grouped_routes in by_callsign.items():
-        pass_times: list[float] = []
-        closest_distances: list[float] = []
-        used_days: set[str] = set()
-        aircraft_type = ""
-        for route in grouped_routes:
-            closest = next60._closest_point(list(route.get("points") or []), ulat, ulon)
-            if closest is None:
-                continue
-            distance_km, timestamp = closest
-            if distance_km > radius + max(2.0, radius * 0.15):
-                continue
-            utc_date = str(route.get("utc_date") or "")
-            if not utc_date or utc_date in used_days:
-                continue
-            used_days.add(utc_date)
-            dt = datetime.fromtimestamp(timestamp, timezone.utc)
-            pass_times.append(
-                dt.hour * 3600.0
-                + dt.minute * 60.0
-                + dt.second
-                + dt.microsecond / 1_000_000.0
-            )
-            closest_distances.append(float(distance_km))
-            aircraft_type = aircraft_type or str(route.get("aircraft_type") or "").strip().upper()
-
-        if not pass_times:
+        doc = build_history_doc(
+            callsign,
+            grouped_routes,
+            ulat,
+            ulon,
+            radius,
+            now,
+            max_horizon_s=3600.0,
+        )
+        if doc is None:
             continue
-        predicted_sod, spread_s = next60._median_time_of_day(pass_times)
-        predicted_at = midnight + timedelta(seconds=predicted_sod)
-        horizon_s = (predicted_at - now).total_seconds()
-        if horizon_s < 0 or horizon_s > 3600:
-            continue
-        half_window = max(600.0, min(1800.0, spread_s + 300.0))
-        doc = {
-            "callsign": callsign,
-            "aircraft_type": aircraft_type,
-            "predicted_cpa_at": predicted_at,
-            "window_start": predicted_at - timedelta(seconds=half_window),
-            "window_end": predicted_at + timedelta(seconds=half_window),
-            "prediction_horizon_s": round(horizon_s, 1),
-            "predicted_closest_km": round(float(statistics.median(closest_distances)), 3),
-            "historical_days": len(pass_times),
-            "historical_time_spread_s": round(spread_s, 1),
-            "confidence": next60._history_confidence(len(pass_times), spread_s, horizon_s),
-            "source": "history",
-        }
         docs.append(doc)
         next60._record_next60_evidence(user_id, doc, now)
 
@@ -268,12 +293,60 @@ async def _history_docs_from_volume(user_id: int, now: datetime) -> list[dict[st
     return docs[: int(next60.MAX_ROWS)]
 
 
-def _install_next60_volume_history() -> bool:
+async def _live_docs_route_filtered(user_id: int, now: datetime) -> list[dict[str, Any]]:
+    """Keep PR #131 live behavior while hiding the monitor's current route veto."""
+    from app.bot import next60
+
+    type_cache: dict[str, str] = {}
+    try:
+        from app.worker.monitor import get_provider_manager
+
+        type_cache = dict(getattr(get_provider_manager(), "_type_cache", {}) or {})
+    except Exception:
+        type_cache = {}
+
+    cursor = next60.get_db()["approach_states"].find(
+        {
+            "user_id": user_id,
+            "active": True,
+            "time_to_cpa_s": {"$gte": 0, "$lte": 3600},
+            "prediction_at": {"$gte": now - timedelta(seconds=next60.LIVE_STATE_MAX_AGE_S)},
+        },
+        {
+            "_id": 0,
+            "aircraft_icao24": 1,
+            "route_callsign": 1,
+            "aircraft_type": 1,
+            "projected_closest_km": 1,
+            "time_to_cpa_s": 1,
+            "prediction_at": 1,
+            "confidence": 1,
+            "stage": 1,
+            "candidate_state": 1,
+            "route_expected_turn_pending": 1,
+        },
+    ).limit(next60.MAX_ROWS)
+    docs: list[dict[str, Any]] = []
+    async for state in cursor:
+        # Canonical route_guard.py writes expected_turn_pending == suppress_alert.
+        # Reuse that exact live decision instead of trying to reconstruct route
+        # geometry from an incomplete persisted state document.
+        if state.get("route_expected_turn_pending") is True:
+            continue
+        doc = next60._live_state_doc(state, now, type_cache)
+        if doc is not None:
+            docs.append(doc)
+    return docs
+
+
+def _install_next60_recovery() -> bool:
     next60 = sys.modules.get("app.bot.next60")
     if next60 is None:
         return False
     next60._history_docs = _history_docs_from_volume
-    setattr(next60, "_volume_history_recovery_v589", True)
+    next60._live_docs = _live_docs_route_filtered
+    setattr(next60, "_volume_history_recovery_v588", True)
+    setattr(next60, "_live_route_veto_filter_v588", True)
     return True
 
 
@@ -282,10 +355,12 @@ def install_runtime_recovery_hotfix() -> None:
     if _INSTALLED:
         return
     _install_provider_source_guard()
-    patched_next60 = _install_next60_volume_history()
+    patched_next60 = _install_next60_recovery()
     _INSTALLED = True
     logger.info(
-        "Runtime recovery enabled provider_switch_confirmations=%d next60_volume_history=%s",
+        "Runtime recovery enabled provider_switch_confirmations=%d "
+        "next60_volume_history=%s next60_route_veto_filter=%s",
         SOURCE_SWITCH_CONFIRMATIONS,
+        patched_next60,
         patched_next60,
     )
