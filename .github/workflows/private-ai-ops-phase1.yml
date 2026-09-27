@@ -91,31 +91,6 @@ jobs:
       - name: Check provider metadata only; never invoke inference
         run: python -m app.private_ops.provider_probe
 
-  phase4-shadow-replay:
-    needs: tests
-    if: needs.tests.outputs.deploy == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: engineering
-      - uses: actions/checkout@v4
-        with:
-          ref: prediction-lab-data
-          path: evidence
-          fetch-depth: 1
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: One-time closed historical hour replay
-        run: |
-          set -euo pipefail
-          cd engineering
-          PYTHONPATH=. python scripts/private_ai_ops_hourly_replay.py --source ../evidence \
-            --hour 2026-09-27T08:00:00Z --source-commit "$GITHUB_SHA" \
-            --output /tmp/ai-ops-phase4-hour.json
-
   provision-and-deploy:
     needs: tests
     if: needs.tests.outputs.deploy == 'true'

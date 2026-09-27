@@ -2,9 +2,9 @@
   "roadmap": "Plane Alerts Private Operations phased roadmap",
   "roadmap_source": "Version_6.0",
   "state_schema_version": 1,
-  "last_completed_phase": 3,
-  "current_phase": 4,
-  "phase_status": "in_progress",
+  "last_completed_phase": 4,
+  "current_phase": 5,
+  "phase_status": "paused_at_user_requested_phase_4_gate",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -23,8 +23,8 @@
   "railway_configuration_mutated": true,
   "scheduler_mutated": false,
   "community_impact": "none_phase_0_documentation_and_private_architecture_only",
-  "next_phase": 4,
-  "next_phase_started": true,
+  "next_phase": 5,
+  "next_phase_started": false,
   "phase_1_progress": {
     "durable_store": "deployed and verified on dedicated Railway volume; schema 1 Phase 1 gate passed",
     "schema_version": 1,
@@ -119,7 +119,7 @@
     "provider_probe_correction": "user-identified probe defect corrected; no credential change or new Railway variables"
   },
   "phase_4_progress": {
-    "status": "in_progress",
+    "status": "completed",
     "scheduler_enabled": false,
     "next_gate": "deterministic evidence collection in isolated store, bounded shadow mode, restart/replay/checkpoint tests",
     "schema_version": 4,
@@ -127,8 +127,21 @@
     "collector_status": "bounded shadow-only deterministic grouping, dedupe, anomaly packets, atomic checkpoint; prediction lab field allowlist; sanitized evidence backup/clean restore; 40 focused local tests passed",
     "railway_deployment": "6ae39662-9afe-4bad-a613-20e946b1f035 success; Phase 1 stable; no scheduler",
     "github_ci": "repository tests run 1569 success, isolated workflow run 36 success",
-    "remaining_gate": "prove complete upstream sync watermark and replay real hour; integrate isolated hourly worker with read-only source and verify volume, backlog, monitoring; do not mark phase complete yet",
+    "remaining_gate": "none for Phase 4; Phase 5 owns routine triage and subsequent integrated activation",
     "read_only_source": "prediction-lab-data branch raw JSON/NDJSON allowlist adapter; 25,284 raw files on observed day, bounded reader, dedupe/conflict rejection; no scheduler activated",
-    "schedule_code": "closed UTC hours after 1h settle, 24h bounded backlog, atomic durable checkpoint; default disabled"
+    "schedule_code": "closed UTC hours after 1h settle, 24h bounded backlog, atomic durable checkpoint; default disabled",
+    "real_source_replay": "prediction-lab-data branch 2026-09-27 08:00 UTC: 13 real events -> 2 deterministic sanitized evidence packets; replay SHA-256 0ed1585b2b0023f46603921b1a9ee3c34765b45a3acfed9c0795f229ba0eccc9; CI isolated run 43 success",
+    "migration": "schema 3 to 4 successful on dedicated Railway volume; latest verified AI Ops deployment b951a8d3-01b3-483d-b493-f643e4a886d3, Phase 1 persistent probe stable",
+    "recovery": "evidence packets included in versioned sanitized DR export schema 2; clean empty-directory restore and checksum validated during actual-source replay",
+    "tests": "real source no events, populated anomaly, cancellation, requalification, oscillation, trajectory and provider change, missing coverage, duplicate, oversized input, restart, atomic checkpoint failure, bounded hourly schedule and clean restore",
+    "monitor": "main deployment e055cf20-9d4e-4a28-91ff-e927e4219472 unchanged; 81 cycles mean 4.998 s, max 6.681 s, none >10 s",
+    "scheduler_enabled_in_production": false,
+    "real_ai_providers_enabled": false,
+    "activation_note": "hourly scheduling and source reader verified in shadow replay; production flag stays off pending integrated umbrella activation; collector is read-only and does not touch flight decisions",
+    "one_time_replay": "completed and removed from routine isolated workflow; repeatable manual replay workflow/source script preserved"
+  },
+  "phase_5_progress": {
+    "status": "not_started_user_requested_pause_after_phase_4",
+    "next_gate": "resume Phase 5 from verified state; no completed Phase 0-4 work needs redoing"
   }
 }
