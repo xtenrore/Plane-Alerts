@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CANCELLATION_CONFIRMATIONS_REQUIRED = 3
+INITIAL_ALERT_CONFIRMATIONS_REQUIRED = 3
+INITIAL_ALERT_MAX_OBSERVATION_GAP_S = 18.0
 PHOTO_NOW_EXIT_HYSTERESIS_S = 30.0
 
 
@@ -86,6 +88,86 @@ def cancelled_latch_allows_reactivation(
     except (TypeError, ValueError):
         return False
     return current <= radius
+
+
+def resolve_initial_alert_confirmation(
+    previous_count: int,
+    previous_cpa_km: float | None,
+    previous_time_to_cpa_s: float | None,
+    *,
+    qualifies: bool,
+    fresh_observation: bool,
+    prediction,
+    alert_radius_km: float,
+    observation_gap_s: float | None = None,
+    required: int = INITIAL_ALERT_CONFIRMATIONS_REQUIRED,
+) -> tuple[bool, int, float | None, float | None]:
+    """Require a short run of stable fresh CPA evidence before the first alert.
+
+    Production telemetry showed valid cancellation logic being asked to clean up
+    alerts that were born too early: a first qualifying vector was sent, then a
+    provider refresh or normal terminal turn moved CPA far outside the radius.
+    This gate acts *before* a Telegram message exists. It never changes CPA
+    geometry and never delays an aircraft that is already physically observed
+    inside the configured radius.
+
+    Repeated/stale observations do not advance the confirmation run. A long feed
+    gap or a material CPA/ETA jump restarts it so evidence from disconnected
+    provider snapshots cannot be stitched together into a new alert.
+    """
+    required = max(1, int(required))
+    count = max(0, int(previous_count))
+    try:
+        radius = float(alert_radius_km)
+        current = float(getattr(prediction, "current_distance_km"))
+        new_cpa = float(getattr(prediction, "projected_closest_km"))
+    except (TypeError, ValueError):
+        return False, 0, None, None
+
+    raw_eta = getattr(prediction, "time_to_cpa_s", None)
+    try:
+        new_eta = float(raw_eta) if raw_eta is not None else None
+    except (TypeError, ValueError):
+        new_eta = None
+
+    if fresh_observation and not bool(getattr(prediction, "stale", False)) and current <= radius:
+        return True, required, new_cpa, new_eta
+
+    if not qualifies or bool(getattr(prediction, "stale", False)):
+        return False, 0, None, None
+
+    if not fresh_observation:
+        return False, count, previous_cpa_km, previous_time_to_cpa_s
+
+    if observation_gap_s is not None:
+        try:
+            if float(observation_gap_s) > INITIAL_ALERT_MAX_OBSERVATION_GAP_S:
+                count = 0
+                previous_cpa_km = None
+                previous_time_to_cpa_s = None
+        except (TypeError, ValueError):
+            count = 0
+            previous_cpa_km = None
+            previous_time_to_cpa_s = None
+
+    stable = True
+    if count > 0 and previous_cpa_km is not None:
+        previous_cpa = float(previous_cpa_km)
+        cpa_tolerance = max(1.5, radius * 0.18, abs(previous_cpa) * 0.25)
+        if abs(new_cpa - previous_cpa) > cpa_tolerance:
+            stable = False
+
+    if count > 0 and previous_time_to_cpa_s is not None and new_eta is not None:
+        previous_eta = float(previous_time_to_cpa_s)
+        eta_tolerance = max(35.0, abs(previous_eta) * 0.20)
+        if abs(new_eta - previous_eta) > eta_tolerance:
+            stable = False
+
+    if not stable:
+        count = 0
+
+    count = min(required, count + 1)
+    return count >= required, count, new_cpa, new_eta
 
 
 def prediction_changed(previous_cpa_km: float | None, new_cpa_km: float, alert_radius_km: float) -> bool:
