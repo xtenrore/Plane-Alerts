@@ -14,8 +14,8 @@
   "architecture_decision_record": "docs/private-ai-ops/phase-0-architecture-decision.md",
   "deployment_architecture": "separate_railway_service_with_dedicated_persistent_volume",
   "orchestration_store_target": "sqlite_wal_on_dedicated_volume",
-  "private_github_dr_repository_target": "xtenrore/Plane-Alerts-Private-State",
-  "private_github_dr_repository_status": "not_created_phase_2_owned",
+  "private_github_dr_repository_target": "xtenrore/Plane-Alerts-Private-Repo",
+  "private_github_dr_repository_status": "private_owner_verified_existing_README_and_LICENSE_preserved",
   "provider_slots_status": "current_runtime_wiring_differs_from_roadmap_reported_inventory",
   "provider_credentials_verified": false,
   "paid_usage_performed": false,
@@ -73,16 +73,21 @@
     }
   },
   "phase_2_progress": {
-    "status": "started",
-    "github_private_backup_repo": "not created; GitHub connector lacks create-repository; unauthenticated browser requires owner GitHub sign-in",
+    "status": "in_progress_remote_fixture_verified_real_volume_and_unattended_auth_pending",
+    "github_private_backup_repo": "xtenrore/Plane-Alerts-Private-Repo, private, owner xtenrore, README.md and LICENSE preserved",
     "dropbox_backend_backup": "contract documented for Phase 11; connector root empty and search yielded no Plane Alerts files; backend OAuth not configured",
-    "sanitized_export": "implemented and 8 focused local tests passed; checkpoint a4fe01b locally, remote branch 38f105eea49ba81d2e0936e42f907cb5ffba7aeb",
+    "sanitized_export": "allowlisted jobs/steps/checkpoints with no step output content, SHA-256 manifest; 14 local focused tests passed",
     "restore_behavior": "empty-directory restore, checksum, SQLite integrity, completed idempotent step preserved, interrupted work retryable",
-    "github_remote_sync": "not implemented or verified; dedicated private repository and scoped writer credential prerequisite",
-    "design_contract": "docs/private-ai-ops/phase-2-backup-contract.md"
+    "github_remote_sync": "synthetic Phase 1 probe recreation uploaded and fetched with GitHub connector, exact data compared, clean restore passed; this is not real Railway volume state",
+    "design_contract": "docs/private-ai-ops/phase-2-backup-contract.md",
+    "synthetic_remote_snapshot_sha256": "b41232f2c654fddd45757a9a565cbbbbdef2b9ebaa55b639021a772108d05dae",
+    "github_sync_code": "durable debounced revision queue, lease, retry, remote readback, immutable namespace transport; not configured in Railway",
+    "migration": "schema 1 to 2 preserves Phase 1 jobs and adds independent backup status; local migration test passes; Railway deployment pending",
+    "local_tests": "14 passed; no paid provider calls",
+    "github_ci_prior_checkpoint": "99cd4cf1baa07b10af0dbc91c77d732c9efe06bb tests passed"
   },
   "open_blockers_for_next_phase": [
-    "Phase 2: create and verify dedicated private GitHub DR repository (GitHub connector has no repository creation capability; browser session requires owner sign-in).",
-    "Phase 2: supply a narrowly scoped cross-repository writer credential through GitHub Actions Secrets, then implement and verify remote sync/read-back and clean-host restore."
+    "Phase 2 requires verified export and clean restore of actual Railway volume job state, not only the synthetic recreation.",
+    "Unattended GitHub DR writer requires a narrowly scoped cross-repository credential in GitHub Actions Secrets; existing source repo secrets contain no DR writer credential. Configure it without exposing a value and verify remote upload/readback/retry."
   ]
 }
