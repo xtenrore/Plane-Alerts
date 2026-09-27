@@ -30,9 +30,9 @@ def test_v5610_uses_existing_project_token_only_for_variable_lookup() -> None:
     assert "railway volume" not in text
 
 
-def test_v571_waits_for_exact_deployed_bridge_before_export() -> None:
+def test_v572_waits_for_exact_recovery_bridge_before_export() -> None:
     text = _text()
-    assert 'REQUIRED_BRIDGE_VERSION: "5.7.1"' in text
+    assert 'REQUIRED_BRIDGE_VERSION: "5.7.2"' in text
     wait_pos = text.index("- name: Wait for exact deployed sync bridge")
     download_pos = text.index("- name: Download bounded authenticated evidence batch")
     assert wait_pos < download_pos
@@ -47,7 +47,7 @@ def test_v5611_surfaces_sanitized_bridge_rejection_details() -> None:
     assert "payload.get('detail','unknown')" in text
 
 
-def test_v5610_independently_validates_zip_hash_schema_and_paths() -> None:
+def test_v572_independently_validates_zip_hash_schema_identity_and_paths() -> None:
     text = _text()
     assert "duplicate ZIP member rejected" in text
     assert "plane-alerts-prediction-sync-batch-v1" in text
@@ -55,7 +55,11 @@ def test_v5610_independently_validates_zip_hash_schema_and_paths() -> None:
     assert "not relative.startswith('raw/')" in text
     assert "Prediction Lab content hash mismatch" in text
     assert "credential-like material rejected" in text
-    assert "unsupported evidence schema in bundle" in text
+    assert "allowed_schemas" in text
+    assert "plane-alerts-prediction-evidence-v1" in text
+    assert "plane-alerts-shadow-evaluation-v52" in text
+    assert "unsupported evidence schema" in text
+    assert "missing evidence identity" in text
     assert "unexpected ZIP members rejected" in text
 
 
@@ -70,11 +74,12 @@ def test_v5610_repository_acknowledgement_happens_only_after_successful_push() -
     assert "acknowledgement count mismatch" in text
 
 
-def test_v568_sync_bootstraps_on_bridge_changes_and_self_drains_large_backlog() -> None:
+def test_v572_sync_bootstraps_on_recovery_guard_and_self_drains_bounded_backlog() -> None:
     text = _text()
     assert "branches: [main]" in text
     assert '- ".github/workflows/prediction-lab-sync.yml"' in text
     assert '- "app/prediction_lab_sync_bridge_v5610.py"' in text
+    assert '- "app/prediction_lab_schema_guard.py"' in text
     assert '- "app/admin/prediction_lab_sync_v5610.py"' in text
     assert "actions: write" in text
     assert "cancel-in-progress: false" in text
@@ -83,4 +88,5 @@ def test_v568_sync_bootstraps_on_bridge_changes_and_self_drains_large_backlog() 
     dispatch_pos = text.index("actions/workflows/prediction-lab-sync.yml/dispatches", continuation_pos)
     assert ack_pos < continuation_pos < dispatch_pos
     assert "steps.acknowledge.outputs.continue_drain == 'true'" in text
+    assert 'continue_drain={"true" if removed > 0 else "false"}' in text
     assert "-f ref=main" in text
