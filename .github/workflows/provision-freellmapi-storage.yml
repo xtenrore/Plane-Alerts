@@ -32,11 +32,12 @@ jobs:
             echo "::error::RAILWAY_API_TOKEN is unavailable"
             exit 1
           fi
-          railway volume list \
+          railway link \
             --project "$PROJECT_ID" \
             --environment "$ENVIRONMENT_ID" \
             --service "$SERVICE_ID" \
-            --json > /tmp/volumes.json
+            --json > /tmp/link.json
+          railway volume list --json > /tmp/volumes.json
           EXISTS="$(python - <<'PY'
           import json
           data=json.load(open('/tmp/volumes.json', encoding='utf-8'))
@@ -52,12 +53,7 @@ jobs:
           PY
           )"
           if [[ "$EXISTS" != "true" ]]; then
-            railway volume add \
-              --project "$PROJECT_ID" \
-              --environment "$ENVIRONMENT_ID" \
-              --service "$SERVICE_ID" \
-              --mount-path "$MOUNT_PATH" \
-              --json > /tmp/added-volume.json
+            railway volume add --mount-path "$MOUNT_PATH" --json > /tmp/added-volume.json
             echo "Created dedicated FreeLLMAPI persistent volume at ${MOUNT_PATH}." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Dedicated FreeLLMAPI persistent volume already exists at ${MOUNT_PATH}." >> "$GITHUB_STEP_SUMMARY"
