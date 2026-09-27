@@ -20,6 +20,7 @@ _REF = re.compile(r"^[A-Za-z0-9:_./-]{1,128}$")
 _KINDS = frozenset({"prediction", "outcome", "alert", "provider", "coverage", "trajectory"})
 MAX_EVENTS = 2048
 MAX_PACKETS = 64
+MAX_BACKLOG_HOURS = 24
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,18 @@ class WindowResult:
     events: int
     overflow: bool
     checkpoint: int
+
+
+def due_hours(store: Store, *, now: int, settle_seconds: int = 3600) -> list[tuple[int, int]]:
+    """Bounded hourly schedule; old gaps require explicit recovery review."""
+    if settle_seconds < 300 or settle_seconds > 86400:
+        raise ValueError("invalid source settling delay")
+    closed_end = (now - settle_seconds) // 3600 * 3600
+    row = store.db.execute("SELECT checkpoint FROM ai_ops_scheduler WHERE name='collector_hour'").fetchone()
+    start = int(row[0]) if row else closed_end - 3600
+    if start > closed_end or closed_end - start > MAX_BACKLOG_HOURS * 3600:
+        raise ValueError("collector backlog needs explicit recovery")
+    return [(at, at + 3600) for at in range(start, closed_end, 3600)]
 
 
 def _ref(value: object) -> str:

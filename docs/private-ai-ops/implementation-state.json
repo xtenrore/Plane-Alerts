@@ -109,8 +109,8 @@
     "migration": "schema 2 to 3 deployed on dedicated Railway AI Ops volume; Phase 1 persisted probe stable, deployment d01dba5b-2901-4c26-a98f-2197675673fb",
     "local_tests": "31 focused passed before metadata probe; 17 provider and probe focused tests after",
     "github_ci": "full repository tests run 1567 success; isolated workflow run 35 tests, metadata probes and deployment success",
-    "provider_metadata_only_health": "five each Groq, Mistral and Gemini available; two paired Cloudflare available; OpenRouter available; no inference performed; httpx metadata probe run 37",
-    "groq_finding": "resolved: urllib-based metadata probe caused HTTP 403 on all five slots; existing Plane Alerts httpx client returned available on each distinct slot; adapter changed to httpx and synthetic regression added",
+    "provider_metadata_only_health": "all 18 slots available: Groq 5, Mistral 5, Gemini 5, Cloudflare paired 2, OpenRouter 1; metadata only; real inference still disabled",
+    "groq_finding": "resolved and confirmed in GitHub Actions metadata run 37: all five distinct Groq slots available using httpx, matching existing Plane Alerts integration; urllib probe caused HTTP 403; no credential changes or inference calls",
     "provider_credential_location": "GitHub Actions Secrets only; values never read, copied into Railway, or logged",
     "real_providers_enabled": false,
     "scheduler_enabled": false,
@@ -127,6 +127,8 @@
     "collector_status": "bounded shadow-only deterministic grouping, dedupe, anomaly packets, atomic checkpoint; prediction lab field allowlist; sanitized evidence backup/clean restore; 40 focused local tests passed",
     "railway_deployment": "6ae39662-9afe-4bad-a613-20e946b1f035 success; Phase 1 stable; no scheduler",
     "github_ci": "repository tests run 1569 success, isolated workflow run 36 success",
-    "remaining_gate": "wire complete hourly Prediction Lab source, durable schedule, production shadow/replay and monitor verification; scheduler remains disabled"
+    "remaining_gate": "prove complete upstream sync watermark and replay real hour; integrate isolated hourly worker with read-only source and verify volume, backlog, monitoring; do not mark phase complete yet",
+    "read_only_source": "prediction-lab-data branch raw JSON/NDJSON allowlist adapter; 25,284 raw files on observed day, bounded reader, dedupe/conflict rejection; no scheduler activated",
+    "schedule_code": "closed UTC hours after 1h settle, 24h bounded backlog, atomic durable checkpoint; default disabled"
   }
 }

@@ -1,6 +1,6 @@
 import pytest
 
-from app.private_ops.collector import MAX_EVENTS, collect, adapt_prediction_lab_record
+from app.private_ops.collector import MAX_EVENTS, collect, adapt_prediction_lab_record, due_hours
 from app.private_ops.store import Store
 from app.private_ops.dr_export import export, restore_empty
 
@@ -70,3 +70,13 @@ def test_real_prediction_lab_record_adapter_drops_private_coordinates():
     event_out = adapt_prediction_lab_record(source)
     assert event_out["cpa_km"] == 3.2
     assert "observer_latitude" not in event_out and "PRIVATE" not in repr(event_out)
+
+
+def test_hourly_schedule_settling_checkpoint_and_bounded_backlog(tmp_path):
+    store = Store(tmp_path)
+    assert due_hours(store, now=START+7200) == [(START, START+3600)]
+    assert run(store, []).packets == 0
+    assert due_hours(store, now=START+10800) == [(START+3600, START+7200)]
+    with pytest.raises(ValueError, match="backlog"):
+        due_hours(store, now=START+30*3600)
+    store.close()
