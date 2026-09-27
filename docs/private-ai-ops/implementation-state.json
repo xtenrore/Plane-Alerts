@@ -4,7 +4,7 @@
   "state_schema_version": 1,
   "last_completed_phase": 0,
   "current_phase": 1,
-  "phase_status": "in_progress_on_engineering_branch",
+  "phase_status": "blocked_railway_resource_limit",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -29,6 +29,13 @@
     "durable_store": "implemented_locally_not_deployed",
     "schema_version": 1,
     "local_tests": "4 passed: restart recovery, lease exclusion, bounded queue, schema refusal and isolated readiness",
+    "github_ci": "success on engineering branch 9b3263f75c8c8c8b920cf437d27250bbfb4dc738; pytest job and all 45 steps succeeded",
+    "railway_provisioning_attempt": {
+      "date": "2026-09-27",
+      "outcome": "rejected: Free plan resource provision limit exceeded",
+      "service_created": false,
+      "production_services_changed": false
+    },
     "pending_gate": [
       "dedicated Railway service and volume provisioned through the GitHub-controlled deployment flow",
       "deploy/restart simulation against the dedicated persistent volume",
@@ -36,7 +43,7 @@
     ]
   },
   "open_blockers_for_next_phase": [
-    "Provision a dedicated Private Operations Railway service and persistent volume only when Phase 1 begins.",
+    "Railway rejected a new isolated service because the free plan resource provision limit is exceeded. A new service and dedicated persistent volume require available capacity; do not delete or repurpose existing services or their volumes without an explicit owner decision.",
     "Keep real provider adapters disabled until Phase 3.",
     "Do not assume planned multi-key quota independence until per-slot bounded probes exist.",
     "Preserve existing scheduled-task and Prediction Lab ownership during early shadow phases.",
