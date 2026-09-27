@@ -21,10 +21,7 @@ jobs:
       RAILWAY_SERVICE_ID: 933e7a93-bfe7-4bd3-972a-a2b69083f117
       MOUNT_PATH: /app/server/data
     steps:
-      - name: Install Railway CLI
-        run: npm install --global @railway/cli
-
-      - name: Ensure dedicated persistent volume exists
+      - name: Create dedicated persistent volume
         shell: bash
         run: |
           set -euo pipefail
@@ -32,24 +29,51 @@ jobs:
             echo "::error::RAILWAY_API_TOKEN is unavailable"
             exit 1
           fi
-          railway volume list --service "$RAILWAY_SERVICE_ID" --json > /tmp/volumes.json
-          EXISTS="$(python - <<'PY'
+          python - <<'PY'
           import json
-          data=json.load(open('/tmp/volumes.json', encoding='utf-8'))
-          def walk(value):
-              if isinstance(value, dict):
-                  if value.get('mountPath') == '/app/server/data':
-                      return True
-                  return any(walk(v) for v in value.values())
-              if isinstance(value, list):
-                  return any(walk(v) for v in value)
-              return False
-          print('true' if walk(data) else 'false')
+          import os
+          import urllib.error
+          import urllib.request
+
+          query = '''
+          mutation CreateVolume($input: VolumeCreateInput!) {
+            volumeCreate(input: $input) { id name }
+          }
+          '''
+          payload = {
+              "query": query,
+              "variables": {
+                  "input": {
+                      "projectId": os.environ["RAILWAY_PROJECT_ID"],
+                      "environmentId": os.environ["RAILWAY_ENVIRONMENT_ID"],
+                      "serviceId": os.environ["RAILWAY_SERVICE_ID"],
+                      "mountPath": os.environ["MOUNT_PATH"],
+                  }
+              },
+          }
+          request = urllib.request.Request(
+              "https://backboard.railway.com/graphql/v2",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "Project-Access-Token": os.environ["RAILWAY_TOKEN"],
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              raise SystemExit(f"Railway GraphQL HTTP {exc.code}: {body[:500]}") from exc
+          if result.get("errors"):
+              raise SystemExit("Railway GraphQL error: " + json.dumps(result["errors"])[:1000])
+          volume = ((result.get("data") or {}).get("volumeCreate") or {})
+          volume_id = str(volume.get("id") or "")
+          if not volume_id:
+              raise SystemExit("Railway did not return the new volume id")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"volume_id={volume_id}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write(f"Created dedicated FreeLLMAPI volume `{volume_id}` at `{os.environ['MOUNT_PATH']}`.\n")
           PY
-          )"
-          if [[ "$EXISTS" != "true" ]]; then
-            railway volume add --service "$RAILWAY_SERVICE_ID" --mount-path "$MOUNT_PATH" --json > /tmp/added-volume.json
-            echo "Created dedicated FreeLLMAPI persistent volume at ${MOUNT_PATH}." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Dedicated FreeLLMAPI persistent volume already exists at ${MOUNT_PATH}." >> "$GITHUB_STEP_SUMMARY"
-          fi
