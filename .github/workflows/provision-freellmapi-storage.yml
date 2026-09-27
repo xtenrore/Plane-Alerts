@@ -1,0 +1,64 @@
+name: Provision FreeLLMAPI storage
+
+on:
+  push:
+    branches:
+      - feature/maintenance-router-integration
+    paths:
+      - .github/workflows/provision-freellmapi-storage.yml
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: 933e7a93-bfe7-4bd3-972a-a2b69083f117
+      MOUNT_PATH: /app/server/data
+    steps:
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli
+
+      - name: Ensure dedicated persistent volume exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RAILWAY_TOKEN:-}" ]]; then
+            echo "::error::RAILWAY_API_TOKEN is unavailable"
+            exit 1
+          fi
+          railway volume list \
+            --project "$PROJECT_ID" \
+            --environment "$ENVIRONMENT_ID" \
+            --service "$SERVICE_ID" \
+            --json > /tmp/volumes.json
+          EXISTS="$(python - <<'PY'
+          import json
+          data=json.load(open('/tmp/volumes.json', encoding='utf-8'))
+          def walk(value):
+              if isinstance(value, dict):
+                  if value.get('mountPath') == '/app/server/data':
+                      return True
+                  return any(walk(v) for v in value.values())
+              if isinstance(value, list):
+                  return any(walk(v) for v in value)
+              return False
+          print('true' if walk(data) else 'false')
+          PY
+          )"
+          if [[ "$EXISTS" != "true" ]]; then
+            railway volume add \
+              --project "$PROJECT_ID" \
+              --environment "$ENVIRONMENT_ID" \
+              --service "$SERVICE_ID" \
+              --mount-path "$MOUNT_PATH" \
+              --json > /tmp/added-volume.json
+            echo "Created dedicated FreeLLMAPI persistent volume at ${MOUNT_PATH}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Dedicated FreeLLMAPI persistent volume already exists at ${MOUNT_PATH}." >> "$GITHUB_STEP_SUMMARY"
+          fi
