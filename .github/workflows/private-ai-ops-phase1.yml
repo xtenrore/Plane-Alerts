@@ -70,9 +70,6 @@ jobs:
           VOLUMES="$(railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" list --json)"
           if printf '%s' "$VOLUMES" | grep -q '/data/ai_ops'; then
             echo 'Dedicated AI Ops volume already attached.'
-          elif printf '%s' "$VOLUMES" | grep -q 'mountPath'; then
-            echo 'Unexpected existing volume; refusing to attach another.' >&2
-            exit 1
           else
             railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" add --mount-path /data/ai_ops --json >/dev/null
             echo 'Dedicated AI Ops volume attached.'
