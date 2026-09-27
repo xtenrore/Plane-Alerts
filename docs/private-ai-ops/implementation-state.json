@@ -26,7 +26,7 @@
   "next_phase": 2,
   "next_phase_started": true,
   "phase_1_progress": {
-    "durable_store": "implemented_locally_not_deployed",
+    "durable_store": "deployed and verified on dedicated Railway volume; schema 1 Phase 1 gate passed",
     "schema_version": 1,
     "local_tests": "5 passed: restart recovery, lease exclusion, bounded queue, schema refusal, isolated readiness and multi-restart probe",
     "phase_1_workflow": ".github/workflows/private-ai-ops-phase1.yml",
@@ -84,10 +84,15 @@
     "github_sync_code": "durable debounced revision queue, lease, retry, remote readback, immutable namespace transport; not configured in Railway",
     "migration": "schema 1 to 2 preserves Phase 1 jobs and adds independent backup status; local migration test passes; Railway deployment pending",
     "local_tests": "14 passed; no paid provider calls",
-    "github_ci_prior_checkpoint": "99cd4cf1baa07b10af0dbc91c77d732c9efe06bb tests passed"
+    "github_ci_prior_checkpoint": "99cd4cf1baa07b10af0dbc91c77d732c9efe06bb tests passed",
+    "checkpoint_branch_commit": "a9871513c7d03124d00c3e927ab20f7beeb11cd8",
+    "github_config_projection": "workflow maps GitHub Actions AI_OPS_GITHUB_DR_TOKEN secret into isolated service via Railway CLI, source commit set from github.sha; missing secret disables writer",
+    "github_secret_status": "AI_OPS_GITHUB_DR_TOKEN absent from observed GitHub Actions Secrets as of 2026-09-27; no value viewed",
+    "railway_migration": "schema 2 workflow queued; production migration and live volume restore not yet verified",
+    "github_ci_latest": "repository tests succeeded on commit a9871513c7d03124d00c3e927ab20f7beeb11cd8; isolated workflow pending"
   },
   "open_blockers_for_next_phase": [
-    "Phase 2 requires verified export and clean restore of actual Railway volume job state, not only the synthetic recreation.",
-    "Unattended GitHub DR writer requires a narrowly scoped cross-repository credential in GitHub Actions Secrets; existing source repo secrets contain no DR writer credential. Configure it without exposing a value and verify remote upload/readback/retry."
+    "Phase 2 requires a fine-grained GitHub credential with read/write Contents limited to xtenrore/Plane-Alerts-Private-Repo, stored as GitHub Actions Secret AI_OPS_GITHUB_DR_TOKEN; creating/granting this security-sensitive access through the Cloud Browser needs action-time owner confirmation.",
+    "After the credential is configured, verify the isolated Railway worker syncs the actual volume state, read back the immutable remote snapshot, restore on a clean host, and check retry/checkpoint behavior in Railway before completing Phase 2."
   ]
 }
