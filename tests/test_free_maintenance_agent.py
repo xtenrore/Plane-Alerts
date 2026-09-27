@@ -127,3 +127,13 @@ def test_extract_patch_paths_handles_new_files() -> None:
 +def test_ok(): pass
 """
     assert extract_patch_paths(patch) == ("tests/test_new.py",)
+
+
+def test_workflow_wires_github_router_secrets_before_railway_fallback() -> None:
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github/workflows/free-maintenance-agent.yml").read_text(encoding="utf-8")
+    assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
+    assert "OPENROUTER_API: ${{ secrets.OPENROUTER_API }}" in workflow
+    assert "FREELLMAPI_API_KEY: ${{ secrets.FREELLMAPI_API_KEY }}" in workflow
+    assert "existing = os.environ.get(name, '').strip()" in workflow
+    assert "exported.append(f'{name}:github')" in workflow
