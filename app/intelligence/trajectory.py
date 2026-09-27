@@ -441,6 +441,13 @@ def predict_trajectory(
     score -= 0.10 * _clamp(abs(turn), 0.0, 1.0) + 0.06 * _clamp(abs(accel) / 1.5, 0.0, 1.0) + 0.14 * _clamp(cpa_t / max_horizon_s, 0.0, 1.0)
     if len(samples) < 3:
         score -= 0.10
+        # One or two points can only extrapolate the feed-reported vector; they
+        # do not yet establish a stable observed track. Keep an out-of-radius
+        # predictive candidate below the default Low alert threshold until a
+        # third contiguous observation confirms the motion. Direct physical
+        # presence inside the configured radius is intentionally exempt.
+        if current > alert_radius_km:
+            score = min(score, 0.35)
     if horizon_edge:
         score -= 0.10
     score = _clamp(min(score, 0.25) if stale else score, 0.0, 0.98)

@@ -191,9 +191,15 @@ def should_cancel_active_alert(prediction, previous_cpa_km: float | None, alert_
 
 
 def advance_cancellation_confirmation(previous_count: int, candidate: bool, *, required: int = CANCELLATION_CONFIRMATIONS_REQUIRED) -> tuple[bool, int]:
-    """Accumulate credible cancellation evidence without provider-gap starvation."""
+    """Require consecutive credible cancellation evidence.
+
+    A fresh cycle that is no longer a cancellation candidate breaks the streak.
+    The monitor separately preserves the previous count when there is no fresh
+    observation or the prediction is stale, so provider gaps do not erase good
+    evidence while fresh uncertainty cannot carry an old strike forward.
+    """
     count = max(0, int(previous_count))
     if not candidate:
-        return False, count
+        return False, 0
     count += 1
     return count >= max(1, int(required)), count
