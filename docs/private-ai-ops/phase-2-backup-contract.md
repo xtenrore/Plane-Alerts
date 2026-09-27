@@ -6,19 +6,20 @@ but no remote backup or clean-host remote restore has passed its gate yet.
 
 ## GitHub disaster recovery
 
-- Target: a dedicated **private** `xtenrore/Plane-Alerts-Private-State` repository,
+- Target: a dedicated **private** `xtenrore/Plane-Alerts-Private-Repo` repository,
   separate from the public application source. Verify its visibility before
   writing any state.
 - Export only the allowlisted job, step, checkpoint, status and hash fields.
-  `app/private_ops/dr_export.py` rejects unknown private strings, coordinates,
-  credential-like text and exports over 2 MB. The SHA-256 manifest binds the
-  exact source commit and counts. Completed steps preserve their output hashes;
+  `app/private_ops/dr_export.py` never exports step output text. It rejects
+  credential-like identifiers and exports over 2 MB. The SHA-256 manifest binds
+  the exact source commit and counts. Completed steps preserve their output hashes;
   interrupted running work is restored as retryable work without worker leases.
-- Implement a durable, debounced outbound queue with a single claim lease,
+- A durable, debounced outbound queue with a single claim lease,
   coalescing frequent changes, bounded retries and a verified remote checkpoint.
   A failed backup must not block local job processing. The remote writer must
   verify a read-back hash before acknowledging a checkpoint. Conflicts and
-  network outages leave the pending checkpoint retryable.
+  network outages leave the pending checkpoint retryable. Immutable snapshots
+  live under `private-ai-ops/snapshots/<sha256>.json` with an adjacent manifest.
 - GitHub Actions credentials belong in GitHub Secrets. The default source repo
   `GITHUB_TOKEN` cannot be assumed to write to a different private repository.
   Configure a narrowly scoped backup writer credential through the existing
@@ -27,6 +28,15 @@ but no remote backup or clean-host remote restore has passed its gate yet.
 - Restore on a clean host into an empty dedicated directory, check the manifest
   and SQLite integrity, and verify completed work is skipped and interrupted
   work is resumable. A restore must not overwrite the live Railway volume.
+
+On 2026-09-27, a **synthetic recreation** of the Phase 1 probe state was
+uploaded to the private repository, read back and restored in a clean temporary
+directory. Its manifest hash is
+`b41232f2c654fddd45757a9a565cbbbbdef2b9ebaa55b639021a772108d05dae`.
+This tests the remote namespace and restore mechanics; it is **not** a backup
+of the actual Railway volume. Do not mark Phase 2 complete until the real
+Railway state is exported, remotely verified and restored, and the unattended
+writer's GitHub Actions credential path is configured and tested.
 
 ## Dropbox secondary backup (Phase 11 implementation)
 
