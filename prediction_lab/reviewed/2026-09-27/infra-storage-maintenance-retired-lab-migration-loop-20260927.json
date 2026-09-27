@@ -1,7 +1,7 @@
 {
   "case_id": "infra-storage-maintenance-retired-lab-migration-loop-20260927",
   "status": "reviewed",
-  "disposition": "confirmed_bug_candidate_pending_ci",
+  "disposition": "confirmed_bug_candidate_ready_for_release_review",
   "reviewed_at": "2026-09-27T02:24:00Z",
   "event_ids": [
     "background-storage-maintenance-attempt-229",
@@ -23,7 +23,10 @@
     "pr": 125,
     "branch": "fix/storage-maintenance-retired-lab-migration",
     "sha": "f193f39d486b7333d0b830183c11e462a8f6d9d6",
-    "state": "pending_ci"
+    "state": "ci_verified",
+    "github_actions_run": 36288344001,
+    "github_actions_job": 108533365889,
+    "ci_conclusion": "success"
   },
   "regressions": [
     "tests/test_storage_maintenance_retirement_bridge.py::test_verified_retirement_skips_superseded_prediction_lab_mongo_export",
@@ -37,5 +40,5 @@
     "agy_runtime_or_volume_touched": false,
     "deployment_performed": false
   },
-  "blocker": "Exact candidate CI has not completed yet; do not publish release_candidate.json for this case until the exact SHA passes required Railway-relevant checks."
+  "blocker": null
 }
