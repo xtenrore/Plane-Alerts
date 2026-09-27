@@ -63,6 +63,7 @@ jobs:
       SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
       WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
       DEPLOY_SHA: ${{ github.sha }}
+      AI_OPS_GITHUB_DR_TOKEN: ${{ secrets.AI_OPS_GITHUB_DR_TOKEN }}
     steps:
       - name: Checkout validated source
         uses: actions/checkout@v4
@@ -94,6 +95,23 @@ jobs:
           else
             railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" add --mount-path /data/ai_ops --json >/dev/null
             echo 'Dedicated AI Ops volume attached.'
+          fi
+      - name: Project GitHub-controlled DR configuration into the isolated service
+        shell: sh
+        run: |
+          set -eu
+          # GitHub Actions is the configuration source. Railway receives only
+          # the service-specific runtime projection; no manual Railway copy.
+          printf '%s' "${AI_OPS_GITHUB_DR_TOKEN:-}" | railway variable set AI_OPS_GITHUB_DR_TOKEN --stdin \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+          railway variable set "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+          if [ -n "${AI_OPS_GITHUB_DR_TOKEN:-}" ]; then
+            railway variable set AI_OPS_GITHUB_DR_ENABLED=true \
+              --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+          else
+            railway variable set AI_OPS_GITHUB_DR_ENABLED=false \
+              --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
           fi
       - name: Deploy only the isolated AI Ops service
         shell: sh
