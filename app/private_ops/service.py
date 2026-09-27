@@ -10,7 +10,7 @@ import os
 import signal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from .store import Store
+from .store import SCHEMA_VERSION, Store
 from .phase1_probe import run as run_phase1_probe
 
 
@@ -22,7 +22,7 @@ def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
                 return
             try:
                 status = store.health()
-                ready = status["integrity"] == "ok" and status["schema"] == 1
+                ready = status["integrity"] == "ok" and status["schema"] == SCHEMA_VERSION
             except Exception:
                 status = {"status": "unavailable"}
                 ready = False
