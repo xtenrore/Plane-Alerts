@@ -58,6 +58,10 @@ def test_pa_a07_compose_healthcheck_uses_readiness_endpoint():
     assert "127.0.0.1:8000/ready" in compose
     assert "127.0.0.1:8000/health >/dev/null" not in compose
 
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "127.0.0.1:${PORT:-8000}/ready" in dockerfile
+    assert "127.0.0.1:${PORT:-8000}/health" not in dockerfile
+
 
 @pytest.mark.asyncio
 async def test_pa_a01_initial_setup_enables_only_after_successful_profile_save(monkeypatch):
@@ -358,6 +362,6 @@ def test_pa_a17_product_version_strings_are_canonical():
     from app.bot import profile_legacy
     from app.admin import v36_routes
 
-    assert VERSION == "5.8.6"
+    assert VERSION == "5.8.7"
     assert "v4.3" not in profile_legacy.cmd_help_profiled.__doc__ if profile_legacy.cmd_help_profiled.__doc__ else True
     assert v36_routes.VERSION == VERSION

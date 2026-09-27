@@ -40,6 +40,13 @@ def test_health_endpoint(client):
     assert "worker" in data
 
 
+def test_ready_endpoint_reflects_monitoring_health(client):
+    with patch("app.main.health_check", new_callable=AsyncMock, return_value={"application_ready": False}):
+        assert client.get("/ready").status_code == 503
+    with patch("app.main.health_check", new_callable=AsyncMock, return_value={"application_ready": True}):
+        assert client.get("/ready").status_code == 200
+
+
 def test_stats_endpoint(client):
     resp = client.get("/stats")
     assert resp.status_code == 200

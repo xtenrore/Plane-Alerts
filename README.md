@@ -4,11 +4,15 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.6**
+**Current code version: Plane Alerts v5.8.7**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
+
+## v5.8.7 — Docker monitoring readiness
+
+The standalone Docker image now checks `/ready`, so a stopped or degraded monitor cannot be reported healthy merely because `/health` responds. Docker Compose and Railway already use `/ready`. See [release notes](docs/releases/v5.8.7.md).
 
 ## v5.8.6 — Bounded ADS-B diagnostics
 

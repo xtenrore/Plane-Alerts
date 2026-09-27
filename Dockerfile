@@ -29,7 +29,7 @@ RUN python /app/scripts/build_airport_database.py \
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=4 \
-    CMD curl -fsS http://127.0.0.1:${PORT:-8000}/health >/dev/null || exit 1
+    CMD curl -fsS http://127.0.0.1:${PORT:-8000}/ready >/dev/null || exit 1
 
 # Railway uses this entrypoint for required production configuration checks.
 # Docker Compose overrides it with direct uvicorn startup for local self-hosting.

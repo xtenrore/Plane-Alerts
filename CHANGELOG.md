@@ -2,6 +2,12 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.7 — Docker Monitoring Readiness
+
+- Pointed the standalone Docker image health check at `/ready`, matching Compose and the existing Railway service configuration.
+- Added regression coverage for degraded and ready responses and both Docker health-check definitions.
+- No prediction, provider, storage-schema, dependency, configuration or installer change; full standalone Docker platform validation remains in the weekly Community Release workflow.
+
 ## v5.8.6 — Bounded ADS-B Diagnostics
 
 - Limited repeated zero-jump outlier warnings to one per minute, reporting the suppressed count on the next emission.
