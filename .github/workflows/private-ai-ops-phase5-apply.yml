@@ -46,18 +46,13 @@ jobs:
             tests/test_private_ops_prediction_source.py \
             tests/test_private_ops_hourly_replay.py \
             tests/test_private_ops_phase5.py
-      - name: Commit only the verified Phase 5 checkpoint
+      - name: Commit only verified non-workflow Phase 5 code
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf .phase5-payload
-          rm -f .github/workflows/private-ai-ops-phase5-apply.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A -- \
-            .phase5-payload \
-            .github/workflows/private-ai-ops-phase5-apply.yml \
-            .github/workflows/private-ai-ops-phase1.yml \
+          git add -- \
             app/private_ops/store.py \
             app/private_ops/provider_adapters.py \
             app/private_ops/provider_router.py \
