@@ -10,6 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AI_OPS_PHASE1_PROBE_ENABLED=true
 
 WORKDIR /app
+RUN pip install --no-cache-dir 'httpx>=0.27,<1'
 COPY app/private_ops/ /app/private_ops/
 
 EXPOSE 8080

@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Mapping, Protocol
@@ -68,26 +66,28 @@ class HTTPTransport(Protocol):
     def post(self, url: str, headers: Mapping[str, str], body: bytes) -> tuple[int, Mapping[str, str], bytes]: ...
 
 
-class UrllibTransport:
+class HttpxTransport:
     def post(self, url: str, headers: Mapping[str, str], body: bytes) -> tuple[int, Mapping[str, str], bytes]:
-        req = urllib.request.Request(url, data=body, method="POST", headers=dict(headers))
         try:
-            with urllib.request.urlopen(req, timeout=12) as response:
-                return response.status, dict(response.headers), response.read(131073)
-        except urllib.error.HTTPError as exc:
-            # Error response text is untrusted and may reflect credentials.
-            return exc.code, dict(exc.headers), b""
+            import httpx
+            with httpx.Client(timeout=httpx.Timeout(12.0), follow_redirects=False) as client:
+                with client.stream("POST", url, headers=dict(headers), content=body) as response:
+                    limited = bytearray()
+                    if response.status_code == 200:
+                        for part in response.iter_bytes():
+                            limited.extend(part[:max(0, 131073 - len(limited))])
+                            if len(limited) >= 131073:
+                                break
+                    return response.status_code, dict(response.headers), bytes(limited)
         except Exception:
             raise ProviderFailure("network") from None
 
     def get_status(self, url: str, headers: Mapping[str, str]) -> int:
         """Fetch metadata status only; never log or retain provider response."""
-        req = urllib.request.Request(url, method="GET", headers=dict(headers))
         try:
-            with urllib.request.urlopen(req, timeout=8) as response:
-                return response.status
-        except urllib.error.HTTPError as exc:
-            return exc.code
+            import httpx
+            with httpx.Client(timeout=httpx.Timeout(8.0), follow_redirects=False) as client:
+                return client.get(url, headers=dict(headers)).status_code
         except Exception:
             raise ProviderFailure("network") from None
 
@@ -154,7 +154,7 @@ def _response_json(content: str) -> dict:
 
 class Adapter:
     def __init__(self, transport: HTTPTransport | None = None):
-        self.transport = transport or UrllibTransport()
+        self.transport = transport or HttpxTransport()
 
     def probe(self, slot: Slot) -> str:
         """Read provider model metadata without running inference or spending tokens."""

@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app.private_ops.provider_adapters import (Adapter, AnalysisTask, ProviderFailure, Slot,
-                                               configured_slots, retry_after, schema_test_mode)
+                                               configured_slots, retry_after, schema_test_mode, HttpxTransport)
 from app.private_ops.provider_router import NoFreeRoute, Router
 from app.private_ops.store import Store
 
@@ -163,3 +163,18 @@ def test_safe_metadata_probe_does_not_call_inference(provider, name):
     assert Adapter(transport).probe(slot) == "available"
     assert len(transport.calls) == 1 and transport.calls[0][2] is None
     assert "/chat/completions" not in transport.calls[0][0] and "/ai/run/" not in transport.calls[0][0]
+
+
+def test_default_httpx_transport_matches_existing_production_client(monkeypatch):
+    httpx = pytest.importorskip("httpx")
+
+    seen = []
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: (
+        seen.append((request.method, request.headers.get("authorization", ""))) or
+        httpx.Response(200, json={"data": []})
+    )))
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client)
+    slot = Slot("groq", "GROQ_KEY", "test-only-credential")
+    assert Adapter(HttpxTransport()).probe(slot) == "available"
+    assert seen == [("GET", "Bearer test-only-credential")]
+    client.close()

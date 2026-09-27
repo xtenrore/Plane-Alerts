@@ -109,17 +109,24 @@
     "migration": "schema 2 to 3 deployed on dedicated Railway AI Ops volume; Phase 1 persisted probe stable, deployment d01dba5b-2901-4c26-a98f-2197675673fb",
     "local_tests": "31 focused passed before metadata probe; 17 provider and probe focused tests after",
     "github_ci": "full repository tests run 1567 success; isolated workflow run 35 tests, metadata probes and deployment success",
-    "provider_metadata_only_health": "five Gemini available; five Mistral available; two paired Cloudflare available; OpenRouter available; five Groq auth_failed; no inference performed",
-    "groq_finding": "all five Groq metadata probes rejected authentication; exclude from live routing until independently revalidated, Mistral/Gemini fallback may be used only after later activation gates",
+    "provider_metadata_only_health": "five each Groq, Mistral and Gemini available; two paired Cloudflare available; OpenRouter available; no inference performed; httpx metadata probe run 37",
+    "groq_finding": "resolved: urllib-based metadata probe caused HTTP 403 on all five slots; existing Plane Alerts httpx client returned available on each distinct slot; adapter changed to httpx and synthetic regression added",
     "provider_credential_location": "GitHub Actions Secrets only; values never read, copied into Railway, or logged",
     "real_providers_enabled": false,
     "scheduler_enabled": false,
     "free_route_policy": "explicit allowlist, OpenRouter :free model restriction, runtime activation still disabled",
-    "main_monitor": "unchanged deployment e055cf20-9d4e-4a28-91ff-e927e4219472; 81 cycles around Phase 3, mean 4.998s, max gap 6.766s, zero >10s"
+    "main_monitor": "unchanged deployment e055cf20-9d4e-4a28-91ff-e927e4219472; 81 cycles around Phase 3, mean 4.998s, max gap 6.766s, zero >10s",
+    "provider_probe_correction": "user-identified probe defect corrected; no credential change or new Railway variables"
   },
   "phase_4_progress": {
-    "status": "started",
+    "status": "in_progress",
     "scheduler_enabled": false,
-    "next_gate": "deterministic evidence collection in isolated store, bounded shadow mode, restart/replay/checkpoint tests"
+    "next_gate": "deterministic evidence collection in isolated store, bounded shadow mode, restart/replay/checkpoint tests",
+    "schema_version": 4,
+    "checkpoint_commit": "4ea11355f9e1b7ba2d412dc62a87e50ed3e4ca90",
+    "collector_status": "bounded shadow-only deterministic grouping, dedupe, anomaly packets, atomic checkpoint; prediction lab field allowlist; sanitized evidence backup/clean restore; 40 focused local tests passed",
+    "railway_deployment": "6ae39662-9afe-4bad-a613-20e946b1f035 success; Phase 1 stable; no scheduler",
+    "github_ci": "repository tests run 1569 success, isolated workflow run 36 success",
+    "remaining_gate": "wire complete hourly Prediction Lab source, durable schedule, production shadow/replay and monitor verification; scheduler remains disabled"
   }
 }
