@@ -1,5 +1,5 @@
-name: Private Operations Phase 1 isolated validation
-# This workflow targets only the dedicated Private Operations Railway service.
+name: Private Operations isolated validation
+# Branch checkpoints target only the dedicated Private Operations Railway service.
 
 on:
   push:
