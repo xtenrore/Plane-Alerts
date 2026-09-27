@@ -123,7 +123,7 @@
     "scheduler_enabled": false,
     "next_gate": "deterministic evidence collection in isolated store, bounded shadow mode, restart/replay/checkpoint tests",
     "schema_version": 4,
-    "checkpoint_commit": "4ea11355f9e1b7ba2d412dc62a87e50ed3e4ca90",
+    "checkpoint_commit": "final exact head to be verified from GitHub PR after CI",
     "collector_status": "bounded shadow-only deterministic grouping, dedupe, anomaly packets, atomic checkpoint; prediction lab field allowlist; sanitized evidence backup/clean restore; 40 focused local tests passed",
     "railway_deployment": "6ae39662-9afe-4bad-a613-20e946b1f035 success; Phase 1 stable; no scheduler",
     "github_ci": "repository tests run 1569 success, isolated workflow run 36 success",
@@ -138,7 +138,8 @@
     "scheduler_enabled_in_production": false,
     "real_ai_providers_enabled": false,
     "activation_note": "hourly scheduling and source reader verified in shadow replay; production flag stays off pending integrated umbrella activation; collector is read-only and does not touch flight decisions",
-    "one_time_replay": "completed and removed from routine isolated workflow; repeatable manual replay workflow/source script preserved"
+    "one_time_replay": "completed and removed from routine isolated workflow; repeatable manual replay workflow/source script preserved",
+    "full_ci_gate": "full CI rerun on replay commit passed; timing-sensitive Prediction Lab test hardened on final checkpoint to assert event-loop progress via synchronization; verify latest branch head CI"
   },
   "phase_5_progress": {
     "status": "not_started_user_requested_pause_after_phase_4",
