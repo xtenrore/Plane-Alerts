@@ -4,11 +4,15 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.5**
+**Current code version: Plane Alerts v5.8.6**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
+
+## v5.8.6 — Bounded ADS-B diagnostics
+
+Repeated zero-jump ADS-B rejection warnings are now limited to one per minute with a count of suppressed repeats on the next warning. Other rejection diagnostics and all aircraft decisions remain unchanged. See [release notes](docs/releases/v5.8.6.md).
 
 ## v5.8.5 — Mongo maintenance truth testing
 

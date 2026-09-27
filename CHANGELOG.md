@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.6 — Bounded ADS-B Diagnostics
+
+- Limited repeated zero-jump outlier warnings to one per minute, reporting the suppressed count on the next emission.
+- Kept nonzero-jump diagnostics, sample rejection and physical prediction behavior unchanged.
+- Added exact filter and production-logger regressions; no dependency, configuration, schema or installer change.
+- Railway-only release; community checks remain in the weekly workflow.
+
 ## v5.8.5 — Mongo Maintenance Truth Testing
 
 - Removed boolean evaluation of dynamically resolved Motor collection attributes during background index maintenance, shutdown, backend labeling and local-database switching.
