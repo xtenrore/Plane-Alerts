@@ -8,7 +8,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from app.private_ops.store import QueueFull, Store
+from .store import Store
 
 JOB = "phase1:railway-volume-restart-probe"
 
