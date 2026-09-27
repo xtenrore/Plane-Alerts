@@ -9,6 +9,8 @@ on:
       - 'deploy/private-ai-ops/**'
       - 'tests/test_private_ops_store.py'
       - 'tests/test_private_ops_dr_export.py'
+      - 'tests/test_private_ops_dr_sync.py'
+      - 'tests/test_private_ops_github_dr.py'
       - '.github/workflows/private-ai-ops-phase1.yml'
 
 permissions:
@@ -31,7 +33,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install 'pytest>=8,<9'
       - run: python -m compileall -q app/private_ops
-      - run: python -m pytest -q tests/test_private_ops_store.py tests/test_private_ops_dr_export.py
+      - run: python -m pytest -q tests/test_private_ops_store.py tests/test_private_ops_dr_export.py tests/test_private_ops_dr_sync.py tests/test_private_ops_github_dr.py
       - name: Refuse stale branch deployment
         id: head
         env:
