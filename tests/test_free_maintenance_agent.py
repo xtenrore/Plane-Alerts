@@ -137,3 +137,11 @@ def test_workflow_wires_github_router_secrets_before_railway_fallback() -> None:
     assert "FREELLMAPI_API_KEY: ${{ secrets.FREELLMAPI_API_KEY }}" in workflow
     assert "existing = os.environ.get(name, '').strip()" in workflow
     assert "exported.append(f'{name}:github')" in workflow
+
+
+def test_read_only_dispatch_cannot_create_investigation_issue() -> None:
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    workflow = (repo / ".github/workflows/free-maintenance-agent.yml").read_text(encoding="utf-8")
+    assert "(github.event_name != 'workflow_dispatch' || inputs.allow_patches == true)" in workflow
+    assert '| jq --arg id "$CASE_ID"' in workflow
+    assert "--jq --arg" not in workflow

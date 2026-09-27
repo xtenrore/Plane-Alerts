@@ -215,7 +215,7 @@ jobs:
             --body-file "$BODY_FILE"
 
       - name: Record an investigation issue when code is not yet justified
-        if: steps.queue.outputs.skip != 'true' && steps.result.outputs.changed != 'true' && steps.result.outputs.verdict == 'investigate'
+        if: steps.queue.outputs.skip != 'true' && steps.result.outputs.changed != 'true' && steps.result.outputs.verdict == 'investigate' && (github.event_name != 'workflow_dispatch' || inputs.allow_patches == true)
         env:
           GH_TOKEN: ${{ github.token }}
           CASE_ID: ${{ steps.result.outputs.case_id }}
@@ -226,7 +226,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          EXISTING="$(gh issue list --state open --limit 100 --json title --jq --arg id "$CASE_ID" '[.[] | select(.title | contains($id))] | length')"
+          EXISTING="$(gh issue list --state open --limit 100 --json title | jq --arg id "$CASE_ID" '[.[] | select(.title | contains($id))] | length')"
           if [[ "$EXISTING" -gt 0 ]]; then
             echo "Existing open issue already references ${CASE_ID}; not duplicating it." >> "$GITHUB_STEP_SUMMARY"
             exit 0
