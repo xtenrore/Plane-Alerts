@@ -60,6 +60,12 @@ if "pytest" not in sys.modules:
 
     install_operational_volume_v561()
 
+    # Production recovery: stabilize public-provider handoffs before they feed
+    # trajectory history and read Next60 history from the authoritative volume.
+    from app.worker.runtime_recovery_hotfix import install_runtime_recovery_hotfix
+
+    install_runtime_recovery_hotfix()
+
     # v5.6.2 retires legacy Prediction Lab Mongo exporters/collections.
     from app.legacy_mongo_retirement_v562 import install_legacy_mongo_retirement_v562
 
