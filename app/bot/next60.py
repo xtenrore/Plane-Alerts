@@ -24,8 +24,9 @@ from app.prediction_lab_files_v55 import append_evidence
 from app.worker.optional_work import OptionalCache
 
 MAX_ROWS = 30
-MAX_HISTORY_ROUTES = 1500
-HISTORY_DAYS = 3
+MAX_HISTORY_ROUTES = 3000
+HISTORY_DAYS = 7
+LIVE_STATE_MAX_AGE_S = 75
 MORE_PREFIX = "n60_more:"
 _next60_evidence = OptionalCache(max_entries=2048, max_pending=32, concurrency=1, timeout=3.0)
 
@@ -107,7 +108,7 @@ def render_next60_native(now: datetime, docs: list[dict[str, Any]]) -> tuple[str
         buckets[_bucket(horizon)].append(doc); visible.append(doc)
     lines = ["✈️ <b>Next 60 Minutes</b>", "<i>Type · flight · ETA · closest pass</i>"]
     if not visible:
-        lines.append("\nNo next-hour candidates right now. Longer-range entries appear only when Plane Alerts has enough route history.")
+        lines.append("\nNo next-hour candidates right now. Live candidates remain visible through short provider gaps; history shadows appear when recent routes support them.")
         return "\n".join(lines), None
     for label in ("0–15 min", "15–30 min", "30–60 min"):
         rows = buckets[label]
@@ -228,23 +229,79 @@ async def _history_docs(user_id: int, now: datetime) -> list[dict[str, Any]]:
     return docs[:MAX_ROWS]
 
 
+def _live_state_doc(state: dict[str, Any], now: datetime, type_cache: dict[str, str] | None = None) -> dict[str, Any] | None:
+    """Convert a recent qualifying approach state into a Next60 row.
+
+    The live monitor may intentionally hold an alert for cancellation confirmation
+    or during a brief provider gap. Keep the last deterministic ETA visible for a
+    bounded 75 seconds, but immediately hide a state when current fresh evidence
+    explicitly says it will not approach.
+    """
+    miss_state = str(state.get("candidate_state") or "")
+    if miss_state in {"Will not approach", "Moving away", "Turning away", "Passed"}:
+        return None
+    try:
+        eta_s = float(state.get("time_to_cpa_s"))
+    except (TypeError, ValueError):
+        return None
+    captured = _aware(state.get("prediction_at"))
+    if captured is None:
+        return None
+    age_s = (now - captured).total_seconds()
+    if age_s < 0 or age_s > LIVE_STATE_MAX_AGE_S:
+        return None
+    cpa_at = captured + timedelta(seconds=eta_s)
+    horizon_s = (cpa_at - now).total_seconds()
+    if horizon_s < 0 or horizon_s > 3600:
+        return None
+    cache = type_cache or {}
+    icao = str(state.get("aircraft_icao24") or "").lower().strip()
+    callsign = str(state.get("route_callsign") or icao or "Unknown").upper()
+    aircraft_type = str(state.get("aircraft_type") or cache.get(icao) or "").upper().strip()
+    return {
+        "callsign": callsign,
+        "aircraft_icao24": icao,
+        "aircraft_type": aircraft_type,
+        "predicted_cpa_at": cpa_at,
+        "prediction_horizon_s": horizon_s,
+        "predicted_closest_km": state.get("projected_closest_km"),
+        "confidence": state.get("confidence") or "Low",
+        "stage": state.get("stage") or "live",
+        "source": "live",
+    }
+
+
 async def _live_docs(user_id: int, now: datetime) -> list[dict[str, Any]]:
     type_cache: dict[str, str] = {}
     try:
         from app.worker.monitor import get_provider_manager
         type_cache = dict(getattr(get_provider_manager(), "_type_cache", {}) or {})
     except Exception: type_cache = {}
-    cursor = get_db()["approach_states"].find({"user_id": user_id, "active": True, "time_to_cpa_s": {"$gte": 0, "$lte": 3600}, "prediction_at": {"$gte": now - timedelta(seconds=20)}}, {"_id": 0, "aircraft_icao24": 1, "route_callsign": 1, "aircraft_type": 1, "projected_closest_km": 1, "time_to_cpa_s": 1, "prediction_at": 1, "confidence": 1, "stage": 1}).limit(MAX_ROWS)
+    cursor = get_db()["approach_states"].find(
+        {
+            "user_id": user_id,
+            "active": True,
+            "time_to_cpa_s": {"$gte": 0, "$lte": 3600},
+            "prediction_at": {"$gte": now - timedelta(seconds=LIVE_STATE_MAX_AGE_S)},
+        },
+        {
+            "_id": 0,
+            "aircraft_icao24": 1,
+            "route_callsign": 1,
+            "aircraft_type": 1,
+            "projected_closest_km": 1,
+            "time_to_cpa_s": 1,
+            "prediction_at": 1,
+            "confidence": 1,
+            "stage": 1,
+            "candidate_state": 1,
+        },
+    ).limit(MAX_ROWS)
     docs: list[dict[str, Any]] = []
     async for state in cursor:
-        try: eta_s = float(state.get("time_to_cpa_s"))
-        except (TypeError, ValueError): continue
-        captured = _aware(state.get("prediction_at"))
-        if captured is None or not 0 <= (now - captured).total_seconds() <= 20: continue
-        cpa_at = captured + timedelta(seconds=eta_s); eta_s = (cpa_at - now).total_seconds()
-        if eta_s < 0 or eta_s > 3600: continue
-        icao = str(state.get("aircraft_icao24") or "").lower().strip(); callsign = str(state.get("route_callsign") or icao or "Unknown").upper(); aircraft_type = str(state.get("aircraft_type") or type_cache.get(icao) or "").upper().strip()
-        docs.append({"callsign": callsign, "aircraft_icao24": icao, "aircraft_type": aircraft_type, "predicted_cpa_at": cpa_at, "prediction_horizon_s": eta_s, "predicted_closest_km": state.get("projected_closest_km"), "confidence": state.get("confidence") or "Low", "stage": state.get("stage") or "live", "source": "live"})
+        doc = _live_state_doc(state, now, type_cache)
+        if doc is not None:
+            docs.append(doc)
     return docs
 
 
