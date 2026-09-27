@@ -4,7 +4,7 @@
   "state_schema_version": 1,
   "last_completed_phase": 0,
   "current_phase": 1,
-  "phase_status": "blocked_railway_resource_limit",
+  "phase_status": "in_progress_real_railway_validation",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -19,8 +19,8 @@
   "provider_slots_status": "current_runtime_wiring_differs_from_roadmap_reported_inventory",
   "provider_credentials_verified": false,
   "paid_usage_performed": false,
-  "production_mutation_performed": false,
-  "railway_configuration_mutated": false,
+  "production_mutation_performed": true,
+  "railway_configuration_mutated": true,
   "scheduler_mutated": false,
   "community_impact": "none_phase_0_documentation_and_private_architecture_only",
   "next_phase": 1,
@@ -28,7 +28,17 @@
   "phase_1_progress": {
     "durable_store": "implemented_locally_not_deployed",
     "schema_version": 1,
-    "local_tests": "4 passed: restart recovery, lease exclusion, bounded queue, schema refusal and isolated readiness",
+    "local_tests": "5 passed: restart recovery, lease exclusion, bounded queue, schema refusal, isolated readiness and multi-restart probe",
+    "railway_service": {
+      "name": "Plane-Alerts-AI-Ops",
+      "id": "d701080d-1a41-4054-a810-fd89742e1187",
+      "environment": "production",
+      "created": true,
+      "source": "dedicated GitHub branch deploy workflow; no manually maintained Railway credential variables",
+      "volume_mount_target": "/data/ai_ops",
+      "volume_verified": false,
+      "service_deployed": false
+    },
     "github_ci": "success on engineering branch 9b3263f75c8c8c8b920cf437d27250bbfb4dc738; pytest job and all 45 steps succeeded",
     "railway_provisioning_attempt": {
       "date": "2026-09-27",
@@ -37,13 +47,13 @@
       "production_services_changed": false
     },
     "pending_gate": [
-      "dedicated Railway service and volume provisioned through the GitHub-controlled deployment flow",
+      "attach and verify dedicated Railway volume through the GitHub-controlled deployment flow",
       "deploy/restart simulation against the dedicated persistent volume",
       "required CI jobs and production verification"
     ]
   },
   "open_blockers_for_next_phase": [
-    "Railway rejected a new isolated service because the free plan resource provision limit is exceeded. A new service and dedicated persistent volume require available capacity; do not delete or repurpose existing services or their volumes without an explicit owner decision.",
+    "Previous Railway free-plan resource blocker was resolved; service created. Volume and real restart/redeploy verification remain pending.",
     "Keep real provider adapters disabled until Phase 3.",
     "Do not assume planned multi-key quota independence until per-slot bounded probes exist.",
     "Preserve existing scheduled-task and Prediction Lab ownership during early shadow phases.",
