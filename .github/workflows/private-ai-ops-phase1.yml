@@ -65,7 +65,7 @@ jobs:
       WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
       DEPLOY_SHA: ${{ github.sha }}
       AI_OPS_GITHUB_DR_TOKEN: ${{ secrets.AI_OPS_GITHUB_DR_TOKEN }}
-      AI_OPS_PHASE2_FAULT_PROBE_ENABLED: 'true'
+      AI_OPS_PHASE2_FAULT_PROBE_ENABLED: 'false'
     steps:
       - name: Checkout validated source
         uses: actions/checkout@v4
