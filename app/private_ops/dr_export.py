@@ -8,13 +8,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import math
 from pathlib import Path
 
 from .store import Store
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9:_./-]{1,128}$")
 _SAFE_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
-_SAFE_TEXT = re.compile(r"^[A-Za-z0-9 _.-]{0,200}$")
+_SAFE_TEXT = re.compile(r"^[A-Za-z0-9 _:./-]{0,200}$")
 _SECRET = re.compile(r"(?i)(authorization|bearer\s|mongodb(?:\+srv)?://|mongo[_-]?uri|telegram|railway[_-]?token|gh[pousr]_|sk-[a-z0-9]|eyJ[A-Za-z0-9_-]{20}|api[_-]?key|token|password|secret|\b(?:lat|lon|latitude|longitude)\b)")
 
 
@@ -38,7 +39,9 @@ def _safe(value: object) -> object:
         return value
     if isinstance(value, bool) or value is None:
         return value
-    if isinstance(value, int) and 0 <= value <= 10000:
+    if isinstance(value, int) and 0 <= value <= 4_000_000_000:
+        return value
+    if isinstance(value, float) and math.isfinite(value) and -100000 <= value <= 100000:
         return value
     raise ValueError("unsupported or private export value")
 
@@ -68,12 +71,21 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
                       "input_hash": step[3], "output_hash": step[4], "attempts": step[5]})
     checkpoints = [{"name": _id(row[0]), "checkpoint": _id(row[1])}
                    for row in store.db.execute("SELECT name,checkpoint FROM ai_ops_scheduler ORDER BY name")]
-    record = {"schema": 1, "source_commit": source_commit, "jobs": jobs, "steps": steps, "checkpoints": checkpoints}
+    evidence = []
+    for row in store.db.execute("SELECT packet_id,window_start,case_ref,kind,packet_json,content_hash FROM ai_ops_evidence ORDER BY packet_id"):
+        packet = _safe(json.loads(row[4]))
+        content = json.dumps(packet, sort_keys=True, separators=(",", ":"))
+        if hashlib.sha256(content.encode()).hexdigest() != row[0] or row[0] != row[5]:
+            raise ValueError("evidence packet checksum mismatch")
+        evidence.append({"packet_id": row[0], "window_start": row[1], "case_ref": _id(row[2]),
+                         "kind": _id(row[3]), "packet": packet})
+    record = {"schema": 2, "source_commit": source_commit, "jobs": jobs, "steps": steps,
+              "checkpoints": checkpoints, "evidence": evidence}
     data = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > 2_000_000 or _SECRET.search(data.decode()):
         raise ValueError("sanitized export failed privacy gate")
-    manifest = {"schema": 1, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
-                "jobs": len(jobs), "steps": len(steps)}
+    manifest = {"schema": 2, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+                "jobs": len(jobs), "steps": len(steps), "evidence": len(evidence)}
     return data, manifest
 
 
@@ -87,10 +99,12 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
     if _SECRET.search(data.decode("utf-8")):
         raise ValueError("unsafe restore data")
     record = json.loads(data)
-    if record.get("schema") != 1 or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
+    if record.get("schema") not in (1, 2) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
         raise ValueError("unsupported backup schema")
     if record["source_commit"] != manifest.get("source_commit") or len(record["jobs"]) != manifest.get("jobs") or len(record["steps"]) != manifest.get("steps"):
         raise ValueError("backup manifest mismatch")
+    if record["schema"] == 2 and len(record["evidence"]) != manifest.get("evidence"):
+        raise ValueError("backup evidence manifest mismatch")
     store = Store(root)
     try:
         with store.transaction() as db:
@@ -102,6 +116,15 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
                     VALUES(?,?,?,?,?,?,?)""", (_id(s["job_id"]), _id(s["step_id"]), s["status"], s["input_hash"], s["output_hash"], None, s["attempts"]))
             for c in record["checkpoints"]:
                 db.execute("INSERT INTO ai_ops_scheduler(name,checkpoint,updated) VALUES(?,?,0)", (_id(c["name"]), _id(c["checkpoint"])))
+            for e in record.get("evidence", []):
+                packet = _safe(e["packet"])
+                content = json.dumps(packet, sort_keys=True, separators=(",", ":"))
+                digest = hashlib.sha256(content.encode()).hexdigest()
+                if digest != e["packet_id"]:
+                    raise ValueError("restored evidence checksum mismatch")
+                db.execute("""INSERT INTO ai_ops_evidence
+                    (packet_id,window_start,case_ref,kind,packet_json,content_hash,created)
+                    VALUES(?,?,?,?,?,?,0)""", (digest, e["window_start"], _id(e["case_ref"]), _id(e["kind"]), content, digest))
         if store.health()["integrity"] != "ok":
             raise RuntimeError("restored database failed integrity check")
         return store

@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -108,6 +108,16 @@ class Store:
                     open_until REAL NOT NULL DEFAULT 0, updated REAL NOT NULL DEFAULT 0
                 )""")
                 db.execute("PRAGMA user_version=3")
+                version = 3
+            if version == 3:
+                db.execute("""CREATE TABLE ai_ops_evidence (
+                    packet_id TEXT PRIMARY KEY, window_start INTEGER NOT NULL,
+                    case_ref TEXT NOT NULL, kind TEXT NOT NULL,
+                    packet_json TEXT NOT NULL, content_hash TEXT NOT NULL,
+                    created REAL NOT NULL
+                )""")
+                db.execute("CREATE INDEX ai_ops_evidence_window ON ai_ops_evidence(window_start)")
+                db.execute("PRAGMA user_version=4")
 
     @staticmethod
     def _mark_dr_dirty(db: sqlite3.Connection) -> None:

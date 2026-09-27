@@ -171,8 +171,10 @@ class Adapter:
                    else {"Authorization": "Bearer " + slot.credential})
         # Test transports can implement the metadata operation without network.
         status = self.transport.get_status(urls[slot.provider], headers)
-        if status in (401, 403):
-            return "auth_failed"
+        if status == 401:
+            return "unauthorized"
+        if status == 403:
+            return "forbidden"
         if status == 429:
             return "limited"
         return "available" if status == 200 else "unavailable"
