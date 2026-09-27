@@ -2,6 +2,13 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.4 — Storage Maintenance Recovery
+
+- Stopped background storage maintenance from retrying the retired Prediction Lab Mongo exporter once operational telemetry uses the persistent volume.
+- Kept the previous migration path for installations where operational retirement has not been established, and kept SQLite behavior separate.
+- Added regression coverage for both migration paths and SQLite; prediction version stays `5.3-3d-proximity-age-aware`.
+- Railway-only release. Community storage and self-host validation remains in the weekly community workflow.
+
 ## v5.8.3 — Dead Workflow Cleanup
 
 - Canonicalized the active Vercel v3.3 durable workflow implementation as `vercel_runtime/plane_workflows.py`.

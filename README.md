@@ -4,11 +4,15 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.3**
+**Current code version: Plane Alerts v5.8.4**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
+
+## v5.8.4 — Storage maintenance recovery
+
+Background maintenance no longer re-enters the retired Prediction Lab Mongo exporter after persistent-volume telemetry becomes authoritative. This removes a recurring maintenance retry while preserving the legacy migration when retirement has not been established and the separate SQLite path. Live prediction and alert behavior are unchanged. See [release notes](docs/releases/v5.8.4.md).
 
 ## v5.8.3 — Dead workflow cleanup
 

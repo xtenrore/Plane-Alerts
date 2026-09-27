@@ -25,6 +25,7 @@ FORBIDDEN_OPERATIONAL_MONGO_COLLECTIONS = frozenset({
 
 _installed = False
 _original_ensure_indexes = None
+_original_ensure_prediction_lab_migration = None
 _original_volume_authoritative = None
 
 
@@ -62,6 +63,22 @@ async def _ensure_indexes_without_operational_mongo(db) -> None:
     await _original_ensure_indexes(_IndexPolicyDatabase(db))
 
 
+async def _ensure_prediction_lab_migration_without_retired_mongo(db, key) -> None:
+    """Do not rerun the superseded v5.5 Mongo exporter after v5.6.2 retirement.
+
+    v5.6.2 owns the authoritative one-time retirement marker. Once that marker
+    verifies that the operational collections are gone and volume storage is
+    authoritative, the older v5.5 migration must not probe those retired Mongo
+    collections again. Doing so can hit the v5.6.3 no-Mongo policy wrappers and
+    keep background maintenance retrying forever.
+    """
+    if key[0] != "sqlite" and _volume_authoritative_with_notification_retirement():
+        database._prediction_lab_migration_ready_for = key
+        logger.info("Prediction Lab Mongo migration already satisfied by verified legacy retirement")
+        return
+    await _original_ensure_prediction_lab_migration(db, key)
+
+
 def _volume_authoritative_with_notification_retirement() -> bool:
     result = bool(_original_volume_authoritative())
     notification_volume.schedule_legacy_retirement()
@@ -69,7 +86,7 @@ def _volume_authoritative_with_notification_retirement() -> bool:
 
 
 def install_operational_storage_policy_v563() -> None:
-    global _installed, _original_ensure_indexes, _original_volume_authoritative
+    global _installed, _original_ensure_indexes, _original_ensure_prediction_lab_migration, _original_volume_authoritative
     if _installed:
         return
 
@@ -83,6 +100,12 @@ def install_operational_storage_policy_v563() -> None:
     _original_volume_authoritative = legacy_retirement._volume_authoritative_and_schedule_retirement
     legacy_retirement._volume_authoritative_and_schedule_retirement = _volume_authoritative_with_notification_retirement
     lab_files.migration_verified = _volume_authoritative_with_notification_retirement
+
+    # The v5.5 exporter predates the v5.6.2 retirement marker. Bridge database
+    # maintenance to the newer authoritative marker so a successful retirement
+    # is terminal and cannot re-enter retired operational Mongo collections.
+    _original_ensure_prediction_lab_migration = database._ensure_prediction_lab_migration
+    database._ensure_prediction_lab_migration = _ensure_prediction_lab_migration_without_retired_mongo
 
     # Never import sentinel_network from worker bootstrap: doing so can re-enter
     # app.worker.monitor before the critical predictor wrappers finish installing.
