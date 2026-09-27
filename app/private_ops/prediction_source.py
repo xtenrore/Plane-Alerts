@@ -14,7 +14,7 @@ from typing import Iterator
 from .collector import adapt_prediction_lab_record
 
 MAX_FILES_PER_DAY = 32000
-MAX_FILE_BYTES = 2_200_000
+MAX_FILE_BYTES = 16_000_000
 MAX_SOURCE_EVENTS_PER_HOUR = 2048
 
 
