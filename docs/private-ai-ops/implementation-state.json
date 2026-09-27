@@ -2,8 +2,8 @@
   "roadmap": "Plane Alerts Private Operations phased roadmap",
   "roadmap_source": "Version_6.0",
   "state_schema_version": 1,
-  "last_completed_phase": 2,
-  "current_phase": 3,
+  "last_completed_phase": 3,
+  "current_phase": 4,
   "phase_status": "in_progress",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
@@ -23,7 +23,7 @@
   "railway_configuration_mutated": true,
   "scheduler_mutated": false,
   "community_impact": "none_phase_0_documentation_and_private_architecture_only",
-  "next_phase": 3,
+  "next_phase": 4,
   "next_phase_started": true,
   "phase_1_progress": {
     "durable_store": "deployed and verified on dedicated Railway volume; schema 1 Phase 1 gate passed",
@@ -104,9 +104,22 @@
   },
   "open_blockers_for_next_phase": [],
   "phase_3_progress": {
-    "status": "started",
-    "providers_enabled": false,
+    "status": "completed",
+    "checkpoint_branch_commit": "5e7d92f5bd45ec6026372013b159f0d335a55e54",
+    "migration": "schema 2 to 3 deployed on dedicated Railway AI Ops volume; Phase 1 persisted probe stable, deployment d01dba5b-2901-4c26-a98f-2197675673fb",
+    "local_tests": "31 focused passed before metadata probe; 17 provider and probe focused tests after",
+    "github_ci": "full repository tests run 1567 success; isolated workflow run 35 tests, metadata probes and deployment success",
+    "provider_metadata_only_health": "five Gemini available; five Mistral available; two paired Cloudflare available; OpenRouter available; five Groq auth_failed; no inference performed",
+    "groq_finding": "all five Groq metadata probes rejected authentication; exclude from live routing until independently revalidated, Mistral/Gemini fallback may be used only after later activation gates",
+    "provider_credential_location": "GitHub Actions Secrets only; values never read, copied into Railway, or logged",
+    "real_providers_enabled": false,
     "scheduler_enabled": false,
-    "next_gate": "implement and validate normalized free-only provider adapters and per-key health router using independently tracked configured slots"
+    "free_route_policy": "explicit allowlist, OpenRouter :free model restriction, runtime activation still disabled",
+    "main_monitor": "unchanged deployment e055cf20-9d4e-4a28-91ff-e927e4219472; 81 cycles around Phase 3, mean 4.998s, max gap 6.766s, zero >10s"
+  },
+  "phase_4_progress": {
+    "status": "started",
+    "scheduler_enabled": false,
+    "next_gate": "deterministic evidence collection in isolated store, bounded shadow mode, restart/replay/checkpoint tests"
   }
 }
