@@ -66,6 +66,12 @@ if "pytest" not in sys.modules:
 
     install_runtime_recovery_hotfix()
 
+    # Keep new Prediction Lab records on the canonical spool schema while allowing
+    # the authenticated bridge to archive the known v5.2 shadow schema backlog.
+    from app.prediction_lab_schema_guard import install_prediction_lab_schema_guard
+
+    install_prediction_lab_schema_guard()
+
     # v5.6.2 retires legacy Prediction Lab Mongo exporters/collections.
     from app.legacy_mongo_retirement_v562 import install_legacy_mongo_retirement_v562
 

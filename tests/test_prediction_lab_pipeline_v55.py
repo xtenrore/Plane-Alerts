@@ -63,9 +63,10 @@ def test_sync_uses_authenticated_http_bridge_not_railway_sftp():
     assert "railway volume" not in text
 
 
-def test_sync_self_drains_only_after_a_large_acknowledged_batch():
+def test_sync_self_drains_after_any_nonempty_acknowledged_batch():
     text = (ROOT / ".github" / "workflows" / "prediction-lab-sync.yml").read_text(encoding="utf-8")
-    assert 'continue_drain={"true" if removed >= 250 else "false"}' in text
+    assert 'continue_drain={"true" if removed > 0 else "false"}' in text
+    assert "removed >= 250" not in text
     condition = "steps.acknowledge.outputs.continue_drain == 'true'"
     dispatch = "actions/workflows/prediction-lab-sync.yml/dispatches"
     assert condition in text and dispatch in text
