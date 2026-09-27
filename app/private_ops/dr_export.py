@@ -61,10 +61,11 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
         status = "RETRY" if job[1] == "RUNNING" else job[1]
         jobs.append({"id": _id(job[0]), "status": status, "priority": job[2], "created": job[3], "updated": job[4]})
     steps = []
-    for step in store.db.execute("SELECT job_id,step_id,status,input_hash,output_hash,output_json,attempts FROM ai_ops_steps ORDER BY job_id,step_id"):
-        result = None if step[5] is None else _safe(json.loads(step[5]))
+    for step in store.db.execute("SELECT job_id,step_id,status,input_hash,output_hash,attempts FROM ai_ops_steps ORDER BY job_id,step_id"):
+        # Step output can contain conversations, locations, or credentials.
+        # The commitment hash is enough to skip completed idempotent work.
         steps.append({"job_id": _id(step[0]), "step_id": _id(step[1]), "status": "RETRY" if step[2] == "RUNNING" else step[2],
-                      "input_hash": step[3], "output_hash": step[4], "output": result, "attempts": step[6]})
+                      "input_hash": step[3], "output_hash": step[4], "attempts": step[5]})
     checkpoints = [{"name": _id(row[0]), "checkpoint": _id(row[1])}
                    for row in store.db.execute("SELECT name,checkpoint FROM ai_ops_scheduler ORDER BY name")]
     record = {"schema": 1, "source_commit": source_commit, "jobs": jobs, "steps": steps, "checkpoints": checkpoints}
@@ -97,11 +98,8 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
                 db.execute("INSERT INTO ai_ops_jobs(id,status,priority,created,updated) VALUES(?,?,?,?,?)",
                            (_id(j["id"]), j["status"], j["priority"], j["created"], j["updated"]))
             for s in record["steps"]:
-                out = None if s["output"] is None else json.dumps(_safe(s["output"]), sort_keys=True, separators=(",", ":"))
-                if out is not None and Store.digest(s["output"]) != s["output_hash"]:
-                    raise ValueError("output hash mismatch")
                 db.execute("""INSERT INTO ai_ops_steps(job_id,step_id,status,input_hash,output_hash,output_json,attempts)
-                    VALUES(?,?,?,?,?,?,?)""", (_id(s["job_id"]), _id(s["step_id"]), s["status"], s["input_hash"], s["output_hash"], out, s["attempts"]))
+                    VALUES(?,?,?,?,?,?,?)""", (_id(s["job_id"]), _id(s["step_id"]), s["status"], s["input_hash"], s["output_hash"], None, s["attempts"]))
             for c in record["checkpoints"]:
                 db.execute("INSERT INTO ai_ops_scheduler(name,checkpoint,updated) VALUES(?,?,0)", (_id(c["name"]), _id(c["checkpoint"])))
         if store.health()["integrity"] != "ok":
