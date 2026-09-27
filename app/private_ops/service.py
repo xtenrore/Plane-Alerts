@@ -68,6 +68,7 @@ def main() -> None:
     finally:
         server.server_close()
         store.close()
+        print("AI_OPS_SHUTDOWN_CHECKPOINTED", flush=True)
 
 
 if __name__ == "__main__":
