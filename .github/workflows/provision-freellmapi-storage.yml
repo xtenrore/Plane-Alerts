@@ -16,9 +16,9 @@ jobs:
     timeout-minutes: 10
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
-      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
-      SERVICE_ID: 933e7a93-bfe7-4bd3-972a-a2b69083f117
+      RAILWAY_PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      RAILWAY_ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      RAILWAY_SERVICE_ID: 933e7a93-bfe7-4bd3-972a-a2b69083f117
       MOUNT_PATH: /app/server/data
     steps:
       - name: Install Railway CLI
@@ -32,11 +32,6 @@ jobs:
             echo "::error::RAILWAY_API_TOKEN is unavailable"
             exit 1
           fi
-          railway link \
-            --project "$PROJECT_ID" \
-            --environment "$ENVIRONMENT_ID" \
-            --service "$SERVICE_ID" \
-            --json > /tmp/link.json
           railway volume list --json > /tmp/volumes.json
           EXISTS="$(python - <<'PY'
           import json
