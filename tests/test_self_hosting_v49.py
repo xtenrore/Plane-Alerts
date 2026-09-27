@@ -63,7 +63,7 @@ def test_dockerfile_installs_locked_dependencies_doctor_health_and_arm64_guard()
     assert "planealerts" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "arm64" in dockerfile and "amd64" in dockerfile
-    assert "/health" in dockerfile
+    assert "${PORT:-8000}/ready" in dockerfile
 
 
 def test_self_hosting_docs_and_public_issue_path_exist() -> None:

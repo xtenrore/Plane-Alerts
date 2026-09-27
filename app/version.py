@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.6"
+VERSION = "5.8.7"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -79,6 +79,8 @@ VERSION = "5.8.6"
 # allowing background Mongo maintenance to reach its indexes and schema.
 # v5.8.6 bounds repetitive zero-jump ADS-B rejection warnings while preserving
 # all observation rejection, trajectory and alert behavior.
+# v5.8.7 points the standalone Docker health check at monitoring readiness,
+# matching Docker Compose and Railway's already configured /ready endpoint.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
