@@ -1,0 +1,64 @@
+{
+  "candidate_type": "railway_prediction_lab_fix",
+  "created_at": "2026-09-27T03:20:00Z",
+  "branch": "fix/storage-maintenance-retired-lab-migration",
+  "head_sha": "f193f39d486b7333d0b830183c11e462a8f6d9d6",
+  "base_branch": "main",
+  "base_sha": "ba04d50a22979b868adb301eefaf255f386080cf",
+  "pull_request": 125,
+  "case_ids": ["infra-storage-maintenance-retired-lab-migration-loop-20260927"],
+  "reviewed_evidence_paths": ["prediction_lab/reviewed/2026-09-27/infra-storage-maintenance-retired-lab-migration-loop-20260927.json"],
+  "scope": "Stop background Mongo maintenance from re-entering the superseded v5.5 Prediction Lab Mongo exporter after the v5.6.2 operational retirement marker is verified and volume storage is authoritative. Preserve the legacy migration path when retirement is not verified and preserve SQLite behavior. No user/config Mongo, prediction math, alert logic, route-history retention, or persistent-volume layout changes.",
+  "tests": {
+    "github_actions_run": 36288344001,
+    "github_actions_job": 108533365889,
+    "conclusion": "success",
+    "verified_head_sha": "f193f39d486b7333d0b830183c11e462a8f6d9d6",
+    "notable_passed_gates": [
+      "compile application and Vercel runtime",
+      "full test suite",
+      "Error Museum and lifecycle replay suite",
+      "provider regression suite",
+      "Telegram interaction latency regression suite",
+      "v4.7 airport/runway and terminal-arrival suites",
+      "v4.8 storage outage/restart/migration/backup/lifecycle suite",
+      "v5.5 file-backed Prediction Lab migration/pipeline/cadence suite",
+      "canonical route-guard destination-path regressions",
+      "Railway-relevant storage/prediction/cadence benchmarks",
+      "dependency consistency"
+    ],
+    "exact_regressions": [
+      "tests/test_storage_maintenance_retirement_bridge.py::test_verified_retirement_skips_superseded_prediction_lab_mongo_export",
+      "tests/test_storage_maintenance_retirement_bridge.py::test_unverified_retirement_still_runs_safe_legacy_migration",
+      "tests/test_storage_maintenance_retirement_bridge.py::test_sqlite_never_uses_mongo_retirement_shortcut"
+    ]
+  },
+  "migration_cleanup": {
+    "database_migration": false,
+    "mongo_cleanup": false,
+    "affected_collections": [],
+    "persistent_volume_layout_change": false,
+    "behavioral_change": "A previously verified v5.6.2 operational retirement marker now terminates the superseded v5.5 Prediction Lab Mongo migration maintenance entry point."
+  },
+  "known_risks": [
+    "If the retirement marker were incorrectly verified, the old exporter would be skipped; TASK 3 must independently verify the marker and volume-authoritative state before deployment.",
+    "Production verification must confirm the 120-second NotImplementedError maintenance loop stops while normal Mongo user/config access remains healthy."
+  ],
+  "rollback_plan": "Revert the exact PR #125 merge commit if background maintenance or Mongo user/config behavior regresses. The patch performs no collection deletion, schema migration, or persistent-volume layout change, so no data rollback is required.",
+  "community_impact": {
+    "required": false,
+    "reason": "No installer, dependency, configuration schema, provider protocol, database schema, service-start, packaging, or self-host platform change. SQLite behavior is explicitly preserved."
+  },
+  "deferred_validation": [],
+  "production_verification_checklist": [
+    "Independently verify PR #125 exact head SHA and successful CI before merge.",
+    "Verify the v5.6.2 operational retirement marker is present, valid, and volume-authoritative on Railway before deployment.",
+    "Deploy only through TASK 3 and verify exact deployed SHA/version and Railway health/readiness.",
+    "Observe for at least multiple former 120-second retry intervals and confirm Background storage maintenance NotImplementedError failures stop.",
+    "Confirm normal Mongo user, Telegram identity, location/profile, preferences/settings and configuration reads/writes remain healthy.",
+    "Confirm no flight_route_samples or retired Prediction Lab operational Mongo writer is reintroduced.",
+    "Confirm the Plane Alerts persistent volume remains mounted at /data/prediction_lab and no AGY volume/runtime integration exists.",
+    "Confirm five-second monitor cadence remains healthy and no alert/trajectory regression or notification storm appears.",
+    "Preserve the linked reviewed case; transition only this exact case to solved after the exact merged fix is successfully deployed and production-verified."
+  ]
+}
