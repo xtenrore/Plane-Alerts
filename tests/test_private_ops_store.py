@@ -120,5 +120,8 @@ def test_phase1_railway_restart_probe_preserves_idempotent_output(tmp_path, monk
     assert run_phase1_probe(third) == "PHASE1_SECOND_RESTART_VERIFIED"
     third.close()
     fourth = Store(tmp_path)
-    assert run_phase1_probe(fourth) == "PHASE1_VERIFIED_STABLE"
+    assert run_phase1_probe(fourth) == "PHASE1_BOUNDS_AND_LEASES_VERIFIED"
     fourth.close()
+    fifth = Store(tmp_path)
+    assert run_phase1_probe(fifth) == "PHASE1_VERIFIED_STABLE"
+    fifth.close()
