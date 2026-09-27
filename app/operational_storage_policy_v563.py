@@ -57,7 +57,7 @@ async def _ensure_indexes_without_operational_mongo(db) -> None:
     # Self-host SQLite remains a complete application database and should retain
     # its normal indexes. The split policy is specifically for the Railway Mongo
     # + persistent-volume architecture.
-    if bool(getattr(db, "is_plane_alerts_sqlite", False)):
+    if getattr(db, "is_plane_alerts_sqlite", False) is True:
         await _original_ensure_indexes(db)
         return
     await _original_ensure_indexes(_IndexPolicyDatabase(db))

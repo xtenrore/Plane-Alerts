@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.4"
+VERSION = "5.8.5"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -75,6 +75,8 @@ VERSION = "5.8.4"
 # the active v3.3 workflow module/entrypoint without changing live prediction behavior.
 # v5.8.4 stops background maintenance from retrying the retired Mongo exporter
 # once persistent-volume telemetry is authoritative; SQLite retains its own path.
+# v5.8.5 removes boolean tests of Motor's dynamic SQLite-marker collection,
+# allowing background Mongo maintenance to reach its indexes and schema.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
