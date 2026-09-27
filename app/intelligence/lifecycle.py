@@ -197,3 +197,34 @@ def advance_cancellation_confirmation(previous_count: int, candidate: bool, *, r
         return False, count
     count += 1
     return count >= max(1, int(required)), count
+
+
+def resolve_cancellation_confirmation(
+    previous_count: int,
+    candidate: bool,
+    *,
+    fresh_observation: bool,
+    prediction,
+    route_suppressed: bool = False,
+    required: int = CANCELLATION_CONFIRMATIONS_REQUIRED,
+) -> tuple[bool, int]:
+    """Stabilize cancellation evidence across feed gaps and fresh uncertainty.
+
+    Ordinary neutral cycles retain the existing hysteresis semantics, and stale
+    or repeated provider observations preserve prior evidence. A *fresh*
+    trajectory-only `Prediction uncertain` cycle is different: it means the
+    physical estimator cannot currently support the miss hypothesis, so prior
+    trajectory cancellation strikes are cleared. Independent route suppression
+    remains authoritative and is not erased by trajectory uncertainty.
+    """
+    previous = max(0, int(previous_count))
+    confirmed, count = advance_cancellation_confirmation(previous, candidate, required=required)
+
+    if not fresh_observation or bool(getattr(prediction, "stale", False)):
+        return bool(candidate and previous >= max(1, int(required))), previous
+
+    state = str(getattr(prediction, "state", "") or "")
+    if state == "Prediction uncertain" and not route_suppressed:
+        return False, 0
+
+    return confirmed, count
