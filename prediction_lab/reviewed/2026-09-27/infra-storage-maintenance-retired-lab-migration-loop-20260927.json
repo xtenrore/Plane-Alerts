@@ -1,0 +1,41 @@
+{
+  "case_id": "infra-storage-maintenance-retired-lab-migration-loop-20260927",
+  "status": "reviewed",
+  "disposition": "confirmed_bug_candidate_pending_ci",
+  "reviewed_at": "2026-09-27T02:24:00Z",
+  "event_ids": [
+    "background-storage-maintenance-attempt-229",
+    "background-storage-maintenance-attempt-230",
+    "background-storage-maintenance-attempt-231"
+  ],
+  "evidence": {
+    "production_version": "5.8.3",
+    "production_commit": "ba04d50a22979b868adb301eefaf255f386080cf",
+    "railway_deployment_id": "2416d073-a818-417c-a414-282c7bd65676",
+    "observed_error": "Background storage maintenance attempt failed (NotImplementedError)",
+    "retry_interval_seconds": 120,
+    "volume_free_bytes_latest": 73138176,
+    "legacy_retirement_marker": "prediction_lab_legacy_retirement_v562.json",
+    "legacy_retirement_verified": true
+  },
+  "investigation_conclusion": "The v5.6.2 operational Mongo retirement is already verified and volume-authoritative, but database._ensure_prediction_lab_migration still enters the superseded v5.5 Mongo exporter. The v5.6.3 operational-storage policy protected operational Mongo collections/indexes but did not bridge this database-maintenance entry point to the newer retirement marker. This allows maintenance to re-enter retired operational Mongo behavior and repeat indefinitely.",
+  "candidate": {
+    "pr": 125,
+    "branch": "fix/storage-maintenance-retired-lab-migration",
+    "sha": "f193f39d486b7333d0b830183c11e462a8f6d9d6",
+    "state": "pending_ci"
+  },
+  "regressions": [
+    "tests/test_storage_maintenance_retirement_bridge.py::test_verified_retirement_skips_superseded_prediction_lab_mongo_export",
+    "tests/test_storage_maintenance_retirement_bridge.py::test_unverified_retirement_still_runs_safe_legacy_migration",
+    "tests/test_storage_maintenance_retirement_bridge.py::test_sqlite_never_uses_mongo_retirement_shortcut"
+  ],
+  "safety": {
+    "user_config_mongo_unchanged": true,
+    "prediction_logic_unchanged": true,
+    "durable_prediction_lab_history_deleted": false,
+    "agy_runtime_or_volume_touched": false,
+    "deployment_performed": false
+  },
+  "blocker": "Exact candidate CI has not completed yet; do not publish release_candidate.json for this case until the exact SHA passes required Railway-relevant checks."
+}
