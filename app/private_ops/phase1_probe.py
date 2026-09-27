@@ -8,7 +8,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from .store import QueueFull, Store
+from .store import SCHEMA_VERSION, QueueFull, Store
 
 JOB = "phase1:railway-volume-restart-probe"
 
@@ -72,7 +72,7 @@ def run(store: Store) -> str:
                 else:
                     raise AssertionError("lease ownership was bypassed")
                 bounded.finish_job("phase1:bounded-lease-probe", "probe-owner")
-                assert store.health()["schema"] == 1
+                assert store.health()["schema"] == SCHEMA_VERSION
                 assert store.health()["integrity"] == "ok"
                 store.checkpoint("phase1_probe", "verified_extended")
                 return "PHASE1_BOUNDS_AND_LEASES_VERIFIED"
