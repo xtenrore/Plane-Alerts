@@ -1,8 +1,7 @@
 # Phase 2 backup and recovery contract
 
-Phase 2 is **in progress**. The isolated Railway service continues to run with
-the scheduler and real providers disabled. A sanitized portable export exists,
-but no remote backup or clean-host remote restore has passed its gate yet.
+Phase 2 passed its live-volume gate on 2026-09-27. The isolated Railway service
+continues to run with the audit scheduler and real AI providers disabled.
 
 ## GitHub disaster recovery
 
@@ -34,9 +33,22 @@ uploaded to the private repository, read back and restored in a clean temporary
 directory. Its manifest hash is
 `b41232f2c654fddd45757a9a565cbbbbdef2b9ebaa55b639021a772108d05dae`.
 This tests the remote namespace and restore mechanics; it is **not** a backup
-of the actual Railway volume. Do not mark Phase 2 complete until the real
-Railway state is exported, remotely verified and restored, and the unattended
-writer's GitHub Actions credential path is configured and tested.
+of the actual Railway volume. The subsequent unattended worker used the
+GitHub Actions Secret `AI_OPS_GITHUB_DR_TOKEN` and uploaded the actual Railway
+volume state, manifest hash
+`5577a4be3d6dae2d7e786e3cb5988fe50b2ddeac08a437716541d1d6e1b22400`.
+The file was fetched from the private repository and restored into an empty
+directory without access to the live volume: schema 2, two jobs, two completed
+steps, verified Phase 1 probe checkpoint and SQLite integrity passed.
+
+A one-time isolated fault probe rejected the first GitHub write, preserved
+the existing completed job, retried successfully, and generated a verified
+snapshot. The final fetched snapshot hash is
+`5d423c27139c71055f8d75982b64994338b6aac8e0fc4c311c7dcb67b5cacdfd`.
+Its manifest checksum, privacy scan and clean restore passed, including the
+durable `phase2_fault_probe=verified` checkpoint. Repeated deployment with
+unchanged state produced no duplicate snapshot. The test-only fault flag was
+disabled through GitHub Actions and the final isolated deployment passed.
 
 ## Dropbox secondary backup (Phase 11 implementation)
 
