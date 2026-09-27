@@ -11,6 +11,7 @@ on:
       - 'tests/test_private_ops_dr_export.py'
       - 'tests/test_private_ops_dr_sync.py'
       - 'tests/test_private_ops_github_dr.py'
+      - 'tests/test_private_ops_phase2_probe.py'
       - '.github/workflows/private-ai-ops-phase1.yml'
 
 permissions:
@@ -33,7 +34,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install 'pytest>=8,<9'
       - run: python -m compileall -q app/private_ops
-      - run: python -m pytest -q tests/test_private_ops_store.py tests/test_private_ops_dr_export.py tests/test_private_ops_dr_sync.py tests/test_private_ops_github_dr.py
+      - run: python -m pytest -q tests/test_private_ops_store.py tests/test_private_ops_dr_export.py tests/test_private_ops_dr_sync.py tests/test_private_ops_github_dr.py tests/test_private_ops_phase2_probe.py
       - name: Refuse stale branch deployment
         id: head
         env:
@@ -64,6 +65,7 @@ jobs:
       WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
       DEPLOY_SHA: ${{ github.sha }}
       AI_OPS_GITHUB_DR_TOKEN: ${{ secrets.AI_OPS_GITHUB_DR_TOKEN }}
+      AI_OPS_PHASE2_FAULT_PROBE_ENABLED: 'true'
     steps:
       - name: Checkout validated source
         uses: actions/checkout@v4
@@ -103,6 +105,8 @@ jobs:
           # GitHub Actions is the configuration source. Railway receives only
           # the service-specific runtime projection; no manual Railway copy.
           railway variable set "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+          railway variable set "AI_OPS_PHASE2_FAULT_PROBE_ENABLED=$AI_OPS_PHASE2_FAULT_PROBE_ENABLED" \
             --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
           if [ -n "${AI_OPS_GITHUB_DR_TOKEN:-}" ]; then
             printf '%s' "$AI_OPS_GITHUB_DR_TOKEN" | railway variable set AI_OPS_GITHUB_DR_TOKEN --stdin \
