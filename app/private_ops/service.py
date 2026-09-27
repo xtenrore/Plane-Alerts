@@ -10,8 +10,8 @@ import os
 import signal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from app.private_ops.store import Store
-from app.private_ops.phase1_probe import run as run_phase1_probe
+from .store import Store
+from .phase1_probe import run as run_phase1_probe
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
