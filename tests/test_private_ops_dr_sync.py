@@ -26,11 +26,9 @@ class MemoryRepo:
 
 def test_coalesced_sync_remote_readback_clean_restore_and_independent_status(tmp_path):
     origin, target = tmp_path / "source", tmp_path / "recovered"
-    origin.mkdir()
-    target.mkdir()
+    origin.mkdir(); target.mkdir()
     store = Store(origin)
-    store.enqueue("audit:test")
-    store.claim("worker")
+    store.enqueue("audit:test"); store.claim("worker")
     store.begin_step("audit:test", "done", "worker", {"item": 1})
     store.complete_step("audit:test", "done", "worker", {"password": "must never upload"})
     store.begin_step("audit:test", "interrupted", "worker", {"item": 2})
@@ -49,21 +47,17 @@ def test_coalesced_sync_remote_readback_clean_restore_and_independent_status(tmp
     assert restored.claim("new-host") == "audit:test"
     assert not restored.begin_step("audit:test", "done", "new-host", {"item": 1})
     assert restored.begin_step("audit:test", "interrupted", "new-host", {"item": 2})
-    restored.close()
-    store.close()
+    restored.close(); store.close()
 
 
 def test_network_and_remote_corruption_retry_without_losing_local_jobs(tmp_path):
-    store = Store(tmp_path)
-    store.enqueue("audit:test")
-    repo = MemoryRepo()
-    repo.fail = True
+    store = Store(tmp_path); store.enqueue("audit:test")
+    repo = MemoryRepo(); repo.fail = True
     with pytest.raises(ConnectionError):
         sync_once(store, repo, worker="one", source_commit=COMMIT, now=10000000000, force=True)
     assert status(store, "github")["outcome"] == "failed"
     assert store.claim("worker") == "audit:test"
-    repo.fail = False
-    repo.corrupt = True
+    repo.fail = False; repo.corrupt = True
     with pytest.raises(IOError, match="read-back"):
         sync_once(store, repo, worker="two", source_commit=COMMIT, now=10000001000, force=True)
     repo.corrupt = False
@@ -73,8 +67,7 @@ def test_network_and_remote_corruption_retry_without_losing_local_jobs(tmp_path)
 
 
 def test_lease_blocks_parallel_claim_and_new_revision_survives_sync(tmp_path):
-    store = Store(tmp_path)
-    store.enqueue("audit:test")
+    store = Store(tmp_path); store.enqueue("audit:test")
     store.db.execute("UPDATE ai_ops_dr_sync SET lease_owner='other',lease_until=99999999999 WHERE destination='github'")
     repo = MemoryRepo()
     assert not sync_once(store, repo, worker="contender", source_commit=COMMIT, now=10000000000, force=True)
@@ -99,7 +92,7 @@ def test_existing_phase1_schema_migrates_without_losing_job_state(tmp_path):
         PRAGMA user_version=1;""")
     db.close()
     store = Store(tmp_path)
-    assert store.health()["schema"] == 4
+    assert store.health()["schema"] == 5
     assert store.db.execute("SELECT status FROM ai_ops_jobs WHERE id='phase1:existing'").fetchone()[0] == "COMPLETE"
     assert status(store, "github")["outcome"] == "pending"
     assert status(store, "github")["revision"] == 1

@@ -1,8 +1,4 @@
-"""Disabled-by-default, free-only provider adapters for AI *analysis* tasks.
-
-No adapter can invoke Plane Alerts flight decision code. Actual invocation
-requires an explicit model allowlist and a separate runtime feature flag.
-"""
+"""Disabled-by-default, free-only provider adapters for AI analysis tasks."""
 from __future__ import annotations
 
 import json
@@ -29,7 +25,6 @@ class Slot:
     name: str
     credential: str
     account_id: str = ""
-
     def __repr__(self) -> str:
         return f"Slot(provider={self.provider!r},name={self.name!r},credential=<redacted>)"
 
@@ -38,12 +33,15 @@ class Slot:
 class AnalysisTask:
     purpose: str
     prompt: str
-
+    batch_id: str = ""
+    packet_id: str = ""
     def __post_init__(self) -> None:
         if self.purpose not in ("triage", "independent_review", "deep_investigation", "supervisor"):
             raise ValueError("only analysis/control-plane tasks are permitted")
         if not self.prompt or len(self.prompt.encode()) > 16384:
             raise ValueError("bounded analysis prompt required")
+        if len(self.batch_id) > 128 or len(self.packet_id) > 128:
+            raise ValueError("bounded task identifiers required")
 
 
 @dataclass(frozen=True)
@@ -58,7 +56,7 @@ class AnalysisResult:
 
 class ProviderFailure(Exception):
     def __init__(self, kind: str, *, status: int = 0, retry_after: int = 0, provider_wide: bool = False):
-        super().__init__(kind)  # Never include request, body, URL, or credentials.
+        super().__init__(kind)
         self.kind, self.status, self.retry_after, self.provider_wide = kind, status, retry_after, provider_wide
 
 
@@ -72,25 +70,54 @@ class HttpxTransport:
             import httpx
             with httpx.Client(timeout=httpx.Timeout(12.0), follow_redirects=False) as client:
                 with client.stream("POST", url, headers=dict(headers), content=body) as response:
+                    # Success bodies are bounded at the structured-response limit.
+                    # Error bodies are read only transiently, with a much smaller
+                    # bound, solely to recognize context-size failures. They are
+                    # never logged or persisted.
+                    limit = 131073 if response.status_code == 200 else 8192
                     limited = bytearray()
-                    if response.status_code == 200:
-                        for part in response.iter_bytes():
-                            limited.extend(part[:max(0, 131073 - len(limited))])
-                            if len(limited) >= 131073:
-                                break
+                    for part in response.iter_bytes():
+                        limited.extend(part[:max(0, limit - len(limited))])
+                        if len(limited) >= limit:
+                            break
                     return response.status_code, dict(response.headers), bytes(limited)
-        except Exception:
+        except Exception as exc:
+            try:
+                import httpx
+                if isinstance(exc, httpx.TimeoutException):
+                    raise ProviderFailure("timeout") from None
+            except ImportError:
+                pass
             raise ProviderFailure("network") from None
 
     def get_status(self, url: str, headers: Mapping[str, str]) -> int:
-        """Fetch metadata status only; never log or retain provider response."""
         try:
             import httpx
             with httpx.Client(timeout=httpx.Timeout(8.0), follow_redirects=False) as client:
                 return client.get(url, headers=dict(headers)).status_code
-        except Exception:
+        except Exception as exc:
+            try:
+                import httpx
+                if isinstance(exc, httpx.TimeoutException):
+                    raise ProviderFailure("timeout") from None
+            except ImportError:
+                pass
             raise ProviderFailure("network") from None
 
+
+
+def _context_too_large(status: int, raw: bytes) -> bool:
+    if status == 413:
+        return True
+    if status not in (400, 422):
+        return False
+    # Provider error envelopes differ. Match only generic size/token markers and
+    # discard the body immediately; no provider text is logged or persisted.
+    text = raw[:8192].lower()
+    return any(marker in text for marker in (
+        b"context_length_exceeded", b"context length", b"maximum context",
+        b"too many tokens", b"prompt is too long", b"input too large",
+    ))
 
 def retry_after(headers: Mapping[str, str], *, now: float) -> int:
     value = next((v for k, v in headers.items() if k.lower() == "retry-after"), "")
@@ -113,14 +140,12 @@ def configured_slots(env: Mapping[str, str]) -> list[Slot]:
                 continue
             account = env.get(ACCOUNT_NAMES[i], "") if provider == "cloudflare" else ""
             if provider == "cloudflare" and not re.fullmatch(r"[0-9a-fA-F]{32}", account):
-                # Never cross-pair an account and token from another slot.
                 continue
             slots.append(Slot(provider, name, credential, account))
     return slots
 
 
 def schema_test_mode(provider: str, model: str, response: bytes) -> dict:
-    """Validate a synthetic provider envelope without credentials or network use."""
     if provider not in PROVIDERS or not re.fullmatch(r"[A-Za-z0-9@._/:-]{1,100}", model):
         raise ValueError("invalid analysis capability")
     if len(response) > 131072:
@@ -157,26 +182,18 @@ class Adapter:
         self.transport = transport or HttpxTransport()
 
     def probe(self, slot: Slot) -> str:
-        """Read provider model metadata without running inference or spending tokens."""
         if slot.provider not in PROVIDERS or slot.name not in SLOT_NAMES[slot.provider] or not slot.credential:
             raise ValueError("unconfigured provider slot")
         if slot.provider == "cloudflare" and not re.fullmatch(r"[0-9a-fA-F]{32}", slot.account_id):
             raise ValueError("paired Cloudflare account required")
-        urls = {"groq": "https://api.groq.com/openai/v1/models",
-                "mistral": "https://api.mistral.ai/v1/models",
-                "gemini": "https://generativelanguage.googleapis.com/v1beta/models",
-                "openrouter": "https://openrouter.ai/api/v1/models",
+        urls = {"groq": "https://api.groq.com/openai/v1/models", "mistral": "https://api.mistral.ai/v1/models",
+                "gemini": "https://generativelanguage.googleapis.com/v1beta/models", "openrouter": "https://openrouter.ai/api/v1/models",
                 "cloudflare": f"https://api.cloudflare.com/client/v4/accounts/{slot.account_id}/ai/models/search"}
-        headers = ({"x-goog-api-key": slot.credential} if slot.provider == "gemini"
-                   else {"Authorization": "Bearer " + slot.credential})
-        # Test transports can implement the metadata operation without network.
+        headers = ({"x-goog-api-key": slot.credential} if slot.provider == "gemini" else {"Authorization": "Bearer " + slot.credential})
         status = self.transport.get_status(urls[slot.provider], headers)
-        if status == 401:
-            return "unauthorized"
-        if status == 403:
-            return "forbidden"
-        if status == 429:
-            return "limited"
+        if status == 401: return "unauthorized"
+        if status == 403: return "forbidden"
+        if status == 429: return "limited"
         return "available" if status == 200 else "unavailable"
 
     def execute(self, slot: Slot, task: AnalysisTask, model: str, *, now: float) -> AnalysisResult:
@@ -184,7 +201,8 @@ class Adapter:
             raise ValueError("unconfigured provider slot")
         if not re.fullmatch(r"[A-Za-z0-9@._/:-]{1,100}", model):
             raise ValueError("invalid model identifier")
-        instruction = "Return JSON with summary and findings for independent audit only. Never decide aircraft trajectory, CPA, ETA, pass/no-pass, alert qualification, cancellation, or timing."
+        instruction = ("Return JSON with summary and findings for independent audit only. "
+                       "Never decide aircraft trajectory, CPA, ETA, pass/no-pass, alert qualification, cancellation, or timing.")
         headers = {"Content-Type": "application/json"}
         if slot.provider == "gemini":
             url = "https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(model, safe="") + ":generateContent"
@@ -198,19 +216,17 @@ class Adapter:
             headers["Authorization"] = "Bearer " + slot.credential
             payload = {"messages": [{"role": "system", "content": instruction}, {"role": "user", "content": task.prompt}], "max_tokens": 1024}
         else:
-            url = {"groq": "https://api.groq.com/openai/v1/chat/completions",
-                   "mistral": "https://api.mistral.ai/v1/chat/completions",
+            url = {"groq": "https://api.groq.com/openai/v1/chat/completions", "mistral": "https://api.mistral.ai/v1/chat/completions",
                    "openrouter": "https://openrouter.ai/api/v1/chat/completions"}[slot.provider]
             if slot.provider == "openrouter" and not (model.endswith(":free") or model == "openrouter/free"):
                 raise ValueError("paid OpenRouter route refused")
             headers["Authorization"] = "Bearer " + slot.credential
             payload = {"model": model, "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": task.prompt}], "max_tokens": 1024}
-            if slot.provider == "mistral":
-                payload["response_format"] = {"type": "json_object"}
+            if slot.provider == "mistral": payload["response_format"] = {"type": "json_object"}
         status, response_headers, raw = self.transport.post(url, headers, json.dumps(payload, separators=(",", ":")).encode())
         if status != 200:
             scope = next((str(v).lower() for k, v in response_headers.items() if k.lower() == "x-ratelimit-scope"), "")
-            kind = "quota" if status == 429 else "auth" if status in (401, 403) else "server" if status >= 500 else "request"
+            kind = "quota" if status == 429 else "auth" if status in (401, 403) else "context" if _context_too_large(status, raw) else "server" if status >= 500 else "request"
             raise ProviderFailure(kind, status=status, retry_after=retry_after(response_headers, now=now) if status == 429 else 0,
                                   provider_wide=scope in ("organization", "account", "provider"))
         if len(raw) > 131072:

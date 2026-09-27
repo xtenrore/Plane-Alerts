@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -118,11 +118,59 @@ class Store:
                 )""")
                 db.execute("CREATE INDEX ai_ops_evidence_window ON ai_ops_evidence(window_start)")
                 db.execute("PRAGMA user_version=4")
+                version = 4
+            if version == 4:
+                # Phase 5: durable AI-assisted analysis state. Model text is
+                # bounded/sanitized; prompts and raw provider bodies are never stored.
+                db.execute("""CREATE TABLE ai_ops_batches (
+                    batch_id TEXT PRIMARY KEY, role TEXT NOT NULL, packet_ids_json TEXT NOT NULL,
+                    status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
+                    CHECK (length(batch_id) BETWEEN 1 AND 128)
+                )""")
+                db.execute("""CREATE TABLE ai_ops_cases (
+                    packet_id TEXT PRIMARY KEY REFERENCES ai_ops_evidence(packet_id),
+                    state TEXT NOT NULL DEFAULT 'PENDING_AI', pending_role TEXT NOT NULL DEFAULT 'triage', classification TEXT,
+                    severity TEXT, validation_status TEXT, finding_id TEXT,
+                    batch_id TEXT REFERENCES ai_ops_batches(batch_id),
+                    retry_count INTEGER NOT NULL DEFAULT 0, last_error TEXT, created REAL NOT NULL, updated REAL NOT NULL
+                )""")
+                db.execute("CREATE INDEX ai_ops_cases_state ON ai_ops_cases(state,updated)")
+                db.execute("""CREATE TABLE ai_ops_usage (
+                    id INTEGER PRIMARY KEY, batch_id TEXT, packet_id TEXT, task_role TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, key_slot TEXT NOT NULL,
+                    latency_ms INTEGER NOT NULL, success INTEGER NOT NULL,
+                    failure_kind TEXT, malformed INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                    created REAL NOT NULL
+                )""")
+                db.execute("CREATE INDEX ai_ops_usage_provider ON ai_ops_usage(provider,key_slot,created)")
+                db.execute("""CREATE TABLE ai_ops_reviews (
+                    review_id TEXT PRIMARY KEY, packet_id TEXT NOT NULL REFERENCES ai_ops_evidence(packet_id),
+                    role TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, key_slot TEXT NOT NULL,
+                    classification TEXT NOT NULL, severity TEXT NOT NULL,
+                    validation_status TEXT NOT NULL, result_json TEXT NOT NULL,
+                    agreement TEXT, disposition TEXT, created REAL NOT NULL
+                )""")
+                db.execute("CREATE INDEX ai_ops_reviews_packet ON ai_ops_reviews(packet_id,created)")
+                db.execute("""CREATE TABLE ai_ops_findings (
+                    finding_id TEXT PRIMARY KEY, signature TEXT NOT NULL, occurrence INTEGER NOT NULL,
+                    status TEXT NOT NULL, classification TEXT NOT NULL, severity TEXT NOT NULL,
+                    subsystem TEXT NOT NULL, case_ref TEXT NOT NULL,
+                    previous_finding_id TEXT REFERENCES ai_ops_findings(finding_id),
+                    fix_commit TEXT, fix_version TEXT, resolution_json TEXT,
+                    created REAL NOT NULL, updated REAL NOT NULL,
+                    UNIQUE(signature, occurrence)
+                )""")
+                db.execute("CREATE INDEX ai_ops_findings_active ON ai_ops_findings(status,updated)")
+                db.execute("""CREATE TABLE ai_ops_finding_packets (
+                    finding_id TEXT NOT NULL REFERENCES ai_ops_findings(finding_id),
+                    packet_id TEXT NOT NULL REFERENCES ai_ops_evidence(packet_id),
+                    created REAL NOT NULL, PRIMARY KEY(finding_id,packet_id)
+                )""")
+                db.execute("PRAGMA user_version=5")
 
     @staticmethod
     def _mark_dr_dirty(db: sqlite3.Connection) -> None:
-        # Coalesce bursts while preserving a durable monotonically increasing
-        # revision. Dropbox stays inactive until its own implementation phase.
         db.execute("""UPDATE ai_ops_dr_sync SET revision=revision+1,
             next_attempt=CASE WHEN next_attempt=0 THEN ? ELSE next_attempt END
             WHERE destination='github'""", (time.time() + 60,))
@@ -220,6 +268,26 @@ class Store:
             self._mark_dr_dirty(db)
         return digest
 
+    def step_output(self, job_id: str, step_id: str) -> object | None:
+        row = self.db.execute("SELECT status,output_json FROM ai_ops_steps WHERE job_id=? AND step_id=?", (job_id, step_id)).fetchone()
+        if row is None or row["status"] != "COMPLETE" or row["output_json"] is None:
+            return None
+        return json.loads(row["output_json"])
+
+    def retry_job(self, job_id: str, worker: str, *, result: str = "RETRY") -> None:
+        """Release a lease without losing incomplete durable work."""
+        now = time.time()
+        with self.transaction() as db:
+            job = db.execute("SELECT * FROM ai_ops_jobs WHERE id=?", (job_id,)).fetchone()
+            if not job or job["status"] != "RUNNING" or job["lease_owner"] != worker:
+                raise PermissionError("worker does not own job")
+            db.execute("""UPDATE ai_ops_steps SET status='RETRY',lease_owner=NULL,lease_until=NULL
+                WHERE job_id=? AND status='RUNNING' AND lease_owner=?""", (job_id, worker))
+            db.execute("""UPDATE ai_ops_attempts SET ended=?,result=?
+                WHERE job_id=? AND worker=? AND ended IS NULL""", (now, result[:40], job_id, worker))
+            db.execute("UPDATE ai_ops_jobs SET status='RETRY',lease_owner=NULL,lease_until=NULL,updated=? WHERE id=?", (now, job_id))
+            self._mark_dr_dirty(db)
+
     def finish_job(self, job_id: str, worker: str) -> None:
         now = time.time()
         with self.transaction() as db:
@@ -240,9 +308,14 @@ class Store:
             self._mark_dr_dirty(db)
 
     def health(self) -> dict[str, object]:
+        tables = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        pending_ai = self.db.execute("SELECT count(*) FROM ai_ops_cases WHERE state='PENDING_AI'").fetchone()[0] if "ai_ops_cases" in tables else 0
+        active_findings = self.db.execute("""SELECT count(*) FROM ai_ops_findings WHERE status NOT IN
+            ('RESOLVED','EXPECTED_BEHAVIOR','INCONCLUSIVE','DUPLICATE','ALREADY_FIXED','FALSE_POSITIVE','WONT_FIX_WITH_REASON')""").fetchone()[0] if "ai_ops_findings" in tables else 0
         return {"schema": self.db.execute("PRAGMA user_version").fetchone()[0],
                 "integrity": self.db.execute("PRAGMA quick_check").fetchone()[0],
-                "pending": self.db.execute("SELECT count(*) FROM ai_ops_jobs WHERE status IN ('PENDING','RETRY')").fetchone()[0]}
+                "pending": self.db.execute("SELECT count(*) FROM ai_ops_jobs WHERE status IN ('PENDING','RETRY')").fetchone()[0],
+                "pending_ai": pending_ai, "active_findings": active_findings}
 
     def close(self) -> None:
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")

@@ -72,24 +72,29 @@ def test_pairing_and_paid_routes_fail_closed():
         AnalysisTask("flight_decision", "choose ETA")
 
 
-def test_key_failover_ledger_and_provider_wide_429(tmp_path):
+def test_key_failover_ledger_and_independent_429_slots(tmp_path):
     store = Store(tmp_path)
     transport = FakeHTTP([(429, {"Retry-After": "75"}, b""), ok("groq")])
     slots = [Slot("groq", "GROQ_KEY", "first"), Slot("groq", "GROQ_KEY_2", "second")]
     router = Router(store, slots, adapter=Adapter(transport), approved_free_routes={("groq", "approved-model")})
     assert router.execute(TASK, {"groq": "approved-model"}, now=100).slot_name == "GROQ_KEY_2"
     assert len(transport.calls) == 2
-    assert router.health()[0]["cooldown_until"] == 175
-    assert router.health()[1]["input_tokens"] == 8
+    health = {row["slot"]: row for row in router.health(now=100)}
+    assert health["GROQ_KEY"]["cooldown_until"] == 175
+    assert health["GROQ_KEY_2"]["input_tokens"] == 8
     store.close()
 
-    store = Store(tmp_path)
-    transport = FakeHTTP([(429, {"Retry-After": "120", "X-RateLimit-Scope": "organization"}, b"")])
+    # In this deployment the configured credential slots are independent quota pools.
+    # Even a provider response that labels a limit account/org-wide must not cause one
+    # slot's 429 to suppress the remaining explicitly configured Groq slots.
+    clean = tmp_path / "second"
+    clean.mkdir()
+    store = Store(clean)
+    transport = FakeHTTP([(429, {"Retry-After": "120", "X-RateLimit-Scope": "organization"}, b""), ok("groq")])
     router = Router(store, slots, adapter=Adapter(transport), approved_free_routes={("groq", "approved-model")})
-    with pytest.raises(NoFreeRoute):
-        router.execute(TASK, {"groq": "approved-model"}, now=200)
-    assert len(transport.calls) == 1
-    assert store.db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider='groq'").fetchone()[0] == 320
+    assert router.execute(TASK, {"groq": "approved-model"}, now=200).slot_name == "GROQ_KEY_2"
+    assert len(transport.calls) == 2
+    assert store.db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider='groq'").fetchone()[0] == 0
     store.close()
 
 
@@ -101,7 +106,7 @@ def test_wrong_key_timeout_server_circuit_malformed_result_and_no_secret_logging
     router = Router(store, slots, adapter=Adapter(transport), approved_free_routes={("mistral", "approved-model")})
     with pytest.raises(NoFreeRoute):
         router.execute(TASK, {"mistral": "approved-model"}, now=0)
-    assert router.health()[0]["last_status"] == "auth"
+    assert router.health(now=0)[0]["last_status"] == "auth"
     with pytest.raises(NoFreeRoute):
         router.execute(TASK, {"mistral": "approved-model"}, now=301)
     with pytest.raises(NoFreeRoute):
@@ -109,9 +114,38 @@ def test_wrong_key_timeout_server_circuit_malformed_result_and_no_secret_logging
     assert store.db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider='mistral'").fetchone()[0] == 602
     with pytest.raises(ProviderFailure, match="schema"):
         Adapter(FakeHTTP([(200, {}, b'{"choices":[{"message":{"content":"{}"}}]}')])).execute(slots[1], TASK, "approved-model", now=0)
-    assert "SECRET_TEST_ONLY" not in repr(router.health())
+    assert "SECRET_TEST_ONLY" not in repr(router.health(now=0))
     store.close()
 
+
+
+def test_current_attempt_exhausts_independent_slots_before_honoring_new_provider_circuit(tmp_path):
+    store = Store(tmp_path)
+    slots = [Slot("groq", "GROQ_KEY" if i == 1 else f"GROQ_KEY_{i}", f"key-{i}") for i in range(1, 6)]
+    # The third transport failure opens the provider circuit for future work, but
+    # this in-flight routing attempt must still try slots 4 and 5. Slot 5 succeeds.
+    transport = FakeHTTP([(503, {}, b""), (503, {}, b""), (503, {}, b""),
+                          (503, {}, b""), ok("groq")])
+    router = Router(store, slots, adapter=Adapter(transport), approved_free_routes={("groq", "approved-model")})
+    result = router.execute(TASK, {"groq": "approved-model"}, now=500, max_attempts=8)
+    assert result.slot_name == "GROQ_KEY_5"
+    assert len(transport.calls) == 5
+    # Success closes the circuit again.
+    assert store.db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider='groq'").fetchone()[0] == 0
+    store.close()
+
+
+def test_context_too_large_recognizes_413_and_common_400_envelope_without_logging_body():
+    slot = Slot("groq", "GROQ_KEY", "NEVER_LOG_THIS")
+    for response in [
+        (413, {}, b""),
+        (400, {}, b'{"error":{"code":"context_length_exceeded","message":"maximum context length"}}'),
+    ]:
+        with pytest.raises(ProviderFailure) as error:
+            Adapter(FakeHTTP([response])).execute(slot, TASK, "approved-model", now=0)
+        assert error.value.kind == "context"
+        assert "NEVER_LOG_THIS" not in repr(error.value)
+        assert "maximum context" not in repr(error.value)
 
 def test_retry_after_and_supervisor_reserve(tmp_path):
     assert retry_after({"Retry-After": "999999"}, now=0) == 3600

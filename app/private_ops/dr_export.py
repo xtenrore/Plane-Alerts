@@ -1,14 +1,16 @@
-"""Phase 2 sanitized portable checkpoint; independent of any remote transport.
+"""Sanitized portable checkpoint for the isolated Private Operations service.
 
-The GitHub destination must be a dedicated private repository. This module
-does not upload anything and deliberately refuses sensitive or unknown fields.
+The GitHub destination must be a dedicated private repository. The checkpoint
+preserves durable orchestration and Phase-5 canonical lifecycle state, while
+omitting prompts, raw provider bodies, credentials, locations and verbose model
+text. The live persistent volume remains authoritative between checkpoints.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 import math
+import re
 from pathlib import Path
 
 from .store import Store
@@ -47,10 +49,86 @@ def _safe(value: object) -> object:
 
 
 def _id(value: str) -> str:
-    if not _SAFE_ID.fullmatch(value) or _SECRET.search(value):
+    if not isinstance(value, str) or not _SAFE_ID.fullmatch(value) or _SECRET.search(value):
         raise ValueError("unsafe checkpoint identifier")
     return value
 
+
+def _bounded_note(value: object, *, limit: int) -> str:
+    if not isinstance(value, str) or len(value) > limit or _SECRET.search(value) or any(ord(ch) < 32 and ch not in "\t\n\r" for ch in value):
+        raise ValueError("unsafe checkpoint note")
+    return value
+
+
+def _review_compact(text: str) -> dict[str, object]:
+    """Preserve the validated conclusion, never a raw provider response/prompt."""
+    value = json.loads(text)
+    expected = {"case_ref", "classification", "severity", "subsystem", "event_ids", "cpa_km", "observed_km",
+                "states", "coverage", "rationale", "needs_review", "validation_status", "validation_errors"}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError("invalid review result")
+    def refs(name: str, limit: int = 64) -> list[str]:
+        items = value[name]
+        if not isinstance(items, list) or len(items) > limit:
+            raise ValueError("invalid review list")
+        return [_id(v) for v in items]
+    def nums(name: str) -> list[float]:
+        items = value[name]
+        if not isinstance(items, list) or len(items) > 32:
+            raise ValueError("invalid review numeric list")
+        out = []
+        for item in items:
+            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)) or abs(float(item)) > 100000:
+                raise ValueError("invalid review metric")
+            out.append(float(item))
+        return out
+    rationale = value["rationale"]
+    try:
+        rationale = _bounded_note(rationale, limit=1200)
+    except ValueError:
+        # Preserve the deterministic conclusion even if the explanatory prose
+        # trips the stricter DR privacy gate.
+        rationale = "Review rationale omitted by DR privacy gate."
+    return {
+        "case_ref": _id(value["case_ref"]), "classification": _id(value["classification"]),
+        "severity": _id(value["severity"]), "subsystem": _id(value["subsystem"]),
+        "event_ids": refs("event_ids"), "cpa_km": nums("cpa_km"), "observed_km": nums("observed_km"),
+        "states": refs("states", 32), "coverage": _id(value["coverage"]), "rationale": rationale,
+        "needs_review": bool(value["needs_review"]), "validation_status": _id(value["validation_status"]),
+        "validation_errors": refs("validation_errors", 32),
+    }
+
+
+def _resolution_compact(text: str | None) -> dict[str, object] | None:
+    if not text:
+        return None
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("invalid resolution record")
+    if set(value) == {"reason"}:
+        try:
+            reason = _bounded_note(value["reason"], limit=500)
+        except ValueError:
+            reason = "Terminal reason omitted by DR privacy gate."
+        return {"reason": reason}
+    allowed = {"tests_passed", "ci_passed", "deployment_required", "deployed", "production_verified",
+               "replay_summary", "error_museum_ref", "user_feedback", "verified_at"}
+    if set(value) != allowed:
+        raise ValueError("invalid verified resolution record")
+    record: dict[str, object] = {}
+    for key in ("tests_passed", "ci_passed", "deployment_required", "deployed", "production_verified"):
+        if not isinstance(value[key], bool):
+            raise ValueError("invalid resolution gate")
+        record[key] = value[key]
+    if not isinstance(value["verified_at"], int) or not 0 <= value["verified_at"] <= 4_000_000_000:
+        raise ValueError("invalid resolution timestamp")
+    record["verified_at"] = value["verified_at"]
+    for key in ("replay_summary", "error_museum_ref", "user_feedback"):
+        try:
+            record[key] = _bounded_note(value[key], limit=500)
+        except ValueError:
+            record[key] = key + " omitted by DR privacy gate."
+    return record
 
 def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object]]:
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
@@ -59,15 +137,19 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
         raise RuntimeError("unhealthy database")
     jobs = []
     for job in store.db.execute("SELECT id,status,priority,created,updated FROM ai_ops_jobs ORDER BY id"):
-        # A backup must never restore an obsolete worker lease. Interrupted work
-        # enters the normal retry queue on the clean host.
         status = "RETRY" if job[1] == "RUNNING" else job[1]
         jobs.append({"id": _id(job[0]), "status": status, "priority": job[2], "created": job[3], "updated": job[4]})
     steps = []
+    unfinished_phase5 = {row[0] for row in store.db.execute(
+        "SELECT id FROM ai_ops_jobs WHERE id LIKE 'p5:%' AND status!='COMPLETE'")}
     for step in store.db.execute("SELECT job_id,step_id,status,input_hash,output_hash,attempts FROM ai_ops_steps ORDER BY job_id,step_id"):
-        # Step output can contain conversations, locations, or credentials.
-        # The commitment hash is enough to skip completed idempotent work.
-        steps.append({"job_id": _id(step[0]), "step_id": _id(step[1]), "status": "RETRY" if step[2] == "RUNNING" else step[2],
+        status = "RETRY" if step[2] == "RUNNING" else step[2]
+        # Sanitized DR intentionally omits model-call output_json. If disaster
+        # recovery catches an unfinished Phase-5 batch after its call checkpoint,
+        # retry that bounded call; already committed per-case steps remain COMPLETE.
+        if step[0] in unfinished_phase5 and step[1] in ("model_call", "repair_call") and status == "COMPLETE":
+            status = "RETRY"
+        steps.append({"job_id": _id(step[0]), "step_id": _id(step[1]), "status": status,
                       "input_hash": step[3], "output_hash": step[4], "attempts": step[5]})
     checkpoints = [{"name": _id(row[0]), "checkpoint": _id(row[1])}
                    for row in store.db.execute("SELECT name,checkpoint FROM ai_ops_scheduler ORDER BY name")]
@@ -79,13 +161,51 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
             raise ValueError("evidence packet checksum mismatch")
         evidence.append({"packet_id": row[0], "window_start": row[1], "case_ref": _id(row[2]),
                          "kind": _id(row[3]), "packet": packet})
-    record = {"schema": 2, "source_commit": source_commit, "jobs": jobs, "steps": steps,
-              "checkpoints": checkpoints, "evidence": evidence}
+
+    batches = []
+    cases = []
+    reviews = []
+    findings = []
+    finding_packets = []
+    if store.db.execute("PRAGMA user_version").fetchone()[0] >= 5:
+        for row in store.db.execute("SELECT batch_id,role,packet_ids_json,status,created,updated FROM ai_ops_batches ORDER BY batch_id"):
+            packet_ids = json.loads(row[2])
+            if not isinstance(packet_ids, list) or len(packet_ids) > 64:
+                raise ValueError("invalid batch packet list")
+            batches.append({"batch_id": _id(row[0]), "role": _id(row[1]), "packet_ids": [_id(v) for v in packet_ids],
+                            "status": _id(row[3]), "created": row[4], "updated": row[5]})
+        for row in store.db.execute("""SELECT packet_id,state,pending_role,classification,severity,validation_status,finding_id,
+            batch_id,retry_count,last_error,created,updated FROM ai_ops_cases ORDER BY packet_id"""):
+            cases.append({"packet_id": _id(row[0]), "state": _id(row[1]), "pending_role": _id(row[2]) if row[2] else "",
+                          "classification": _id(row[3]) if row[3] else None, "severity": _id(row[4]) if row[4] else None,
+                          "validation_status": _id(row[5]) if row[5] else None, "finding_id": _id(row[6]) if row[6] else None,
+                          "batch_id": _id(row[7]) if row[7] else None, "retry_count": row[8],
+                          "last_error": _id(row[9]) if row[9] else None, "created": row[10], "updated": row[11]})
+        for row in store.db.execute("""SELECT review_id,packet_id,role,provider,model,key_slot,classification,severity,
+            validation_status,result_json,agreement,disposition,created FROM ai_ops_reviews ORDER BY review_id"""):
+            compact = _review_compact(row[9])
+            reviews.append({"review_id": _id(row[0]), "packet_id": _id(row[1]), "role": _id(row[2]), "provider": _id(row[3]),
+                            "model": _id(row[4]), "key_slot": _id(row[5]), "classification": _id(row[6]), "severity": _id(row[7]),
+                            "validation_status": _id(row[8]), "result": compact, "agreement": _id(row[10]) if row[10] else None,
+                            "disposition": _id(row[11]) if row[11] else None, "created": row[12]})
+        for row in store.db.execute("""SELECT finding_id,signature,occurrence,status,classification,severity,subsystem,case_ref,
+            previous_finding_id,fix_commit,fix_version,resolution_json,created,updated FROM ai_ops_findings ORDER BY signature,occurrence"""):
+            findings.append({"finding_id": _id(row[0]), "signature": row[1], "occurrence": row[2], "status": _id(row[3]),
+                             "classification": _id(row[4]), "severity": _id(row[5]), "subsystem": _id(row[6]), "case_ref": _id(row[7]),
+                             "previous_finding_id": _id(row[8]) if row[8] else None, "fix_commit": row[9], "fix_version": row[10],
+                             "resolution": _resolution_compact(row[11]), "created": row[12], "updated": row[13]})
+        for row in store.db.execute("SELECT finding_id,packet_id,created FROM ai_ops_finding_packets ORDER BY finding_id,packet_id"):
+            finding_packets.append({"finding_id": _id(row[0]), "packet_id": _id(row[1]), "created": row[2]})
+
+    record = {"schema": 3, "source_commit": source_commit, "jobs": jobs, "steps": steps,
+              "checkpoints": checkpoints, "evidence": evidence, "batches": batches, "cases": cases,
+              "reviews": reviews, "findings": findings, "finding_packets": finding_packets}
     data = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > 2_000_000 or _SECRET.search(data.decode()):
         raise ValueError("sanitized export failed privacy gate")
-    manifest = {"schema": 2, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
-                "jobs": len(jobs), "steps": len(steps), "evidence": len(evidence)}
+    manifest = {"schema": 3, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+                "jobs": len(jobs), "steps": len(steps), "evidence": len(evidence), "batches": len(batches), "cases": len(cases),
+                "reviews": len(reviews), "findings": len(findings), "finding_packets": len(finding_packets)}
     return data, manifest
 
 
@@ -99,12 +219,16 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
     if _SECRET.search(data.decode("utf-8")):
         raise ValueError("unsafe restore data")
     record = json.loads(data)
-    if record.get("schema") not in (1, 2) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
+    if record.get("schema") not in (1, 2, 3) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
         raise ValueError("unsupported backup schema")
     if record["source_commit"] != manifest.get("source_commit") or len(record["jobs"]) != manifest.get("jobs") or len(record["steps"]) != manifest.get("steps"):
         raise ValueError("backup manifest mismatch")
-    if record["schema"] == 2 and len(record["evidence"]) != manifest.get("evidence"):
+    if record["schema"] >= 2 and len(record["evidence"]) != manifest.get("evidence"):
         raise ValueError("backup evidence manifest mismatch")
+    if record["schema"] >= 3:
+        for key in ("batches", "cases", "reviews", "findings", "finding_packets"):
+            if len(record[key]) != manifest.get(key):
+                raise ValueError("backup Phase 5 manifest mismatch")
     store = Store(root)
     try:
         with store.transaction() as db:
@@ -125,6 +249,39 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
                 db.execute("""INSERT INTO ai_ops_evidence
                     (packet_id,window_start,case_ref,kind,packet_json,content_hash,created)
                     VALUES(?,?,?,?,?,?,0)""", (digest, e["window_start"], _id(e["case_ref"]), _id(e["kind"]), content, digest))
+            if record["schema"] >= 3:
+                for b in record["batches"]:
+                    db.execute("""INSERT INTO ai_ops_batches(batch_id,role,packet_ids_json,status,created,updated)
+                        VALUES(?,?,?,?,?,?)""", (_id(b["batch_id"]), _id(b["role"]), json.dumps([_id(v) for v in b["packet_ids"]], separators=(",", ":")),
+                        _id(b["status"]), b["created"], b["updated"]))
+                # Findings before cases preserves previous-finding links and case references.
+                for f in record["findings"]:
+                    compact_resolution = f.get("resolution")
+                    resolution_json = json.dumps(_resolution_compact(json.dumps(compact_resolution, sort_keys=True, separators=(",", ":"))), sort_keys=True, separators=(",", ":")) if compact_resolution else None
+                    db.execute("""INSERT INTO ai_ops_findings(finding_id,signature,occurrence,status,classification,severity,subsystem,case_ref,
+                        previous_finding_id,fix_commit,fix_version,resolution_json,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (_id(f["finding_id"]), f["signature"], f["occurrence"], _id(f["status"]), _id(f["classification"]), _id(f["severity"]),
+                         _id(f["subsystem"]), _id(f["case_ref"]), _id(f["previous_finding_id"]) if f.get("previous_finding_id") else None,
+                         f.get("fix_commit"), f.get("fix_version"), resolution_json, f["created"], f["updated"]))
+                for c in record["cases"]:
+                    db.execute("""INSERT INTO ai_ops_cases(packet_id,state,pending_role,classification,severity,validation_status,finding_id,batch_id,
+                        retry_count,last_error,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (_id(c["packet_id"]), _id(c["state"]), _id(c["pending_role"]) if c.get("pending_role") else "",
+                         _id(c["classification"]) if c.get("classification") else None, _id(c["severity"]) if c.get("severity") else None,
+                         _id(c["validation_status"]) if c.get("validation_status") else None, _id(c["finding_id"]) if c.get("finding_id") else None,
+                         _id(c["batch_id"]) if c.get("batch_id") else None, c["retry_count"], _id(c["last_error"]) if c.get("last_error") else None,
+                         c["created"], c["updated"]))
+                for r in record["reviews"]:
+                    compact = _review_compact(json.dumps(r["result"], sort_keys=True, separators=(",", ":")))
+                    db.execute("""INSERT INTO ai_ops_reviews(review_id,packet_id,role,provider,model,key_slot,classification,severity,
+                        validation_status,result_json,agreement,disposition,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (_id(r["review_id"]), _id(r["packet_id"]), _id(r["role"]), _id(r["provider"]), _id(r["model"]), _id(r["key_slot"]),
+                         _id(r["classification"]), _id(r["severity"]), _id(r["validation_status"]),
+                         json.dumps(compact, sort_keys=True, separators=(",", ":")), _id(r["agreement"]) if r.get("agreement") else None,
+                         _id(r["disposition"]) if r.get("disposition") else None, r["created"]))
+                for fp in record["finding_packets"]:
+                    db.execute("INSERT INTO ai_ops_finding_packets(finding_id,packet_id,created) VALUES(?,?,?)",
+                               (_id(fp["finding_id"]), _id(fp["packet_id"]), fp["created"]))
         if store.health()["integrity"] != "ok":
             raise RuntimeError("restored database failed integrity check")
         return store
