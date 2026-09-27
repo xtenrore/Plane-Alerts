@@ -102,16 +102,19 @@ jobs:
           set -eu
           # GitHub Actions is the configuration source. Railway receives only
           # the service-specific runtime projection; no manual Railway copy.
-          printf '%s' "${AI_OPS_GITHUB_DR_TOKEN:-}" | railway variable set AI_OPS_GITHUB_DR_TOKEN --stdin \
-            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
           railway variable set "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
             --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
           if [ -n "${AI_OPS_GITHUB_DR_TOKEN:-}" ]; then
+            printf '%s' "$AI_OPS_GITHUB_DR_TOKEN" | railway variable set AI_OPS_GITHUB_DR_TOKEN --stdin \
+              --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
             railway variable set AI_OPS_GITHUB_DR_ENABLED=true \
               --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
           else
             railway variable set AI_OPS_GITHUB_DR_ENABLED=false \
               --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+            # A removed GitHub secret must not leave an active runtime credential.
+            railway variable delete AI_OPS_GITHUB_DR_TOKEN \
+              --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" >/dev/null 2>&1 || true
           fi
       - name: Deploy only the isolated AI Ops service
         shell: sh
