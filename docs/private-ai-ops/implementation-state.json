@@ -2,9 +2,9 @@
   "roadmap": "Plane Alerts Private Operations phased roadmap",
   "roadmap_source": "Version_6.0",
   "state_schema_version": 1,
-  "last_completed_phase": 0,
-  "current_phase": 1,
-  "phase_status": "in_progress_real_railway_validation",
+  "last_completed_phase": 1,
+  "current_phase": 2,
+  "phase_status": "in_progress",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -23,7 +23,7 @@
   "railway_configuration_mutated": true,
   "scheduler_mutated": false,
   "community_impact": "none_phase_0_documentation_and_private_architecture_only",
-  "next_phase": 1,
+  "next_phase": 2,
   "next_phase_started": true,
   "phase_1_progress": {
     "durable_store": "implemented_locally_not_deployed",
@@ -40,7 +40,10 @@
       "volume_verified": true,
       "volume_id": "2e1fee18-ca07-4732-8329-9e3afab8cddc",
       "volume_size_mb": 500,
-      "service_deployed": false
+      "service_deployed": true,
+      "persistent_store_verified": true,
+      "scheduler_enabled": false,
+      "real_providers_enabled": false
     },
     "first_deployment": {
       "deployment_id": "16266d8d-2b67-4683-8e86-8c9fb196e5e6",
@@ -53,17 +56,28 @@
       "service_created": false,
       "production_services_changed": false
     },
-    "pending_gate": [
-      "deploy corrected isolated image to the dedicated service; verify readiness, on-volume DB and two actual Railway restarts",
-      "verify lease recovery and persistent job contents from controlled probe logs and/or authenticated read-only inspection",
-      "required CI jobs and production verification"
-    ]
+    "completed_gate": {
+      "validated_branch_commit": "051234cbbe7f26202417f691a455c04a54bb216e",
+      "initial_successful_deployment": "660ea8bf-6189-44ee-ad14-1a0024bffebc",
+      "recovery_redeployment": "566c40a5-0d1b-484a-a603-9c17430f33ce",
+      "second_redeployment": "788ce151-57a3-40d0-8a7d-0d3e7650a1f3",
+      "bounds_and_leases_deployment": "262bca3a-f58c-4383-85f9-dc575c05982a",
+      "graceful_shutdown_deployment": "df68b27c-ecd3-4850-bcf9-494e4cc52340",
+      "latest_verified_redeployment": "2f03e917-d42d-45fa-b4d9-4a2aaf5bc4f2",
+      "persisted_probe_state": "PHASE1_VERIFIED_STABLE after completed step, interrupted step recovery, two later restarts, queue and lease assertions",
+      "monitor_87_cycle_mean_seconds": 5.009,
+      "monitor_max_gap_seconds": 6.848,
+      "monitor_deployment_unchanged": "e055cf20-9d4e-4a28-91ff-e927e4219472",
+      "github_targeted_workflow": "passed on 051234cbbe7f26202417f691a455c04a54bb216e",
+      "github_full_tests": "passed on 051234cbbe7f26202417f691a455c04a54bb216e"
+    }
+  },
+  "phase_2_progress": {
+    "status": "started",
+    "github_private_backup_repo": "not yet created or verified",
+    "dropbox_backend_backup": "design only until Phase 11"
   },
   "open_blockers_for_next_phase": [
-    "Railway service and dedicated volume now exist. The corrected image deployment is awaiting the GitHub workflow runner; the initial image failed safely before writing the probe database.",
-    "Keep real provider adapters disabled until Phase 3.",
-    "Do not assume planned multi-key quota independence until per-slot bounded probes exist.",
-    "Preserve existing scheduled-task and Prediction Lab ownership during early shadow phases.",
-    "Carry production commit identity as unverified until Railway exposes or another authoritative path verifies the exact deployed SHA."
+    "Phase 2 requires a dedicated private GitHub backup repository and independently verified remote sync/restore before any valuable AI workload is enabled."
   ]
 }
