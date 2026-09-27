@@ -16,6 +16,7 @@ from .store import SCHEMA_VERSION, Store
 from .phase1_probe import run as run_phase1_probe
 from .dr_sync import sync_once
 from .github_dr import GitHubDR
+from .phase2_probe import run as run_phase2_probe
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
@@ -68,6 +69,9 @@ def main() -> None:
         if not token or not re.fullmatch(r"[0-9a-f]{40}", commit):
             store.close()
             raise RuntimeError("GitHub DR enabled without GitHub-controlled credentials or source commit")
+
+        if os.environ.get("AI_OPS_PHASE2_FAULT_PROBE_ENABLED", "").lower() == "true":
+            print(run_phase2_probe(store, GitHubDR(token), source_commit=commit), flush=True)
 
         def backup_loop() -> None:
             # Separate SQLite connection; no part of the five-second monitor is
