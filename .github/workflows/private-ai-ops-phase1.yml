@@ -13,6 +13,7 @@ on:
       - 'tests/test_private_ops_github_dr.py'
       - 'tests/test_private_ops_phase2_probe.py'
       - 'tests/test_private_ops_provider_router.py'
+      - 'tests/test_private_ops_provider_probe.py'
       - '.github/workflows/private-ai-ops-phase1.yml'
 
 permissions:
@@ -35,7 +36,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install 'pytest>=8,<9'
       - run: python -m compileall -q app/private_ops
-      - run: python -m pytest -q tests/test_private_ops_store.py tests/test_private_ops_dr_export.py tests/test_private_ops_dr_sync.py tests/test_private_ops_github_dr.py tests/test_private_ops_phase2_probe.py tests/test_private_ops_provider_router.py
+      - run: python -m pytest -q tests/test_private_ops_store.py tests/test_private_ops_dr_export.py tests/test_private_ops_dr_sync.py tests/test_private_ops_github_dr.py tests/test_private_ops_phase2_probe.py tests/test_private_ops_provider_router.py tests/test_private_ops_provider_probe.py
       - name: Refuse stale branch deployment
         id: head
         env:
@@ -50,6 +51,40 @@ jobs:
             echo 'A newer branch commit exists; skipping stale deployment.'
             echo 'deploy=false' >> "$GITHUB_OUTPUT"
           fi
+
+  provider-metadata-probes:
+    needs: tests
+    if: needs.tests.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GROQ_KEY: ${{ secrets.GROQ_KEY }}
+      GROQ_KEY_2: ${{ secrets.GROQ_KEY_2 }}
+      GROQ_KEY_3: ${{ secrets.GROQ_KEY_3 }}
+      GROQ_KEY_4: ${{ secrets.GROQ_KEY_4 }}
+      GROQ_KEY_5: ${{ secrets.GROQ_KEY_5 }}
+      MISTRAL_API: ${{ secrets.MISTRAL_API }}
+      MISTRAL_API_2: ${{ secrets.MISTRAL_API_2 }}
+      MISTRAL_API_3: ${{ secrets.MISTRAL_API_3 }}
+      MISTRAL_API_4: ${{ secrets.MISTRAL_API_4 }}
+      MISTRAL_API_5: ${{ secrets.MISTRAL_API_5 }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+      GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+      GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+      GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID_2: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_2 }}
+      CLOUDFLARE_API_TOKEN_2: ${{ secrets.CLOUDFLARE_API_TOKEN_2 }}
+      OPENROUTER_API: ${{ secrets.OPENROUTER_API }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check provider metadata only; never invoke inference
+        run: python -m app.private_ops.provider_probe
 
   provision-and-deploy:
     needs: tests
