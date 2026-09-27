@@ -29,6 +29,7 @@
     "durable_store": "implemented_locally_not_deployed",
     "schema_version": 1,
     "local_tests": "5 passed: restart recovery, lease exclusion, bounded queue, schema refusal, isolated readiness and multi-restart probe",
+    "phase_1_workflow": ".github/workflows/private-ai-ops-phase1.yml",
     "railway_service": {
       "name": "Plane-Alerts-AI-Ops",
       "id": "d701080d-1a41-4054-a810-fd89742e1187",
@@ -36,8 +37,14 @@
       "created": true,
       "source": "dedicated GitHub branch deploy workflow; no manually maintained Railway credential variables",
       "volume_mount_target": "/data/ai_ops",
-      "volume_verified": false,
+      "volume_verified": true,
+      "volume_id": "2e1fee18-ca07-4732-8329-9e3afab8cddc",
+      "volume_size_mb": 500,
       "service_deployed": false
+    },
+    "first_deployment": {
+      "deployment_id": "16266d8d-2b67-4683-8e86-8c9fb196e5e6",
+      "result": "FAILED: minimal image copied app/__init__.py which imports Telegram-only module; corrected isolated top-level package on branch, awaiting GitHub workflow runner"
     },
     "github_ci": "success on engineering branch 9b3263f75c8c8c8b920cf437d27250bbfb4dc738; pytest job and all 45 steps succeeded",
     "railway_provisioning_attempt": {
@@ -47,13 +54,13 @@
       "production_services_changed": false
     },
     "pending_gate": [
-      "attach and verify dedicated Railway volume through the GitHub-controlled deployment flow",
-      "deploy/restart simulation against the dedicated persistent volume",
+      "deploy corrected isolated image to the dedicated service; verify readiness, on-volume DB and two actual Railway restarts",
+      "verify lease recovery and persistent job contents from controlled probe logs and/or authenticated read-only inspection",
       "required CI jobs and production verification"
     ]
   },
   "open_blockers_for_next_phase": [
-    "Previous Railway free-plan resource blocker was resolved; service created. Volume and real restart/redeploy verification remain pending.",
+    "Railway service and dedicated volume now exist. The corrected image deployment is awaiting the GitHub workflow runner; the initial image failed safely before writing the probe database.",
     "Keep real provider adapters disabled until Phase 3.",
     "Do not assume planned multi-key quota independence until per-slot bounded probes exist.",
     "Preserve existing scheduled-task and Prediction Lab ownership during early shadow phases.",
