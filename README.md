@@ -4,11 +4,17 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.7**
+**Current code version: Plane Alerts v6.0.0**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
+
+## v6.0.0 — Private AI Operations Phase 0
+
+Plane Alerts v6.0.0 begins the Private AI Operations roadmap with baseline inventory and architecture design lock only. It records the verified production/Railway state, isolates future AI Ops into a separate private service with its own persistent volume, defines the Phase 1 durable-state contract, and adds resumable implementation-state metadata.
+
+No AI Ops job engine, provider router, hourly AI audit, GUI or Supervisor Chat is enabled in this phase. The live prediction and alert path remains fully deterministic. See [the Phase 0 decision record](docs/private-ai-ops/phase-0-baseline.md) and [release notes](docs/releases/v6.0.0.md).
 
 ## v5.8.7 — Docker monitoring readiness
 
@@ -94,9 +100,9 @@ Core user commands include:
 /forecast     Alias for /next60
 /location     Set monitoring / shooting location
 /preferences  Edit the active alert profile
-/camera       Set camera body
-/lens         Set aircraft lens
-/photo        Get live shooting guidance
+/camera       Set your camera body
+/lens         Set the aircraft lens
+/photo        Get live best-shot camera settings
 /conditions   Show weather / sun / haze conditions
 /spotting     Open Spotting Mode
 /help         Show help
