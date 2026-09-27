@@ -11,6 +11,7 @@ import signal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from app.private_ops.store import Store
+from app.private_ops.phase1_probe import run as run_phase1_probe
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
@@ -47,6 +48,12 @@ def main() -> None:
     if not data_dir or not os.path.isabs(data_dir):
         raise RuntimeError("AI_OPS_DATA_DIR must be an absolute persistent directory")
     store = Store(data_dir)
+    try:
+        if os.environ.get("AI_OPS_PHASE1_PROBE_ENABLED", "").lower() == "true":
+            print(run_phase1_probe(store), flush=True)
+    except BaseException:
+        store.close()
+        raise
     server = HTTPServer(("0.0.0.0", int(os.environ.get("PORT", "8080"))), create_handler(store))
 
     def stop(_signum: int, _frame: object) -> None:
