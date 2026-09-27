@@ -30,18 +30,9 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-          import json
-          import os
-          import urllib.error
-          import urllib.request
-
-          query = '''
-          mutation CreateVolume($input: VolumeCreateInput!) {
-            volumeCreate(input: $input) { id name }
-          }
-          '''
+          import json, os
           payload = {
-              "query": query,
+              "query": "mutation CreateVolume($input: VolumeCreateInput!) { volumeCreate(input: $input) { id name } }",
               "variables": {
                   "input": {
                       "projectId": os.environ["RAILWAY_PROJECT_ID"],
@@ -51,29 +42,33 @@ jobs:
                   }
               },
           }
-          request = urllib.request.Request(
-              "https://backboard.railway.com/graphql/v2",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Content-Type": "application/json",
-                  "Project-Access-Token": os.environ["RAILWAY_TOKEN"],
-              },
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  result = json.load(response)
-          except urllib.error.HTTPError as exc:
-              body = exc.read().decode("utf-8", errors="replace")
-              raise SystemExit(f"Railway GraphQL HTTP {exc.code}: {body[:500]}") from exc
-          if result.get("errors"):
-              raise SystemExit("Railway GraphQL error: " + json.dumps(result["errors"])[:1000])
-          volume = ((result.get("data") or {}).get("volumeCreate") or {})
-          volume_id = str(volume.get("id") or "")
+          with open('/tmp/railway-volume-request.json', 'w', encoding='utf-8') as handle:
+              json.dump(payload, handle)
+          PY
+          HTTP_CODE="$(curl --silent --show-error \
+            --output /tmp/railway-volume-response.json \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'User-Agent: railway-cli/maintenance-provisioner' \
+            --header "Project-Access-Token: ${RAILWAY_TOKEN}" \
+            --data-binary @/tmp/railway-volume-request.json \
+            https://backboard.railway.com/graphql/v2)"
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Railway GraphQL returned HTTP ${HTTP_CODE}"
+            head -c 500 /tmp/railway-volume-response.json || true
+            exit 1
+          fi
+          python - <<'PY'
+          import json, os
+          result=json.load(open('/tmp/railway-volume-response.json', encoding='utf-8'))
+          if result.get('errors'):
+              raise SystemExit('Railway GraphQL error: ' + json.dumps(result['errors'])[:1000])
+          volume=((result.get('data') or {}).get('volumeCreate') or {})
+          volume_id=str(volume.get('id') or '')
           if not volume_id:
-              raise SystemExit("Railway did not return the new volume id")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
-              handle.write(f"volume_id={volume_id}\n")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              raise SystemExit('Railway did not return the new volume id')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as handle:
               handle.write(f"Created dedicated FreeLLMAPI volume `{volume_id}` at `{os.environ['MOUNT_PATH']}`.\n")
           PY
+          rm -f /tmp/railway-volume-request.json /tmp/railway-volume-response.json
