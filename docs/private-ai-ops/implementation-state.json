@@ -28,10 +28,9 @@
   "phase_1_progress": {
     "durable_store": "implemented_locally_not_deployed",
     "schema_version": 1,
-    "local_tests": "3 passed: restart recovery, lease exclusion, bounded queue and schema refusal",
+    "local_tests": "4 passed: restart recovery, lease exclusion, bounded queue, schema refusal and isolated readiness",
     "pending_gate": [
       "dedicated Railway service and volume provisioned through the GitHub-controlled deployment flow",
-      "isolated service health and graceful shutdown",
       "deploy/restart simulation against the dedicated persistent volume",
       "required CI jobs and production verification"
     ]
