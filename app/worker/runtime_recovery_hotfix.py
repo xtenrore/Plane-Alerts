@@ -350,6 +350,11 @@ def _install_next60_recovery() -> bool:
     return True
 
 
+def _install_next60_volume_history() -> bool:
+    """Compatibility entry point retained for the v5.8.7 recovery regression."""
+    return _install_next60_recovery()
+
+
 def install_runtime_recovery_hotfix() -> None:
     global _INSTALLED
     if _INSTALLED:
