@@ -80,3 +80,30 @@ def test_hourly_schedule_settling_checkpoint_and_bounded_backlog(tmp_path):
     with pytest.raises(ValueError, match="backlog"):
         due_hours(store, now=START+30*3600)
     store.close()
+
+
+def test_qualify_cancel_oscillation_and_stale_coverage(tmp_path):
+    store = Store(tmp_path)
+    records = [event("qualify", state="QUALIFIED"),
+               event("cancel-1", state="CANCELLED", at=START+12),
+               event("qualify-again", state="QUALIFIED", at=START+20),
+               event("cancel-2", state="CANCELLED", at=START+30),
+               event("stale", kind="coverage", coverage="missing", at=START+40)]
+    assert run(store, records).packets == 1
+    packet = store.db.execute("SELECT packet_json FROM ai_ops_evidence").fetchone()[0]
+    assert "qualify_cancel_oscillation" in packet and '"coverage":"missing"' in packet
+    store.close()
+
+
+def test_failed_evidence_write_never_advances_checkpoint(tmp_path):
+    import sqlite3
+
+    store = Store(tmp_path)
+    store.db.execute("""CREATE TRIGGER deny_packet BEFORE INSERT ON ai_ops_evidence
+        BEGIN SELECT RAISE(FAIL, 'test failure'); END""")
+    with pytest.raises(sqlite3.IntegrityError):
+        run(store, [event("cancel", state="CANCELLED")])
+    assert store.db.execute("SELECT 1 FROM ai_ops_scheduler WHERE name='collector_hour'").fetchone() is None
+    store.db.execute("DROP TRIGGER deny_packet")
+    assert run(store, [event("cancel", state="CANCELLED")]).packets == 1
+    store.close()
