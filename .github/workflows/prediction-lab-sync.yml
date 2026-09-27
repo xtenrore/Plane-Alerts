@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/prediction-lab-sync.yml"
       - "app/prediction_lab_sync_bridge_v5610.py"
+      - "app/prediction_lab_schema_guard.py"
       - "app/admin/prediction_lab_sync_v5610.py"
       - "app/admin/routes.py"
   schedule:
@@ -31,7 +32,7 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       MAX_FILES: "500"
       MAX_BYTES: "26214400"
-      REQUIRED_BRIDGE_VERSION: "5.7.1"
+      REQUIRED_BRIDGE_VERSION: "5.7.2"
     steps:
       - name: Checkout evidence branch
         uses: actions/checkout@v4
@@ -146,7 +147,22 @@ jobs:
           repo_root=pathlib.Path('prediction_lab')
           max_files=int('${{ env.MAX_FILES }}')
           max_bytes=int('${{ env.MAX_BYTES }}')
+          allowed_schemas={
+              'plane-alerts-prediction-evidence-v1',
+              'plane-alerts-shadow-evaluation-v52',
+          }
           forbidden=re.compile(r'(mongodb\+srv://|telegram[_-]?token|authorization\s*[=:]|api[_-]?key\s*[=:]|password\s*[=:])',re.I)
+          schema_counts={}
+
+          def validate_payload(payload, relative, bundled=False):
+              if not isinstance(payload,dict) or payload.get('schema') not in allowed_schemas:
+                  where=' in bundle' if bundled else ''
+                  raise SystemExit(f'unsupported evidence schema{where}: {relative}')
+              if not str(payload.get('case_id') or '').strip() or not str(payload.get('event_id') or '').strip():
+                  where=' in bundle' if bundled else ''
+                  raise SystemExit(f'missing evidence identity{where}: {relative}')
+              schema=str(payload.get('schema'))
+              schema_counts[schema]=schema_counts.get(schema,0)+1
 
           with zipfile.ZipFile(archive,'r') as bundle:
               infos=bundle.infolist()
@@ -190,16 +206,14 @@ jobs:
                   if forbidden.search(text):
                       raise SystemExit(f'credential-like material rejected: {relative}')
                   if relative.endswith('.json'):
-                      payload=json.loads(text)
-                      if not isinstance(payload,dict) or payload.get('schema')!='plane-alerts-prediction-evidence-v1':
-                          raise SystemExit(f'unsupported evidence schema: {relative}')
+                      validate_payload(json.loads(text), relative, bundled=False)
                   elif relative.endswith('.ndjson'):
                       rows=0
                       for line in text.splitlines():
-                          if not line.strip(): continue
-                          payload=json.loads(line); rows+=1
-                          if not isinstance(payload,dict) or payload.get('schema')!='plane-alerts-prediction-evidence-v1':
-                              raise SystemExit(f'unsupported evidence schema in bundle: {relative}')
+                          if not line.strip():
+                              continue
+                          validate_payload(json.loads(line), relative, bundled=True)
+                          rows+=1
                       if rows==0:
                           raise SystemExit(f'empty evidence bundle rejected: {relative}')
                   else:
@@ -217,7 +231,7 @@ jobs:
                   raise SystemExit('unexpected ZIP members rejected')
 
           pathlib.Path('/tmp/prediction-lab-accepted.json').write_text(json.dumps(accepted,sort_keys=True),encoding='utf-8')
-          print(f"validated files={len(accepted)} bytes={total} scanned={manifest.get('scanned_files')} rejected={manifest.get('rejected_files')} rejected_by_reason={manifest.get('rejected_by_reason')} deferred={manifest.get('deferred_for_batch_limit')}")
+          print(f"validated files={len(accepted)} bytes={total} schemas={schema_counts} scanned={manifest.get('scanned_files')} rejected={manifest.get('rejected_files')} rejected_by_reason={manifest.get('rejected_by_reason')} deferred={manifest.get('deferred_for_batch_limit')}")
           PY
           git config user.name "plane-alerts-evidence"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -272,7 +286,7 @@ jobs:
           print(f"acknowledged_and_removed files={removed} bytes={response.get('removed_bytes')} free_bytes={response.get('free_bytes')}")
           with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as handle:
               handle.write(f'count={removed}\n')
-              handle.write(f'continue_drain={"true" if removed >= 250 else "false"}\n')
+              handle.write(f'continue_drain={"true" if removed > 0 else "false"}\n')
           PY
 
       - name: Continue draining a saturated backlog
@@ -281,5 +295,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "Large repository-acknowledged batch removed; dispatching the next bounded drain pass."
+          echo "Repository-acknowledged evidence removed; dispatching the next bounded drain pass."
           gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/prediction-lab-sync.yml/dispatches" -f ref=main
