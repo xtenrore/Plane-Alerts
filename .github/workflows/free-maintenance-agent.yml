@@ -29,6 +29,11 @@ jobs:
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       MAIN_SERVICE_ID: af7f738d-0a49-4b86-a96a-86cf22f1b4db
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_API: ${{ secrets.OPENROUTER_API }}
+      FREELLMAPI_BASE_URL: ${{ secrets.FREELLMAPI_BASE_URL }}
+      FREELLMAPI_API_KEY: ${{ secrets.FREELLMAPI_API_KEY }}
+      FREELLMAPI_MODEL: ${{ vars.FREELLMAPI_MODEL }}
       PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout current main
@@ -105,6 +110,13 @@ jobs:
           exported = []
           with env_file.open('a', encoding='utf-8') as handle:
               for name in allowed:
+                  existing = os.environ.get(name, '').strip()
+                  if existing:
+                      if '\n' in existing or '\r' in existing:
+                          raise SystemExit(f'{name} contains unsupported newline characters')
+                      print(f'::add-mask::{existing}')
+                      exported.append(f'{name}:github')
+                      continue
                   value = data.get(name)
                   if not isinstance(value, str) or not value.strip():
                       continue
@@ -113,7 +125,7 @@ jobs:
                       raise SystemExit(f'{name} contains unsupported newline characters')
                   print(f'::add-mask::{value}')
                   handle.write(f'{name}={value}\n')
-                  exported.append(name)
+                  exported.append(f'{name}:railway')
           print('maintenance_provider_variables=' + ','.join(exported))
           PY
           rm -f /tmp/plane-alerts-vars.json
