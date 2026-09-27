@@ -19,9 +19,9 @@ from app.config import settings
 from app.database import get_db, locations_col, preferences_col, system_status_col, users_col
 from app.intelligence.camera import recommend_camera
 from app.intelligence.lifecycle import (
-    advance_cancellation_confirmation,
     decide_lifecycle,
     prediction_changed,
+    resolve_cancellation_confirmation,
     should_cancel_active_alert,
     should_finalize_observed_pass,
 )
@@ -530,13 +530,13 @@ async def _match_user_aircraft(user: dict, aircraft_list: list, results_by_provi
 
         if not qualifies:
             candidate = bool(active and not pred.stale and (route_suppressed or should_cancel_active_alert(pred, stable_previous_cpa, radius)))
-            confirmed, confirmation_count = advance_cancellation_confirmation(
-                int((old or {}).get("cancel_confirmation_count") or 0), candidate
+            confirmed, confirmation_count = resolve_cancellation_confirmation(
+                int((old or {}).get("cancel_confirmation_count") or 0),
+                candidate,
+                fresh_observation=fresh_observation,
+                prediction=pred,
+                route_suppressed=route_suppressed,
             )
-
-            if not fresh_observation or pred.stale:
-                confirmation_count = int((old or {}).get("cancel_confirmation_count") or 0)
-                confirmed = candidate and confirmation_count >= 3
             if active and confirmed:
                 delivered = await send_or_update_approach(
                     uid, ac, pred, "cancelled", old.get("notification_id", "") or "", old.get("message_id"),

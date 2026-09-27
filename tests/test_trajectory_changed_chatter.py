@@ -1,7 +1,9 @@
 """Regression coverage for excessive TRAJECTORY CHANGED alert chatter."""
 from __future__ import annotations
 
-from app.intelligence.lifecycle import advance_cancellation_confirmation
+from types import SimpleNamespace
+
+from app.intelligence.lifecycle import resolve_cancellation_confirmation
 from app.intelligence.trajectory import HistorySample, predict_trajectory
 
 NOW = 2_000_000_000.0
@@ -58,22 +60,40 @@ def test_third_contiguous_sample_unlocks_normal_confidence_when_motion_is_stable
     assert pred.confidence in {"Low", "Medium", "High"}
 
 
-def test_fresh_non_candidate_breaks_cancellation_confirmation_streak():
-    confirmed, count = advance_cancellation_confirmation(0, True)
-    assert not confirmed and count == 1
+def test_fresh_uncertain_trajectory_clears_prior_trajectory_cancellation_strikes():
+    pred = SimpleNamespace(stale=False, state="Prediction uncertain")
+    confirmed, count = resolve_cancellation_confirmation(
+        2,
+        False,
+        fresh_observation=True,
+        prediction=pred,
+        route_suppressed=False,
+    )
+    assert not confirmed
+    assert count == 0
 
-    confirmed, count = advance_cancellation_confirmation(count, True)
-    assert not confirmed and count == 2
 
-    # Mirrors the production sequence where an uncertain fresh prediction sat
-    # between miss candidates. It must break the streak instead of carrying two
-    # old strikes into a later cancellation.
-    confirmed, count = advance_cancellation_confirmation(count, False)
-    assert not confirmed and count == 0
+def test_stale_uncertain_cycle_preserves_prior_cancellation_evidence():
+    pred = SimpleNamespace(stale=True, state="Prediction uncertain")
+    confirmed, count = resolve_cancellation_confirmation(
+        2,
+        False,
+        fresh_observation=False,
+        prediction=pred,
+        route_suppressed=False,
+    )
+    assert not confirmed
+    assert count == 2
 
-    confirmed, count = advance_cancellation_confirmation(count, True)
-    assert not confirmed and count == 1
-    confirmed, count = advance_cancellation_confirmation(count, True)
-    assert not confirmed and count == 2
-    confirmed, count = advance_cancellation_confirmation(count, True)
-    assert confirmed and count == 3
+
+def test_route_veto_is_not_erased_by_trajectory_uncertainty():
+    pred = SimpleNamespace(stale=False, state="Prediction uncertain")
+    confirmed, count = resolve_cancellation_confirmation(
+        2,
+        True,
+        fresh_observation=True,
+        prediction=pred,
+        route_suppressed=True,
+    )
+    assert confirmed
+    assert count == 3

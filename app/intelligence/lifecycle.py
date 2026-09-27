@@ -191,15 +191,40 @@ def should_cancel_active_alert(prediction, previous_cpa_km: float | None, alert_
 
 
 def advance_cancellation_confirmation(previous_count: int, candidate: bool, *, required: int = CANCELLATION_CONFIRMATIONS_REQUIRED) -> tuple[bool, int]:
-    """Require consecutive credible cancellation evidence.
-
-    A fresh cycle that is no longer a cancellation candidate breaks the streak.
-    The monitor separately preserves the previous count when there is no fresh
-    observation or the prediction is stale, so provider gaps do not erase good
-    evidence while fresh uncertainty cannot carry an old strike forward.
-    """
+    """Accumulate credible cancellation evidence without provider-gap starvation."""
     count = max(0, int(previous_count))
     if not candidate:
-        return False, 0
+        return False, count
     count += 1
     return count >= max(1, int(required)), count
+
+
+def resolve_cancellation_confirmation(
+    previous_count: int,
+    candidate: bool,
+    *,
+    fresh_observation: bool,
+    prediction,
+    route_suppressed: bool = False,
+    required: int = CANCELLATION_CONFIRMATIONS_REQUIRED,
+) -> tuple[bool, int]:
+    """Stabilize cancellation evidence across feed gaps and fresh uncertainty.
+
+    Ordinary neutral cycles retain the existing hysteresis semantics, and stale
+    or repeated provider observations preserve prior evidence. A *fresh*
+    trajectory-only `Prediction uncertain` cycle is different: it means the
+    physical estimator cannot currently support the miss hypothesis, so prior
+    trajectory cancellation strikes are cleared. Independent route suppression
+    remains authoritative and is not erased by trajectory uncertainty.
+    """
+    previous = max(0, int(previous_count))
+    confirmed, count = advance_cancellation_confirmation(previous, candidate, required=required)
+
+    if not fresh_observation or bool(getattr(prediction, "stale", False)):
+        return bool(candidate and previous >= max(1, int(required))), previous
+
+    state = str(getattr(prediction, "state", "") or "")
+    if state == "Prediction uncertain" and not route_suppressed:
+        return False, 0
+
+    return confirmed, count
