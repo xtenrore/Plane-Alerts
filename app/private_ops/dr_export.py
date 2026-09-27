@@ -15,7 +15,7 @@ from .store import Store
 _SAFE_ID = re.compile(r"^[A-Za-z0-9:_./-]{1,128}$")
 _SAFE_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _SAFE_TEXT = re.compile(r"^[A-Za-z0-9 _.-]{0,200}$")
-_SECRET = re.compile(r"(?i)(authorization|bearer\s|mongodb(?:\+srv)?://|gh[pousr]_|sk-[a-z0-9]|api[_-]?key|token|password|secret|\b(?:lat|lon|latitude|longitude)\b)")
+_SECRET = re.compile(r"(?i)(authorization|bearer\s|mongodb(?:\+srv)?://|mongo[_-]?uri|telegram|railway[_-]?token|gh[pousr]_|sk-[a-z0-9]|eyJ[A-Za-z0-9_-]{20}|api[_-]?key|token|password|secret|\b(?:lat|lon|latitude|longitude)\b)")
 
 
 def _safe(value: object) -> object:
