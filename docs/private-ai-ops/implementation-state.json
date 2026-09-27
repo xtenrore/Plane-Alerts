@@ -74,10 +74,15 @@
   },
   "phase_2_progress": {
     "status": "started",
-    "github_private_backup_repo": "not yet created or verified",
-    "dropbox_backend_backup": "design only until Phase 11"
+    "github_private_backup_repo": "not created; GitHub connector lacks create-repository; unauthenticated browser requires owner GitHub sign-in",
+    "dropbox_backend_backup": "contract documented for Phase 11; connector root empty and search yielded no Plane Alerts files; backend OAuth not configured",
+    "sanitized_export": "implemented and 8 focused local tests passed; checkpoint a4fe01b locally, remote branch 38f105eea49ba81d2e0936e42f907cb5ffba7aeb",
+    "restore_behavior": "empty-directory restore, checksum, SQLite integrity, completed idempotent step preserved, interrupted work retryable",
+    "github_remote_sync": "not implemented or verified; dedicated private repository and scoped writer credential prerequisite",
+    "design_contract": "docs/private-ai-ops/phase-2-backup-contract.md"
   },
   "open_blockers_for_next_phase": [
-    "Phase 2 requires a dedicated private GitHub backup repository and independently verified remote sync/restore before any valuable AI workload is enabled."
+    "Phase 2: create and verify dedicated private GitHub DR repository (GitHub connector has no repository creation capability; browser session requires owner sign-in).",
+    "Phase 2: supply a narrowly scoped cross-repository writer credential through GitHub Actions Secrets, then implement and verify remote sync/read-back and clean-host restore."
   ]
 }
