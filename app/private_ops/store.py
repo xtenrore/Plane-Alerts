@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -94,6 +94,20 @@ class Store:
                 if db.execute("SELECT 1 FROM ai_ops_jobs LIMIT 1").fetchone() or db.execute("SELECT 1 FROM ai_ops_scheduler LIMIT 1").fetchone():
                     self._mark_dr_dirty(db)
                 db.execute("PRAGMA user_version=2")
+                version = 2
+            if version == 2:
+                db.execute("""CREATE TABLE ai_ops_provider_health (
+                    slot TEXT PRIMARY KEY, provider TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    successes INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0, cooldown_until REAL NOT NULL DEFAULT 0,
+                    last_status TEXT NOT NULL DEFAULT 'unverified', updated REAL NOT NULL DEFAULT 0
+                )""")
+                db.execute("""CREATE TABLE ai_ops_provider_circuit (
+                    provider TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    open_until REAL NOT NULL DEFAULT 0, updated REAL NOT NULL DEFAULT 0
+                )""")
+                db.execute("PRAGMA user_version=3")
 
     @staticmethod
     def _mark_dr_dirty(db: sqlite3.Connection) -> None:

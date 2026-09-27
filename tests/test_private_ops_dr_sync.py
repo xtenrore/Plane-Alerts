@@ -99,7 +99,7 @@ def test_existing_phase1_schema_migrates_without_losing_job_state(tmp_path):
         PRAGMA user_version=1;""")
     db.close()
     store = Store(tmp_path)
-    assert store.health()["schema"] == 2
+    assert store.health()["schema"] == 3
     assert store.db.execute("SELECT status FROM ai_ops_jobs WHERE id='phase1:existing'").fetchone()[0] == "COMPLETE"
     assert status(store, "github")["outcome"] == "pending"
     assert status(store, "github")["revision"] == 1
