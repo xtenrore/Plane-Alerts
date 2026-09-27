@@ -28,6 +28,7 @@ from typing import Any
 from app import prediction_lab_files_v55 as _files
 from app import prediction_lab_sync_bridge_v5610 as _bridge
 
+RECOVERY_BRIDGE_VERSION = "5.7.2"
 LEGACY_EXPORT_SCHEMAS = frozenset({"plane-alerts-shadow-evaluation-v52"})
 ALLOWED_EXPORT_SCHEMAS = frozenset({_files.SCHEMA_VERSION, *LEGACY_EXPORT_SCHEMAS})
 
@@ -95,8 +96,9 @@ def install_prediction_lab_schema_guard() -> None:
     # so replacing that single symbol also covers all existing imported callers.
     _files.write_evidence = _write_evidence_with_envelope
 
-    # build_batch_zip() likewise resolves _validate_payload from bridge globals at
-    # execution time. The admin endpoint imports build_batch_zip itself, so no route
-    # rebinding is required here.
+    # build_batch_zip() and status() resolve these bridge globals at execution time.
+    # Bump the handshake so the GitHub workflow cannot mistake the old deployed
+    # bridge for this recovery-capable runtime during a main-branch rollout.
     _bridge._validate_payload = _validate_payload_compat
+    _bridge.BRIDGE_VERSION = RECOVERY_BRIDGE_VERSION
     _installed = True
