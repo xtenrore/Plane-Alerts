@@ -1,0 +1,84 @@
+name: Private Operations Phase 1 isolated validation
+
+on:
+  push:
+    branches: [feature/private-ai-operations]
+    paths:
+      - 'app/private_ops/**'
+      - 'deploy/private-ai-ops/**'
+      - 'tests/test_private_ops_store.py'
+      - '.github/workflows/private-ai-ops-phase1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase1
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'pytest>=8,<9'
+      - run: python -m compileall -q app/private_ops
+      - run: python -m pytest -q tests/test_private_ops_store.py
+
+  provision-and-deploy:
+    needs: tests
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      DEPLOY_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout validated source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Authenticate using the existing GitHub Actions secret
+        shell: sh
+        run: |
+          set -eu
+          if [ -n "${RAILWAY_TOKEN:-}" ]; then
+            exit 0
+          fi
+          if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
+            echo 'Missing GitHub Actions Railway authentication secret.' >&2
+            exit 1
+          fi
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then
+            exit 0
+          fi
+          echo 'RAILWAY_TOKEN='"$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo 'RAILWAY_API_TOKEN=' >> "$GITHUB_ENV"
+      - name: Provision only the dedicated AI Ops volume
+        shell: sh
+        run: |
+          set -eu
+          VOLUMES="$(railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" list --json)"
+          if printf '%s' "$VOLUMES" | grep -q '/data/ai_ops'; then
+            echo 'Dedicated AI Ops volume already attached.'
+          elif printf '%s' "$VOLUMES" | grep -q 'mountPath'; then
+            echo 'Unexpected existing volume; refusing to attach another.' >&2
+            exit 1
+          else
+            railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" add --mount-path /data/ai_ops --json >/dev/null
+            echo 'Dedicated AI Ops volume attached.'
+          fi
+      - name: Deploy only the isolated AI Ops service
+        shell: sh
+        run: |
+          set -eu
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Private Ops Phase 1 ${DEPLOY_SHA}"
