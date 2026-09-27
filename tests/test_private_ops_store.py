@@ -1,9 +1,15 @@
 """Phase 1 crash, lease and bounded-queue invariants."""
 import sqlite3
+import threading
+import queue
+from http.server import HTTPServer
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 import pytest
 
 from app.private_ops.store import QueueFull, Store
+from app.private_ops.service import create_handler
 
 
 def test_restart_preserves_committed_step_and_reclaims_expired_job(tmp_path, monkeypatch):
@@ -66,3 +72,34 @@ def test_store_refuses_missing_volume_and_newer_schema(tmp_path):
     db.close()
     with pytest.raises(RuntimeError, match="newer"):
         Store(tmp_path)
+
+
+def test_isolated_health_endpoint_exposes_only_bounded_status(tmp_path):
+    ready = queue.Queue()
+    stop = threading.Event()
+
+    def serve():
+        store = Store(tmp_path)
+        server = HTTPServer(("127.0.0.1", 0), create_handler(store))
+        server.timeout = 0.1
+        ready.put(server.server_port)
+        try:
+            while not stop.is_set():
+                server.handle_request()
+        finally:
+            server.server_close()
+            store.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        root = f"http://127.0.0.1:{ready.get(timeout=2)}"
+        with urlopen(root + "/ready") as response:
+            assert response.status == 200
+            assert response.read() == b'{"schema":1,"integrity":"ok","pending":0}'
+        with pytest.raises(HTTPError) as error:
+            urlopen(root + "/tasks")
+        assert error.value.code == 404
+    finally:
+        stop.set()
+        thread.join(timeout=2)
