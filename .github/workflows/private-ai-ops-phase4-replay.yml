@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           cd engineering
-          python scripts/private_ai_ops_hourly_replay.py \
+          PYTHONPATH=. python scripts/private_ai_ops_hourly_replay.py \
             --source ../evidence --hour "$HOUR" \
             --source-commit "$SOURCE_COMMIT" --output /tmp/ai-ops-hour.json
           python - <<'PY'

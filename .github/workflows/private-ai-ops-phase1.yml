@@ -112,7 +112,7 @@ jobs:
         run: |
           set -euo pipefail
           cd engineering
-          python scripts/private_ai_ops_hourly_replay.py --source ../evidence \
+          PYTHONPATH=. python scripts/private_ai_ops_hourly_replay.py --source ../evidence \
             --hour 2026-09-25T08:00:00Z --source-commit "$GITHUB_SHA" \
             --output /tmp/ai-ops-phase4-hour.json
 
