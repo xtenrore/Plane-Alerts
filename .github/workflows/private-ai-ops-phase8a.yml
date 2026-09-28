@@ -1,4 +1,4 @@
-name: Private Operations Phase 8A GUI checkpoint
+name: Private Operations Phase 8A GUI validation
 
 on:
   push:
@@ -13,18 +13,16 @@ on:
 permissions:
   contents: read
 
-# Phase 8A, Phase 8B and the generic Private Ops deployer all mutate the same
-# dedicated Railway service. Queue them so their deployments/canaries cannot race.
+# Historical GUI checkpoint validation only. Phase 8B owns the live deployment and
+# validates the authenticated GUI together with Supervisor Chat on the exact checkpoint.
 concurrency:
-  group: private-ai-ops-phase8b
-  cancel-in-progress: false
+  group: private-ai-ops-phase8a-validation
+  cancel-in-progress: true
 
 jobs:
   gui-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 12
-    outputs:
-      deploy: ${{ steps.head.outputs.deploy }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,189 +48,3 @@ jobs:
           set -euo pipefail
           ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|DROPBOX_REFRESH_TOKEN=.+)' app/private_ops tests/test_private_ops_dashboard.py tests/test_private_ops_service_web.py
           pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
-      - name: Refuse stale checkpoint deployment
-        id: head
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          CURRENT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations" --jq '.object.sha')"
-          if [[ "$CURRENT" == "$GITHUB_SHA" ]]; then
-            echo 'deploy=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'deploy=false' >> "$GITHUB_OUTPUT"
-          fi
-
-  deploy-private-gui:
-    needs: gui-gate
-    if: needs.gui-gate.outputs.deploy == 'true'
-    runs-on: ubuntu-latest
-    container: ghcr.io/railwayapp/cli:latest
-    timeout-minutes: 25
-    env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
-      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
-      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
-      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
-      DEPLOY_SHA: ${{ github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - name: Resolve Railway authentication
-        shell: sh
-        run: |
-          set -eu
-          if [ -n "${RAILWAY_TOKEN:-}" ]; then exit 0; fi
-          test -n "${RAILWAY_API_TOKEN:-}"
-          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
-          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
-          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
-      - name: Configure private owner auth without copying its value
-        shell: sh
-        run: |
-          set -eu
-          D='$'
-          railway variable set \
-            "ADMIN_PASSWORD=${D}{{Gemini-Telegram-Bot-Exprience.ADMIN_PASSWORD}}" \
-            "AI_OPS_WEB_GUI_ENABLED=true" \
-            "AI_OPS_REQUIRE_HTTPS=true" \
-            "AI_OPS_SESSION_TTL_SECONDS=1800" \
-            "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
-            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
-      - name: Deploy exact tested Phase 8A checkpoint
-        shell: sh
-        run: |
-          set -eu
-          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
-            --ci --message "Private Ops Phase 8A ${DEPLOY_SHA}"
-
-  live-gui-canary:
-    needs: deploy-private-gui
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
-      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
-      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
-      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
-      GUI_URL: https://plane-alerts-ai-ops-production.up.railway.app
-    steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install Railway CLI
-        run: npm install --global @railway/cli >/dev/null
-      - name: Resolve Railway authentication
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
-          test -n "${RAILWAY_API_TOKEN:-}"
-          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
-          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
-          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
-      - name: Verify live TLS auth, CSRF, durable API and SSE without exposing credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY'
-          import http.cookiejar
-          import json
-          import os
-          import socket
-          import urllib.error
-          import urllib.request
-
-          base = os.environ['GUI_URL'].rstrip('/')
-          password = os.environ.get('ADMIN_PASSWORD', '')
-          assert password, 'ADMIN_PASSWORD was not resolved into the canary process'
-          jar = http.cookiejar.CookieJar()
-          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-
-          def request(path, *, method='GET', body=None, csrf=None, timeout=8):
-              raw = None if body is None else json.dumps(body).encode()
-              headers = {'Accept': 'application/json'}
-              if raw is not None:
-                  headers['Content-Type'] = 'application/json'
-              if csrf:
-                  headers['X-CSRF-Token'] = csrf
-              req = urllib.request.Request(base + path, data=raw, headers=headers, method=method)
-              try:
-                  resp = opener.open(req, timeout=timeout)
-                  data = resp.read()
-                  return resp.status, resp.headers, data
-              except urllib.error.HTTPError as exc:
-                  return exc.code, exc.headers, exc.read()
-
-          status, _, ready_raw = request('/ready')
-          assert status == 200 and json.loads(ready_raw) == {'status': 'ready'}
-          assert b'pending' not in ready_raw and b'finding' not in ready_raw and b'schema' not in ready_raw
-
-          status, _, page = request('/')
-          assert status == 200 and b'Plane Alerts' in page and password.encode() not in page
-          status, _, _ = request('/api/overview')
-          assert status == 401
-
-          status, _, raw = request('/api/auth/bootstrap')
-          assert status == 200
-          wrong_csrf = json.loads(raw)['csrf']
-          status, _, _ = request('/api/auth/login', method='POST', body={'password': 'definitely-not-the-owner-password'}, csrf=wrong_csrf)
-          assert status == 401
-
-          jar.clear()
-          status, _, raw = request('/api/auth/bootstrap')
-          assert status == 200
-          login_csrf = json.loads(raw)['csrf']
-          status, headers, raw = request('/api/auth/login', method='POST', body={'password': password}, csrf=login_csrf)
-          assert status == 200
-          session = json.loads(raw)
-          session_csrf = session['csrf']
-          cookie_headers = headers.get_all('Set-Cookie') or []
-          session_cookie = next(value for value in cookie_headers if value.startswith('aiops_session='))
-          lowered = session_cookie.lower()
-          assert 'secure' in lowered and 'httponly' in lowered and 'samesite=strict' in lowered
-
-          status, _, raw = request('/api/overview')
-          assert status == 200
-          overview = json.loads(raw)
-          assert overview['service']['health']['integrity'] == 'ok'
-          assert isinstance(overview['queue_depth'], int)
-          text = raw.decode().lower()
-          assert 'authorization' not in text and 'admin_password' not in text
-
-          status, _, raw = request('/api/events?cursor=0')
-          assert status == 200 and isinstance(json.loads(raw), list)
-
-          req = urllib.request.Request(base + '/api/events/stream', headers={'Accept': 'text/event-stream'})
-          resp = opener.open(req, timeout=8)
-          assert resp.status == 200 and resp.headers.get_content_type() == 'text/event-stream'
-          saw_id = saw_data = False
-          try:
-              for _ in range(20):
-                  line = resp.readline().decode().strip()
-                  if line.startswith('id:'):
-                      saw_id = True
-                  elif line.startswith('data:'):
-                      saw_data = True
-                  if saw_id and saw_data:
-                      break
-          except socket.timeout:
-              pass
-          finally:
-              resp.close()
-          assert saw_id and saw_data
-
-          status, _, _ = request('/api/auth/logout', method='POST')
-          assert status == 403
-          status, _, _ = request('/api/auth/logout', method='POST', csrf=session_csrf)
-          assert status == 200
-          status, _, _ = request('/api/overview')
-          assert status == 401
-          print('PHASE8A_LIVE_GUI_CANARY_OK')
-          PY
