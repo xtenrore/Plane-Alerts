@@ -28,6 +28,11 @@ def _bounded_excerpt(value: object) -> str:
             + data[-half:].decode('utf-8', 'replace'))
 
 
+def _redacted_excerpt(value: object) -> str:
+    """Bound and redact a stream before JSON encoding so redaction cannot corrupt JSON."""
+    return redact(_bounded_excerpt(value))[0]
+
+
 def safe_operation_diagnostic(record: dict[str, object]) -> str:
     """Render only bounded, redacted fields already present in a durable tool result."""
     try:
@@ -56,10 +61,10 @@ def safe_operation_diagnostic(record: dict[str, object]) -> str:
         'timeout_status': record.get('status') == 'TIMED_OUT' or result.get('class') == 'TIMEOUT',
         'output_truncated': bool(result.get('truncated')) or result.get('class') == 'OUTPUT_TRUNCATED',
         'result_hash': record.get('output_hash'),
-        'stdout_tail': _bounded_excerpt(result.get('stdout')),
-        'stderr_tail': _bounded_excerpt(result.get('stderr')),
+        'stdout_tail': _redacted_excerpt(result.get('stdout')),
+        'stderr_tail': _redacted_excerpt(result.get('stderr')),
     }
-    rendered, _ = redact(json.dumps(payload, sort_keys=True, ensure_ascii=True))
+    rendered = json.dumps(payload, sort_keys=True, ensure_ascii=True)
     data = rendered.encode('utf-8')
     if len(data) > DIAGNOSTIC_MAX_BYTES:
         rendered = json.dumps({
