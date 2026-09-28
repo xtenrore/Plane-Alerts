@@ -33,3 +33,12 @@ does not establish a free billing tier or prove inference. Do not claim the
 canary complete until the approved free account/model route is verified and a
 bounded shadow packet has completed both provider families, persisted across
 restart, and passed the production isolation check.
+
+On 2026-09-28 the owner confirmed free billing status for Groq and Mistral.
+The bounded one-packet run validated an actual Groq triage result, but the
+Mistral independent-review route returned a quota response. No peer credentials
+were tried. The end-to-end canary remains blocked; the attempted first opinion
+in that ephemeral runner was not a durable live-volume checkpoint. The manual
+canary runner now preserves any successfully validated first stage as a
+PENDING_AI shadow checkpoint if the second provider is unavailable. Automatic
+push activation of that runner is disabled pending safe free capacity.

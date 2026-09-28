@@ -47,6 +47,22 @@ def test_provider_prompt_explicitly_describes_outer_json_shape():
     assert "cpa_km and observed_km are arrays of numbers" in prompt
 
 
+def test_shadow_canary_preserves_valid_first_review_when_second_has_no_free_quota(tmp_path):
+    store, (pid,) = queued_store(tmp_path)
+    adapter = ScenarioAdapter(failures={"MISTRAL_API": [ProviderFailure("quota", status=429, provider_wide=True)]})
+    first, second = run_pair(store, pid, route(store, adapter), MODELS)
+    assert first and second is None
+    assert store.db.execute("SELECT state,pending_role FROM ai_ops_cases WHERE packet_id=?", (pid,)).fetchone()[:] == (
+        "PENDING_AI", "independent_review")
+    snapshot, manifest = export(store, source_commit="a" * 40)
+    store.close()
+    (tmp_path / "resume").mkdir()
+    reopened = restore_empty(tmp_path / "resume", snapshot, manifest)
+    assert reopened.db.execute("SELECT count(*) FROM ai_ops_reviews").fetchone()[0] == 1
+    assert reopened.db.execute("SELECT pending_role FROM ai_ops_cases WHERE packet_id=?", (pid,)).fetchone()[0] == "independent_review"
+    reopened.close()
+
+
 def test_low_risk_agreement_needs_no_third_call(tmp_path):
     store = Store(tmp_path)
     p = packet(reason="trajectory_changed")

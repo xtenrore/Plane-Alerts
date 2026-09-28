@@ -24,7 +24,7 @@ from app.private_ops.provider_router import NoFreeRoute, Router
 from app.private_ops.store import Store
 
 
-def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str]) -> tuple[str, str]:
+def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str]) -> tuple[str, str | None]:
     """Exactly one call per provider; no rotation and no deep reviewer."""
     packet = _packet(store, packet_id)
     case = str(packet["case_ref"])
@@ -38,6 +38,16 @@ def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str
         except NoFreeRoute:
             usage = store.db.execute("SELECT provider,failure_kind FROM ai_ops_usage ORDER BY id DESC LIMIT 1").fetchone()
             kind = str(usage[1]) if usage and usage[0] == provider else "not_attempted"
+            if results:
+                # Retain the validated first opinion, and leave only the
+                # independent stage pending. Never treat partial review as
+                # agreement or a completed canary.
+                with store.transaction() as db:
+                    db.execute("""UPDATE ai_ops_cases SET state='PENDING_AI',pending_role='independent_review',
+                        classification=?,validation_status='VALID',last_error=?,updated=strftime('%s','now')
+                        WHERE packet_id=?""", (results[0], "independent_review_" + kind, packet_id))
+                    store._mark_dr_dirty(db)
+                return results[0], None
             raise RuntimeError(role + "_free_route_unavailable_failure_kind=" + kind) from None
         validated, shape = _strict_batch({case: packet}, result.analysis)
         if not shape or len(validated) != 1 or validated[0].validation_status != "VALID":
@@ -126,7 +136,10 @@ def main() -> None:
             reopened = restore_empty(restored_root, data, manifest)
             try:
                 reviews = reopened.db.execute("SELECT role,provider,model,independence,validation_status FROM ai_ops_reviews ORDER BY created").fetchall()
-                if len(reviews) != 2 or reviews[0][1] != "groq" or reviews[1][1] != "mistral" or reviews[1][3] != "DIFFERENT_PROVIDER_AND_MODEL_BLIND":
+                expected = 1 if second is None else 2
+                if (len(reviews) != expected or reviews[0][1] != "groq" or
+                        (second is not None and (reviews[1][1] != "mistral" or
+                                                 reviews[1][3] != "DIFFERENT_PROVIDER_AND_MODEL_BLIND"))):
                     raise RuntimeError("independent_reviews_not_durable")
             finally:
                 reopened.close()
@@ -137,9 +150,13 @@ def main() -> None:
             if len(raw) > 100000:
                 raise RuntimeError("canary_checkpoint_exceeds_bound")
             args.output.write_bytes(raw)
-            print("PHASE6_REAL_CANARY_VALIDATED providers=groq,mistral reviews=2 "
-                  "independence=blind-different-family agreement=" + ("yes" if first == second else "no") +
-                  " checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
+            if second is None:
+                print("PHASE6_REAL_CANARY_PARTIAL_PENDING_AI provider=groq reviews=1 "
+                      "second=mistral-quota checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
+            else:
+                print("PHASE6_REAL_CANARY_VALIDATED providers=groq,mistral reviews=2 "
+                      "independence=blind-different-family agreement=" + ("yes" if first == second else "no") +
+                      " checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
         finally:
             store.close()
 

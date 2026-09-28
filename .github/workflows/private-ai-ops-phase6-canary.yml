@@ -1,11 +1,7 @@
 name: Private Operations Phase 6 one-shot free inference canary
 
 on:
-  push:
-    branches: [feature/private-ai-operations]
-    paths:
-      - scripts/private_ai_ops_phase6_canary.py
-      - .github/workflows/private-ai-ops-phase6-canary.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
