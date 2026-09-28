@@ -27,6 +27,8 @@ SUBSYSTEMS = frozenset({"prediction", "alert_lifecycle", "route_guard", "provide
 SUSPICIOUS = frozenset({"POSSIBLE_ESTIMATOR_ERROR", "ALERT_LIFECYCLE_ERROR", "ROUTE_GUARD_ANOMALY", "STORAGE_EVIDENCE_LOSS", "INVESTIGATE"})
 TERMINAL_FINDINGS = frozenset({"RESOLVED", "EXPECTED_BEHAVIOR", "INCONCLUSIVE", "DUPLICATE", "ALREADY_FIXED", "FALSE_POSITIVE", "WONT_FIX_WITH_REASON"})
 ACTIVE_FINDINGS = frozenset({"OPEN", "TRIAGED", "REVIEWING", "INVESTIGATING", "FIX_CANDIDATE", "DEPLOYED_PENDING_VERIFICATION"})
+FEEDBACK = frozenset({"USEFUL", "NOT_USEFUL", "FALSE_POSITIVE", "NEEDS_MORE_INVESTIGATION",
+                      "ALREADY_KNOWN", "CORRECTLY_IDENTIFIED_PROBLEM", "INSUFFICIENT_EVIDENCE", "WRONG_CONCLUSION"})
 MAX_BATCH_CASES = 4
 MAX_PROMPT_BYTES = 12_000
 MAX_RESULT_TEXT = 1200
@@ -268,7 +270,7 @@ def _rationale_supported(rationale: str) -> bool:
     # fact from bypassing deterministic evidence validation.
     if re.search(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?", rationale):
         return False
-    return re.search(r"\b(?:eta|ttc|timestamp|altitude|speed|heading|latitude|longitude|destination|callsign|registration)\b", rationale, re.I) is None
+    return re.search(r"\b(?:eta|ttc|timestamp|altitude|speed|heading|latitude|longitude|destination|callsign|registration|replay|test|tool|outage|provider.down)\b", rationale, re.I) is None
 
 
 def validate_result(packet: Mapping[str, object], item: object) -> Validated:
@@ -334,6 +336,19 @@ def _first_provider(store: Store, packet_id: str) -> str | None:
     return row[0] if row else None
 
 
+def _independence(store: Store, packet_id: str, role: str, provider: str, model: str) -> str:
+    if role == "triage":
+        return "NOT_APPLICABLE"
+    earlier = store.db.execute("SELECT provider,model FROM ai_ops_reviews WHERE packet_id=? AND role='triage' ORDER BY created LIMIT 1", (packet_id,)).fetchone()
+    if earlier is None:
+        raise ValueError("first review must be durable before independent review")
+    if role == "independent_review" and (provider == earlier[0] or model == earlier[1]):
+        raise ValueError("second review requires a different provider and model; key rotation is not independence")
+    if provider != earlier[0] and model != earlier[1]:
+        return "DIFFERENT_PROVIDER_AND_MODEL_BLIND" if role == "independent_review" else "DIFFERENT_PROVIDER_AND_MODEL"
+    return "DEGRADED_DEEP_REVIEW"
+
+
 def _persist_review(store: Store, packet_id: str, role: str, provider: str, model: str, slot: str,
                     result: Validated, *, agreement: str | None = None, disposition: str | None = None) -> None:
     rid = hashlib.sha256((packet_id + "\0" + role + "\0" + provider + "\0" + slot + "\0" + Store.digest(result.record())).encode()).hexdigest()
@@ -342,10 +357,10 @@ def _persist_review(store: Store, packet_id: str, role: str, provider: str, mode
         raise ValueError("review persistence privacy gate failed")
     with store.transaction() as db:
         db.execute("""INSERT OR IGNORE INTO ai_ops_reviews(review_id,packet_id,role,provider,model,key_slot,
-            classification,severity,validation_status,result_json,agreement,disposition,created)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            classification,severity,validation_status,result_json,agreement,disposition,created,independence)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (rid, packet_id, role, provider, model, slot, result.classification, result.severity, result.validation_status,
-             payload, agreement, disposition, time.time()))
+             payload, agreement, disposition, time.time(), _independence(store, packet_id, role, provider, model)))
         store._mark_dr_dirty(db)
 
 
@@ -458,9 +473,14 @@ def resolve_finding(store: Store, finding_id: str, *, fix_commit: str, fix_versi
         store._mark_dr_dirty(db)
 
 
-def build_handoff(store: Store, *, recent_resolved_limit: int = 5) -> dict[str, object]:
+def build_handoff(store: Store, *, recent_resolved_limit: int = 5, source_commit: str = "",
+                  deployed_version: str = "") -> dict[str, object]:
     if not 0 <= recent_resolved_limit <= 20:
         raise ValueError("bounded handoff history required")
+    if source_commit and not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("invalid source commit")
+    if deployed_version and not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", deployed_version):
+        raise ValueError("invalid deployed version")
     unresolved = [dict(r) for r in store.db.execute("""SELECT finding_id,status,classification,severity,subsystem,case_ref,
         previous_finding_id,created,updated FROM ai_ops_findings WHERE status NOT IN
         ('RESOLVED','EXPECTED_BEHAVIOR','INCONCLUSIVE','DUPLICATE','ALREADY_FIXED','FALSE_POSITIVE','WONT_FIX_WITH_REASON')
@@ -468,7 +488,58 @@ def build_handoff(store: Store, *, recent_resolved_limit: int = 5) -> dict[str, 
     recent = [dict(r) for r in store.db.execute("""SELECT finding_id,status,classification,fix_commit,fix_version,updated
         FROM ai_ops_findings WHERE status IN ('RESOLVED','EXPECTED_BEHAVIOR','INCONCLUSIVE','DUPLICATE','ALREADY_FIXED','FALSE_POSITIVE','WONT_FIX_WITH_REASON')
         ORDER BY updated DESC LIMIT ?""", (recent_resolved_limit,))]
-    return {"schema": 1, "unresolved_findings": unresolved, "recent_resolved": recent}
+    active = [dict(r) for r in store.db.execute("""SELECT packet_id,state,pending_role,escalation_reason
+        FROM ai_ops_cases WHERE state IN ('PENDING_AI','REVIEWING','DEEP_REVIEW') ORDER BY updated LIMIT 64""")]
+    sync = store.db.execute("SELECT revision,synced_revision,last_verified FROM ai_ops_dr_sync WHERE destination='github'").fetchone()
+    return {"schema_version": 2, "generated_at": int(time.time()), "source_commit": source_commit,
+            "deployed_version": deployed_version, "ai_ops_schema_version": store.health()["schema"],
+            "current_phase": 6, "unresolved_findings": unresolved[:64], "active_tasks": active,
+            "blocked_tasks": [r for r in active if r["state"] == "PENDING_AI"][:32],
+            "provider_health_summary": [{"provider": r[0], "status": r[1], "slots": r[2]}
+                for r in store.db.execute("""SELECT provider,last_status,count(*) FROM ai_ops_provider_health
+                GROUP BY provider,last_status ORDER BY provider,last_status""")],
+            "latest_sync_status": {"revision": sync[0], "synced_revision": sync[1],
+                                   "last_verified": sync[2]} if sync else None,
+            "required_human_decisions": [], "recommended_review_order": [r["finding_id"] for r in unresolved[:16]],
+            "evidence_refs": [r["packet_id"] for r in active[:16]], "replay_refs": [], "test_refs": [],
+            "candidate_patch_refs": [], "last_completed_checkpoint": "phase5", "recent_resolved": recent}
+
+
+def record_feedback(store: Store, finding_id: str, verdict: str) -> None:
+    if verdict not in FEEDBACK:
+        raise ValueError("unsupported feedback verdict")
+    with store.transaction() as db:
+        if not db.execute("SELECT 1 FROM ai_ops_findings WHERE finding_id=?", (finding_id,)).fetchone():
+            raise KeyError("finding not found")
+        db.execute("""INSERT INTO ai_ops_feedback(finding_id,verdict,updated) VALUES(?,?,?)
+            ON CONFLICT(finding_id) DO UPDATE SET verdict=excluded.verdict,updated=excluded.updated""",
+                   (finding_id, verdict, time.time()))
+        store._mark_dr_dirty(db)
+
+
+def quality_summary(store: Store) -> list[dict[str, object]]:
+    """Observational counts only; the router never reads these statistics."""
+    return [dict(row) for row in store.db.execute("""SELECT provider,model,key_slot,task_role,
+        count(*) AS calls,sum(success) AS successes,sum(malformed) AS malformed,
+        sum(CASE WHEN failure_kind='timeout' THEN 1 ELSE 0 END) AS timeouts,
+        round(avg(latency_ms),1) AS avg_latency_ms FROM ai_ops_usage
+        GROUP BY provider,model,key_slot,task_role ORDER BY provider,model,key_slot,task_role""")]
+
+
+def finding_quality_summary(store: Store) -> list[dict[str, object]]:
+    """Evidence-linked observational feedback and disposition, without routing side effects."""
+    return [dict(row) for row in store.db.execute("""SELECT r.provider,r.model,r.role,
+        count(DISTINCT r.review_id) AS reviews,
+        count(DISTINCT CASE WHEN r.agreement='AGREE' THEN r.review_id END) AS agreements,
+        count(DISTINCT CASE WHEN r.agreement='DISAGREE' THEN r.review_id END) AS disagreements,
+        count(DISTINCT CASE WHEN r.validation_status='REJECTED' THEN r.review_id END) AS rejected,
+        count(DISTINCT CASE WHEN f.status='RESOLVED' THEN f.finding_id END) AS resolved,
+        count(DISTINCT CASE WHEN fb.verdict='USEFUL' THEN f.finding_id END) AS useful_feedback,
+        count(DISTINCT CASE WHEN fb.verdict='FALSE_POSITIVE' THEN f.finding_id END) AS false_positive_feedback
+        FROM ai_ops_reviews r LEFT JOIN ai_ops_cases c ON c.packet_id=r.packet_id
+        LEFT JOIN ai_ops_findings f ON f.finding_id=c.finding_id
+        LEFT JOIN ai_ops_feedback fb ON fb.finding_id=f.finding_id
+        GROUP BY r.provider,r.model,r.role ORDER BY r.provider,r.model,r.role""")]
 
 
 def _mark_case(store: Store, packet_id: str, *, state: str, result: Validated, finding_id: str | None, batch_id: str | None,
@@ -533,9 +604,20 @@ def _analysis_call(store: Store, router: Router, models: Mapping[str, str], *, b
                                 now=now, preferred_providers=preferred, exclude_providers=exclude, max_attempts=20)
     except NoFreeRoute:
         return None
-    checkpoint = {"analysis": result.analysis, "provider": result.provider, "model": result.model, "slot": result.slot_name}
+    # A model response can echo credentials or private coordinates. Never
+    # checkpoint unchecked free text even when its outer JSON shape is valid.
+    analysis = result.analysis
+    try:
+        serialized = _json(analysis)
+        if len(serialized.encode()) > 32768 or _SECRET.search(serialized) or re.search(r'"(?:lat|lon|latitude|longitude)"\s*:', serialized, re.I):
+            analysis = {"summary": "Unsafe model response discarded", "findings": []}
+        else:
+            analysis = {"summary": "Sanitized structured audit", "findings": analysis.get("findings", [])} if isinstance(analysis, dict) else {"summary": "Invalid response discarded", "findings": []}
+    except (TypeError, ValueError):
+        analysis = {"summary": "Invalid response discarded", "findings": []}
+    checkpoint = {"analysis": analysis, "provider": result.provider, "model": result.model, "slot": result.slot_name}
     store.complete_step(batch_id, step, worker, checkpoint)
-    return result.analysis, result.provider, result.model, result.slot_name
+    return analysis, result.provider, result.model, result.slot_name
 
 
 def process_next(store: Store, router: Router, models: Mapping[str, str], *, worker: str = "phase5-worker", now: float | None = None) -> str | None:
@@ -560,8 +642,17 @@ def process_next(store: Store, router: Router, models: Mapping[str, str], *, wor
         first = _first_provider(store, packet_ids[0])
         exclude = [first] if first else []
         preferred = ["mistral", "gemini", "groq", "openrouter"]
+        first_model = store.db.execute("SELECT model FROM ai_ops_reviews WHERE packet_id=? AND role='triage' ORDER BY created LIMIT 1", (packet_ids[0],)).fetchone()
+        if first_model:
+            # Different credentials, or an identically named model behind another
+            # endpoint, do not establish a genuinely independent second opinion.
+            models = {p: m for p, m in models.items() if m != first_model[0]}
     elif role == "deep_investigation":
         preferred = ["gemini", "mistral", "groq", "openrouter"]
+        # Deep-capability models require a distinct, explicitly approved free
+        # catalog route. Never silently label routine triage as strong review.
+        models = {p: m for key, m in models.items() if key.startswith("deep:")
+                  for p in [key.split(":", 1)[1]] if p in preferred and m}
 
     call = _analysis_call(store, router, models, batch_id=batch_id, role=role, packet_ids=packet_ids, packets=packets,
                           worker=worker, preferred=preferred, exclude=exclude, repair=False, now=now)
@@ -603,27 +694,33 @@ def process_next(store: Store, router: Router, models: Mapping[str, str], *, wor
                 next_state = "REVIEWING"
             _persist_review(store, packet_id, role, provider, model, slot, result)
         elif role == "independent_review":
-            first = store.db.execute("SELECT classification FROM ai_ops_reviews WHERE packet_id=? AND role='triage' ORDER BY created LIMIT 1", (packet_id,)).fetchone()
+            first = store.db.execute("SELECT classification,severity,validation_status FROM ai_ops_reviews WHERE packet_id=? AND role='triage' ORDER BY created LIMIT 1", (packet_id,)).fetchone()
             finding = store.db.execute("SELECT finding_id FROM ai_ops_cases WHERE packet_id=?", (packet_id,)).fetchone()
             finding_id = finding[0] if finding else None
-            agreement = "AGREE" if first and first[0] == result.classification else "DISAGREE"
+            agreement = "AGREE" if first and first[0] == result.classification and first[2] == "VALID" and result.validation_status == "VALID" else "DISAGREE"
             _persist_review(store, packet_id, role, provider, model, slot, result, agreement=agreement)
             if finding_id:
                 try: transition_finding(store, finding_id, "INVESTIGATING")
                 except ValueError: pass
-            next_state = "DEEP_REVIEW" if agreement == "DISAGREE" or result.severity in ("HIGH", "CRITICAL") else "INVESTIGATING"
+            high_impact = first is not None and first[1] in ("HIGH", "CRITICAL") or result.severity in ("HIGH", "CRITICAL")
+            reason = "DISAGREEMENT" if agreement == "DISAGREE" else "HIGH_IMPACT_AGREEMENT" if high_impact else ""
+            next_state = "DEEP_REVIEW" if reason else "INVESTIGATING"
+            with store.transaction() as db:
+                db.execute("UPDATE ai_ops_cases SET escalation_reason=? WHERE packet_id=?", (reason, packet_id))
+                store._mark_dr_dirty(db)
         else:
             finding = store.db.execute("SELECT finding_id FROM ai_ops_cases WHERE packet_id=?", (packet_id,)).fetchone()
             finding_id = finding[0] if finding else None
             previous = [r[0] for r in store.db.execute("SELECT classification FROM ai_ops_reviews WHERE packet_id=? AND role IN ('triage','independent_review') ORDER BY created", (packet_id,))]
             agreement = "SUPPORTS_PRIOR" if result.classification in previous else "DISAGREEMENT_REMAINS"
             _persist_review(store, packet_id, role, provider, model, slot, result, agreement=agreement)
-            if finding_id:
-                with store.transaction() as db:
-                    db.execute("UPDATE ai_ops_findings SET classification=?,severity=?,subsystem=?,status='INVESTIGATING',updated=? WHERE finding_id=?",
-                               (result.classification, result.severity, result.subsystem, time.time(), finding_id))
-                    store._mark_dr_dirty(db)
+            # The finding retains its evidence-based classification until replay,
+            # tests or a physical outcome can validate a change. Model consensus
+            # alone cannot replace the canonical finding conclusion.
             next_state = "INVESTIGATING"
+            with store.transaction() as db:
+                db.execute("UPDATE ai_ops_cases SET escalation_reason='DETERMINISTIC_INVESTIGATION_REQUIRED' WHERE packet_id=?", (packet_id,))
+                store._mark_dr_dirty(db)
         _mark_case(store, packet_id, state=next_state, result=result, finding_id=finding_id, batch_id=None, pending_role=('independent_review' if next_state == 'REVIEWING' else 'deep_investigation' if next_state == 'DEEP_REVIEW' else ''))
         store.complete_step(batch_id, step_id, worker, {"state": next_state, "classification": result.classification,
                                                        "validation": result.validation_status, "agreement": agreement})

@@ -175,19 +175,20 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
             batches.append({"batch_id": _id(row[0]), "role": _id(row[1]), "packet_ids": [_id(v) for v in packet_ids],
                             "status": _id(row[3]), "created": row[4], "updated": row[5]})
         for row in store.db.execute("""SELECT packet_id,state,pending_role,classification,severity,validation_status,finding_id,
-            batch_id,retry_count,last_error,created,updated FROM ai_ops_cases ORDER BY packet_id"""):
+            batch_id,retry_count,last_error,created,updated,escalation_reason FROM ai_ops_cases ORDER BY packet_id"""):
             cases.append({"packet_id": _id(row[0]), "state": _id(row[1]), "pending_role": _id(row[2]) if row[2] else "",
                           "classification": _id(row[3]) if row[3] else None, "severity": _id(row[4]) if row[4] else None,
                           "validation_status": _id(row[5]) if row[5] else None, "finding_id": _id(row[6]) if row[6] else None,
                           "batch_id": _id(row[7]) if row[7] else None, "retry_count": row[8],
-                          "last_error": _id(row[9]) if row[9] else None, "created": row[10], "updated": row[11]})
+                          "last_error": _id(row[9]) if row[9] else None, "created": row[10], "updated": row[11],
+                          "escalation_reason": _id(row[12]) if row[12] else ""})
         for row in store.db.execute("""SELECT review_id,packet_id,role,provider,model,key_slot,classification,severity,
-            validation_status,result_json,agreement,disposition,created FROM ai_ops_reviews ORDER BY review_id"""):
+            validation_status,result_json,agreement,disposition,created,independence FROM ai_ops_reviews ORDER BY review_id"""):
             compact = _review_compact(row[9])
             reviews.append({"review_id": _id(row[0]), "packet_id": _id(row[1]), "role": _id(row[2]), "provider": _id(row[3]),
                             "model": _id(row[4]), "key_slot": _id(row[5]), "classification": _id(row[6]), "severity": _id(row[7]),
                             "validation_status": _id(row[8]), "result": compact, "agreement": _id(row[10]) if row[10] else None,
-                            "disposition": _id(row[11]) if row[11] else None, "created": row[12]})
+                            "disposition": _id(row[11]) if row[11] else None, "created": row[12], "independence": _id(row[13])})
         for row in store.db.execute("""SELECT finding_id,signature,occurrence,status,classification,severity,subsystem,case_ref,
             previous_finding_id,fix_commit,fix_version,resolution_json,created,updated FROM ai_ops_findings ORDER BY signature,occurrence"""):
             findings.append({"finding_id": _id(row[0]), "signature": row[1], "occurrence": row[2], "status": _id(row[3]),
@@ -197,15 +198,17 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
         for row in store.db.execute("SELECT finding_id,packet_id,created FROM ai_ops_finding_packets ORDER BY finding_id,packet_id"):
             finding_packets.append({"finding_id": _id(row[0]), "packet_id": _id(row[1]), "created": row[2]})
 
-    record = {"schema": 3, "source_commit": source_commit, "jobs": jobs, "steps": steps,
+    feedback = [{"finding_id": _id(row[0]), "verdict": _id(row[1]), "updated": row[2]}
+                for row in store.db.execute("SELECT finding_id,verdict,updated FROM ai_ops_feedback ORDER BY finding_id")]
+    record = {"schema": 4, "source_commit": source_commit, "jobs": jobs, "steps": steps,
               "checkpoints": checkpoints, "evidence": evidence, "batches": batches, "cases": cases,
-              "reviews": reviews, "findings": findings, "finding_packets": finding_packets}
+              "reviews": reviews, "findings": findings, "finding_packets": finding_packets, "feedback": feedback}
     data = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > 2_000_000 or _SECRET.search(data.decode()):
         raise ValueError("sanitized export failed privacy gate")
-    manifest = {"schema": 3, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+    manifest = {"schema": 4, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
                 "jobs": len(jobs), "steps": len(steps), "evidence": len(evidence), "batches": len(batches), "cases": len(cases),
-                "reviews": len(reviews), "findings": len(findings), "finding_packets": len(finding_packets)}
+                "reviews": len(reviews), "findings": len(findings), "finding_packets": len(finding_packets), "feedback": len(feedback)}
     return data, manifest
 
 
@@ -219,7 +222,7 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
     if _SECRET.search(data.decode("utf-8")):
         raise ValueError("unsafe restore data")
     record = json.loads(data)
-    if record.get("schema") not in (1, 2, 3) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
+    if record.get("schema") not in (1, 2, 3, 4) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
         raise ValueError("unsupported backup schema")
     if record["source_commit"] != manifest.get("source_commit") or len(record["jobs"]) != manifest.get("jobs") or len(record["steps"]) != manifest.get("steps"):
         raise ValueError("backup manifest mismatch")
@@ -229,6 +232,8 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
         for key in ("batches", "cases", "reviews", "findings", "finding_packets"):
             if len(record[key]) != manifest.get(key):
                 raise ValueError("backup Phase 5 manifest mismatch")
+    if record["schema"] >= 4 and len(record["feedback"]) != manifest.get("feedback"):
+        raise ValueError("backup Phase 6 feedback manifest mismatch")
     store = Store(root)
     try:
         with store.transaction() as db:
@@ -265,23 +270,27 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
                          f.get("fix_commit"), f.get("fix_version"), resolution_json, f["created"], f["updated"]))
                 for c in record["cases"]:
                     db.execute("""INSERT INTO ai_ops_cases(packet_id,state,pending_role,classification,severity,validation_status,finding_id,batch_id,
-                        retry_count,last_error,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        retry_count,last_error,created,updated,escalation_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (_id(c["packet_id"]), _id(c["state"]), _id(c["pending_role"]) if c.get("pending_role") else "",
                          _id(c["classification"]) if c.get("classification") else None, _id(c["severity"]) if c.get("severity") else None,
                          _id(c["validation_status"]) if c.get("validation_status") else None, _id(c["finding_id"]) if c.get("finding_id") else None,
                          _id(c["batch_id"]) if c.get("batch_id") else None, c["retry_count"], _id(c["last_error"]) if c.get("last_error") else None,
-                         c["created"], c["updated"]))
+                         c["created"], c["updated"], _id(c.get("escalation_reason", "")) if c.get("escalation_reason") else ""))
                 for r in record["reviews"]:
                     compact = _review_compact(json.dumps(r["result"], sort_keys=True, separators=(",", ":")))
                     db.execute("""INSERT INTO ai_ops_reviews(review_id,packet_id,role,provider,model,key_slot,classification,severity,
-                        validation_status,result_json,agreement,disposition,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        validation_status,result_json,agreement,disposition,created,independence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (_id(r["review_id"]), _id(r["packet_id"]), _id(r["role"]), _id(r["provider"]), _id(r["model"]), _id(r["key_slot"]),
                          _id(r["classification"]), _id(r["severity"]), _id(r["validation_status"]),
                          json.dumps(compact, sort_keys=True, separators=(",", ":")), _id(r["agreement"]) if r.get("agreement") else None,
-                         _id(r["disposition"]) if r.get("disposition") else None, r["created"]))
+                         _id(r["disposition"]) if r.get("disposition") else None, r["created"],
+                         _id(r.get("independence", "NOT_APPLICABLE"))))
                 for fp in record["finding_packets"]:
                     db.execute("INSERT INTO ai_ops_finding_packets(finding_id,packet_id,created) VALUES(?,?,?)",
                                (_id(fp["finding_id"]), _id(fp["packet_id"]), fp["created"]))
+                for fb in record.get("feedback", []):
+                    db.execute("INSERT INTO ai_ops_feedback(finding_id,verdict,updated) VALUES(?,?,?)",
+                               (_id(fb["finding_id"]), _id(fb["verdict"]), fb["updated"]))
         if store.health()["integrity"] != "ok":
             raise RuntimeError("restored database failed integrity check")
         return store

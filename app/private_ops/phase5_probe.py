@@ -60,8 +60,9 @@ def run(source: Store) -> str:
                         VALUES(?,?,?,?,?,?,?)""", tuple(row))
             slots = [Slot("groq", "GROQ_KEY", "fake"), Slot("mistral", "MISTRAL_API", "fake"),
                      Slot("gemini", "GEMINI_API_KEY", "fake")]
-            models = {"groq": "phase5-fake", "mistral": "phase5-fake", "gemini": "phase5-fake"}
-            r = Router(temp, slots, adapter=_FakeAdapter(), approved_free_routes={(p, m) for p, m in models.items()})
+            models = {"groq": "phase5-groq-fake", "mistral": "phase5-mistral-fake", "gemini": "phase5-gemini-fake"}
+            models["deep:gemini"] = "phase5-deep-gemini-fake"
+            r = Router(temp, slots, adapter=_FakeAdapter(), approved_free_routes={(p, m) for p, m in models.items() if ":" not in p} | {("gemini", models["deep:gemini"])})
             result = process_backlog(temp, r, models, worker="phase5-shadow", max_batches=32)
             pending = temp.db.execute("SELECT count(*) FROM ai_ops_cases WHERE state='PENDING_AI'").fetchone()[0]
             reviews = temp.db.execute("SELECT count(*) FROM ai_ops_reviews").fetchone()[0]

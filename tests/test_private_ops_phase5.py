@@ -113,7 +113,7 @@ def test_02_groq_key_failure_fails_over_to_peer(tmp_path):
 # 3. One Groq 429 does not mark all Groq exhausted.
 def test_03_single_groq_quota_still_uses_remaining_pool(tmp_path):
     s, _ = queued_store(tmp_path)
-    a = ScenarioAdapter(failures={"GROQ_KEY": [ProviderFailure("quota", status=429, retry_after=60, provider_wide=True)]})
+    a = ScenarioAdapter(failures={"GROQ_KEY": [ProviderFailure("quota", status=429, retry_after=60, provider_wide=False)]})
     r = router(s, a, [Slot("groq", "GROQ_KEY", "a"), Slot("groq", "GROQ_KEY_2", "b"), Slot("mistral", "MISTRAL_API", "c")])
     assert process_next(s, r, MODELS) == "COMPLETE"
     assert [c[0] for c in a.calls[:2]] == ["groq", "groq"]
@@ -295,7 +295,10 @@ def test_18_disagreement_escalates_to_deep_reviewer(tmp_path):
     assert process_next(s, router(s, ScenarioAdapter(review="POSSIBLE_ESTIMATOR_ERROR")), MODELS) == "COMPLETE"
     queue_review_batches(s)
     a3 = ScenarioAdapter(deep="ALERT_LIFECYCLE_ERROR")
-    assert process_next(s, router(s, a3), MODELS) == "COMPLETE"
+    strong = "x-free-strong"
+    deep_router = Router(s, [Slot("gemini", "GEMINI_API_KEY", "fake")], adapter=a3,
+                         approved_free_routes=FREE | {("gemini", strong)})
+    assert process_next(s, deep_router, {**MODELS, "deep:gemini": strong}) == "COMPLETE"
     deep = s.db.execute("SELECT provider,role FROM ai_ops_reviews WHERE packet_id=? AND role='deep_investigation'", (pids[0],)).fetchone()
     assert tuple(deep) == ("gemini", "deep_investigation")
     s.close()

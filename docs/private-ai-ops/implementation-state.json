@@ -4,7 +4,7 @@
   "state_schema_version": 1,
   "last_completed_phase": 5,
   "current_phase": 6,
-  "phase_status": "paused_at_user_requested_phase_5_gate",
+  "phase_status": "phase_6_in_progress_validation_pending",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -169,5 +169,16 @@
     "security": "provider values remained GitHub Actions secrets and were masked; no raw key is stored in Phase-5 metadata, prompts, results or logs; deterministic flight decision code remains outside the AI Ops service",
     "known_limitations": "no live Phase-5 model inference was performed and the live AI-Ops volume had no persisted Phase-4 packets for the one-shot deployment replay; both are intentional safety/quota choices, not blockers for the completed Phase-5 orchestration gate",
     "next_gate": "Phase 6 remains completely unstarted until explicit owner instruction"
+  },
+  "phase_6_progress": {
+    "status": "in_progress",
+    "schema_version": 6,
+    "scope": "independent review enforcement, high-impact/disagreement escalation, explicit approved deep routes, evidence validation, usefulness feedback, observational metrics and sanitized DR schema 4",
+    "local_tests": "private focused and full repository tested; final results recorded after checkpoint",
+    "real_provider_canary": "pending verified free-account capacity and isolated persistent canary",
+    "scheduler_enabled": false,
+    "paid_usage_performed": false,
+    "community_impact": "none_private_owner_railway_checkpoint_only",
+    "next_gate": "GitHub CI individual jobs, dedicated-service exact commit deploy, DR and health, 5-second production cadence, safe real canary if free capacity verifiable"
   }
 }

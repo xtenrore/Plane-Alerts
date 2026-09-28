@@ -74,7 +74,7 @@ def test_pairing_and_paid_routes_fail_closed():
 
 def test_key_failover_ledger_and_independent_429_slots(tmp_path):
     store = Store(tmp_path)
-    transport = FakeHTTP([(429, {"Retry-After": "75"}, b""), ok("groq")])
+    transport = FakeHTTP([(429, {"Retry-After": "75", "X-RateLimit-Scope": "key"}, b""), ok("groq")])
     slots = [Slot("groq", "GROQ_KEY", "first"), Slot("groq", "GROQ_KEY_2", "second")]
     router = Router(store, slots, adapter=Adapter(transport), approved_free_routes={("groq", "approved-model")})
     assert router.execute(TASK, {"groq": "approved-model"}, now=100).slot_name == "GROQ_KEY_2"
@@ -84,17 +84,16 @@ def test_key_failover_ledger_and_independent_429_slots(tmp_path):
     assert health["GROQ_KEY_2"]["input_tokens"] == 8
     store.close()
 
-    # In this deployment the configured credential slots are independent quota pools.
-    # Even a provider response that labels a limit account/org-wide must not cause one
-    # slot's 429 to suppress the remaining explicitly configured Groq slots.
+    # An explicitly organization-wide limit stops peer keys until cooldown.
     clean = tmp_path / "second"
     clean.mkdir()
     store = Store(clean)
     transport = FakeHTTP([(429, {"Retry-After": "120", "X-RateLimit-Scope": "organization"}, b""), ok("groq")])
     router = Router(store, slots, adapter=Adapter(transport), approved_free_routes={("groq", "approved-model")})
-    assert router.execute(TASK, {"groq": "approved-model"}, now=200).slot_name == "GROQ_KEY_2"
-    assert len(transport.calls) == 2
-    assert store.db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider='groq'").fetchone()[0] == 0
+    with pytest.raises(NoFreeRoute):
+        router.execute(TASK, {"groq": "approved-model"}, now=200)
+    assert len(transport.calls) == 1
+    assert store.db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider='groq'").fetchone()[0] == 320
     store.close()
 
 

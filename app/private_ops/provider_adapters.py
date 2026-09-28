@@ -228,7 +228,7 @@ class Adapter:
             scope = next((str(v).lower() for k, v in response_headers.items() if k.lower() == "x-ratelimit-scope"), "")
             kind = "quota" if status == 429 else "auth" if status in (401, 403) else "context" if _context_too_large(status, raw) else "server" if status >= 500 else "request"
             raise ProviderFailure(kind, status=status, retry_after=retry_after(response_headers, now=now) if status == 429 else 0,
-                                  provider_wide=scope in ("organization", "account", "provider"))
+                                  provider_wide=status == 429 and scope not in ("key", "credential", "slot"))
         if len(raw) > 131072:
             raise ProviderFailure("malformed")
         try:

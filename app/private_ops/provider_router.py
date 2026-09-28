@@ -64,6 +64,7 @@ class Router:
         # circuit opened by one key during this call applies only to later calls;
         # it must never skip still-untried independent key slots in the same pool.
         initial_circuit_open: dict[str, bool] = {}
+        provider_wide_limited: set[str] = set()
         for _, slot in eligible:
             if attempted >= max_attempts:
                 break
@@ -75,7 +76,7 @@ class Router:
                 if provider not in initial_circuit_open:
                     circuit = db.execute("SELECT open_until FROM ai_ops_provider_circuit WHERE provider=?", (provider,)).fetchone()
                     initial_circuit_open[provider] = bool(circuit and circuit[0] > now)
-                if key[0] > now or initial_circuit_open[provider]:
+                if key[0] > now or initial_circuit_open[provider] or provider in provider_wide_limited:
                     continue
             attempted += 1
             started = time.monotonic()
@@ -85,8 +86,8 @@ class Router:
                 elapsed = int((time.monotonic() - started) * 1000)
                 self._usage(task, slot, models[provider], elapsed, success=False, failure_kind=exc.kind)
                 with self.store.transaction() as db:
-                    # This deployment's configured credentials are independent quota pools.
-                    # A 429 therefore cools only the exact key slot; it never exhausts peers.
+                    # Only explicitly slot-scoped 429 responses permit trying a
+                    # peer credential. Account-wide quota must stop the whole pool.
                     cooldown = now + (exc.retry_after or 300) if exc.kind == "quota" else now + 900 if exc.kind == "auth" else now
                     db.execute("""UPDATE ai_ops_provider_health SET attempts=attempts+1,failures=failures+1,
                         consecutive_failures=consecutive_failures+1,cooldown_until=max(cooldown_until,?),
@@ -96,6 +97,10 @@ class Router:
                         db.execute("""UPDATE ai_ops_provider_circuit SET consecutive_failures=consecutive_failures+1,
                             open_until=CASE WHEN consecutive_failures+1>=3 THEN ? ELSE open_until END,
                             updated=? WHERE provider=?""", (now + 300, now, provider))
+                    if exc.kind == "quota" and exc.provider_wide:
+                        provider_wide_limited.add(provider)
+                        db.execute("UPDATE ai_ops_provider_circuit SET open_until=max(open_until,?),updated=? WHERE provider=?",
+                                   (cooldown, now, provider))
                 continue
             elapsed = int((time.monotonic() - started) * 1000)
             self._usage(task, slot, models[provider], elapsed, success=True,

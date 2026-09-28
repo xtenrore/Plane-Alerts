@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -168,6 +168,18 @@ class Store:
                     created REAL NOT NULL, PRIMARY KEY(finding_id,packet_id)
                 )""")
                 db.execute("PRAGMA user_version=5")
+                version = 5
+            if version == 5:
+                db.execute("ALTER TABLE ai_ops_reviews ADD COLUMN independence TEXT NOT NULL DEFAULT 'NOT_APPLICABLE'")
+                db.execute("ALTER TABLE ai_ops_cases ADD COLUMN escalation_reason TEXT NOT NULL DEFAULT ''")
+                db.execute("""CREATE TABLE ai_ops_feedback (
+                    finding_id TEXT PRIMARY KEY REFERENCES ai_ops_findings(finding_id),
+                    verdict TEXT NOT NULL CHECK (verdict IN
+                        ('USEFUL','NOT_USEFUL','FALSE_POSITIVE','NEEDS_MORE_INVESTIGATION',
+                         'ALREADY_KNOWN','CORRECTLY_IDENTIFIED_PROBLEM','INSUFFICIENT_EVIDENCE','WRONG_CONCLUSION')),
+                    updated REAL NOT NULL
+                )""")
+                db.execute("PRAGMA user_version=6")
 
     @staticmethod
     def _mark_dr_dirty(db: sqlite3.Connection) -> None:
