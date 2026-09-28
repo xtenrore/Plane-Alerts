@@ -19,9 +19,21 @@ from app.private_ops.dr_export import export, restore_empty
 from app.private_ops.phase5 import (_build_prompt, _packet, _persist_review, _strict_batch,
                                     seed_pending_cases)
 from app.private_ops.prediction_source import read_hour
-from app.private_ops.provider_adapters import Adapter, AnalysisTask, Slot
+from app.private_ops.provider_adapters import Adapter, AnalysisTask, ProviderFailure, Slot
 from app.private_ops.provider_router import NoFreeRoute, Router
 from app.private_ops.store import Store
+
+
+class CanaryAdapter(Adapter):
+    def execute(self, slot: Slot, task: AnalysisTask, model: str, *, now: float):
+        try:
+            return super().execute(slot, task, model, now=now)
+        except ProviderFailure as exc:
+            # Only status/class/scope; provider response and credentials stay private.
+            print("PHASE6_CANARY_PROVIDER_FAILURE provider=" + slot.provider +
+                  " kind=" + exc.kind + " http_status=" + str(exc.status) +
+                  " scope=" + ("provider" if exc.provider_wide else "unspecified"), flush=True)
+            raise
 
 
 def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str],
@@ -143,7 +155,7 @@ def main() -> None:
             with store.transaction() as db:
                 db.execute("DELETE FROM ai_ops_evidence WHERE packet_id<>?", (packet_id,))
             seed_pending_cases(store)
-            router = Router(store, slots, adapter=Adapter(), approved_free_routes=set(models.items()))
+            router = Router(store, slots, adapter=CanaryAdapter(), approved_free_routes=set(models.items()))
             first, second = run_pair(store, packet_id, router, models, second_provider)
             data, manifest = export(store, source_commit=args.source_commit)
             restored_root = Path(td) / "reopen"
