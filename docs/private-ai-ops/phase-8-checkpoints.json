@@ -39,7 +39,49 @@
         "Direct external screenshot automation was unavailable from the execution environment; responsive/mobile behavior is covered by the committed layout contract and acceptance tests."
       ]
     },
-    "8B": {"status": "NOT_STARTED"},
+    "8B": {
+      "status": "COMPLETE",
+      "checkpoint_commit": "dad6b3f14f681c8a466eb9ae195fa6926c2563d5",
+      "github_phase8b_run": 36448111539,
+      "railway_deployment": "1bd836f8-3d2b-4c8d-8463-92e0b9934b8c",
+      "production_url": "https://plane-alerts-ai-ops-production.up.railway.app/supervisor",
+      "selected_primary_model": "@cf/nvidia/nemotron-3-120b-a12b",
+      "benchmark": {
+        "selected_score": 10,
+        "gemma_4_26b_a4b_it_score": 10,
+        "glm_4_7_flash_score": 9,
+        "estimated_total_neurons": 59,
+        "free_only": true
+      },
+      "scheduler_enabled": false,
+      "paid_runtime_ai_enabled": false,
+      "acceptance": {
+        "grounded_supervisor_tests": "PASS",
+        "full_repository_tests": "PASS",
+        "secret_and_retired_runtime_checks": "PASS",
+        "real_cloudflare_benchmark": "PASS",
+        "exact_tested_checkpoint_deploy": "PASS",
+        "owner_authenticated_supervisor": "PASS",
+        "unauthenticated_supervisor_api_rejected": "PASS",
+        "read_only_operations_authority": "PASS",
+        "real_grounded_chat": "PASS",
+        "cloudflare_slot_1_primary": "PASS",
+        "cloudflare_slot_1_to_slot_2_failover_history": "PASS",
+        "free_fallback_routes": "PASS",
+        "conversation_persistence": "PASS",
+        "model_affinity_persistence": "PASS",
+        "restart_redeploy_readback": "PASS",
+        "no_secret_exposure": "PASS",
+        "no_paid_runtime_ai": "PASS"
+      },
+      "notes": [
+        "The selected primary model was benchmark-selected from current approved Workers-Free candidates rather than chosen solely from a public benchmark.",
+        "Cloudflare reasoning-capable models use bounded reasoning controls so the Supervisor returns user-visible content inside the output budget.",
+        "The live canary used Cloudflare Slot 1 with @cf/nvidia/nemotron-3-120b-a12b and returned a grounded non-empty answer.",
+        "The same exact application checkpoint was redeployed and the existing Supervisor conversation, model affinity, and messages were read back successfully from the persistent volume.",
+        "The Supervisor remains read-only for operations: it has no merge, deploy, secret/config mutation, or flight-decision authority in 8B."
+      ]
+    },
     "8C": {"status": "NOT_STARTED"},
     "8D": {"status": "NOT_STARTED"},
     "8E": {"status": "NOT_STARTED"},
