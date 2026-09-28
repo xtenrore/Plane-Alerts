@@ -2,6 +2,11 @@ name: Private Operations Phase 6 one-shot free inference canary
 
 on:
   workflow_dispatch:
+  # One-shot bounded activation for the Gemini fallback checkpoint. Remove
+  # this branch-only trigger immediately after the canary result is inspected.
+  push:
+    branches: [feature/private-ai-operations]
+    paths: ['.github/workflows/private-ai-ops-phase6-canary.yml']
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ jobs:
     env:
       GROQ_KEY: ${{ secrets.GROQ_KEY }}
       MISTRAL_API: ${{ secrets.MISTRAL_API }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       AI_OPS_PAID_USAGE_ALLOWED: 'false'
@@ -24,6 +30,8 @@ jobs:
       # exact outer JSON schema and numeric-array field types for one canary.
       AI_OPS_CANARY_GROQ_MODEL: openai/gpt-oss-120b
       AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
+      AI_OPS_CANARY_SECOND_PROVIDER: gemini
+      AI_OPS_CANARY_GEMINI_MODEL: gemini-2.5-flash
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
