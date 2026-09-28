@@ -51,6 +51,8 @@ def test_provider_wire_shape_and_normalized_result(provider, name, model, url_pa
     result = Adapter(transport).execute(slot, TASK, model, now=0)
     assert result.analysis == {"summary": "synthetic audit", "findings": []}
     assert result.slot_name == name and url_part in transport.calls[0][0]
+    if provider in ("groq", "mistral"):
+        assert transport.calls[0][2]["response_format"] == {"type": "json_object"}
     assert "sensitive-test-value" not in repr(slot) and "sensitive-test-value" not in repr(result)
     if provider == "gemini":
         assert transport.calls[0][1]["x-goog-api-key"] == slot.credential

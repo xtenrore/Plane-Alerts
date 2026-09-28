@@ -24,6 +24,8 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       AI_OPS_PAID_USAGE_ALLOWED: 'false'
+      # Live catalog checked, and the shared inference prompt now states the
+      # exact required outer JSON schema for the bounded final attempt.
       AI_OPS_CANARY_GROQ_MODEL: openai/gpt-oss-120b
       AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c

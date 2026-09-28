@@ -222,7 +222,8 @@ class Adapter:
                 raise ValueError("paid OpenRouter route refused")
             headers["Authorization"] = "Bearer " + slot.credential
             payload = {"model": model, "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": task.prompt}], "max_tokens": 1024}
-            if slot.provider == "mistral": payload["response_format"] = {"type": "json_object"}
+            if slot.provider in ("mistral", "groq"):
+                payload["response_format"] = {"type": "json_object"}
         status, response_headers, raw = self.transport.post(url, headers, json.dumps(payload, separators=(",", ":")).encode())
         if status != 200:
             scope = next((str(v).lower() for k, v in response_headers.items() if k.lower() == "x-ratelimit-scope"), "")

@@ -41,6 +41,11 @@ def test_one_packet_shadow_canary_is_blind_durable_and_never_calls_deep(tmp_path
     restored.close()
 
 
+def test_provider_prompt_explicitly_describes_outer_json_shape():
+    prompt = phase5._build_prompt("triage", [packet()])
+    assert "only summary (a short string) and findings (an array)" in prompt
+
+
 def test_low_risk_agreement_needs_no_third_call(tmp_path):
     store = Store(tmp_path)
     p = packet(reason="trajectory_changed")

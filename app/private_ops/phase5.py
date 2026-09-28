@@ -175,7 +175,8 @@ def queue_review_batches(store: Store, *, limit: int = 64) -> list[str]:
 
 
 def _result_schema_instruction() -> str:
-    return ("Return exactly one object in findings for every supplied case. Each object must contain exactly: "
+    return ("Return exactly one JSON object with only summary (a short string) and findings (an array); no markdown or extra keys. "
+            "Return exactly one object in findings for every supplied case. Each object must contain exactly: "
             "case_ref, classification, severity, subsystem, event_ids, cpa_km, observed_km, states, coverage, rationale, needs_review. "
             "classification must be one of: " + ", ".join(sorted(CLASSIFICATIONS)) + ". "
             "severity: LOW|MEDIUM|HIGH|CRITICAL. subsystem: prediction|alert_lifecycle|route_guard|provider|coverage|storage|trajectory|unknown. "
