@@ -16,8 +16,8 @@ from app.private_ops.provider_adapters import ProviderFailure, configured_slots
 from app.private_ops.supervisor import (
     CLOUDFLARE_FREE_MODELS,
     CLOUDFLARE_DAILY_NEURON_BUDGET,
-    SupervisorTransport,
 )
+from app.private_ops.supervisor_transport_guard import GuardedSupervisorTransport
 
 CANDIDATES = (
     "@cf/zai-org/glm-4.7-flash",
@@ -97,7 +97,7 @@ def score_answer(value: dict) -> dict[str, int]:
     }
 
 
-def benchmark_model(transport: SupervisorTransport, slots, model: str, run_id: str, used_neurons: int) -> tuple[dict, int]:
+def benchmark_model(transport: GuardedSupervisorTransport, slots, model: str, run_id: str, used_neurons: int) -> tuple[dict, int]:
     result = {"model": model, "available": False, "score": 0, "criteria": {}, "latency_ms": 0,
               "estimated_neurons": 0, "slot": None, "failure": None,
               "truth_content_bytes": 0, "truth_parsed_keys": []}
@@ -178,7 +178,7 @@ def main() -> int:
     slots.sort(key=lambda slot: 1 if slot.name.endswith("_2") else 0)
     if not slots:
         raise RuntimeError("no configured paired Cloudflare Supervisor slot")
-    transport = SupervisorTransport()
+    transport = GuardedSupervisorTransport()
     run_id = "phase8b-" + str(int(time.time()))
     used = 0
     results = []
