@@ -41,7 +41,8 @@ def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str
             raise RuntimeError(role + "_free_route_unavailable_failure_kind=" + kind) from None
         validated, shape = _strict_batch({case: packet}, result.analysis)
         if not shape or len(validated) != 1 or validated[0].validation_status != "VALID":
-            raise RuntimeError(role + "_evidence_validation_failed")
+            errors = ",".join(validated[0].validation_errors) if validated else "invalid_shape"
+            raise RuntimeError(role + "_evidence_validation_failed:" + errors)
         agreement = None if not results else "AGREE" if results[0] == validated[0].classification else "DISAGREE"
         _persist_review(store, packet_id, role, result.provider, result.model, result.slot_name,
                         validated[0], agreement=agreement)

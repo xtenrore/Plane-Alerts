@@ -24,7 +24,7 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       AI_OPS_PAID_USAGE_ALLOWED: 'false'
-      AI_OPS_CANARY_GROQ_MODEL: openai/gpt-oss-20b
+      AI_OPS_CANARY_GROQ_MODEL: openai/gpt-oss-120b
       AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
