@@ -25,6 +25,7 @@ from .phase6_volume_canary import run as run_phase6_volume_canary
 from .dashboard import create_dashboard_handler, read_health
 from .provider_adapters import configured_slots
 from .supervisor import SupervisorBackend, SupervisorEngine, SupervisorStore
+from .supervisor_transport_guard import GuardedSupervisorTransport
 from .supervisor_web import extend_private_handler
 
 
@@ -136,6 +137,7 @@ def main() -> None:
                 SupervisorStore(data_dir),
                 slots,
                 cloudflare_model=model,
+                transport=GuardedSupervisorTransport(),
             )
         except Exception:
             store.close()
