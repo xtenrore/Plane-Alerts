@@ -233,7 +233,7 @@ def test_schema_five_upgrade_preserves_prior_review_and_finding(tmp_path):
     store.db.execute("PRAGMA user_version=5")
     store.close()
     upgraded = Store(tmp_path)
-    assert upgraded.health()["schema"] == 7
+    assert upgraded.health()["schema"] == 8
     assert upgraded.db.execute("SELECT finding_id FROM ai_ops_findings").fetchone()[0] == finding
     assert upgraded.db.execute("SELECT packet_id,independence FROM ai_ops_reviews").fetchone()[:] == (pid, "NOT_APPLICABLE")
     phase5.record_feedback(upgraded, finding, "USEFUL")

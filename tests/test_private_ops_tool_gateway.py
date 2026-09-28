@@ -108,7 +108,7 @@ def test_duplicate_worker_and_persistent_result(gateway):
     finished = gw.store.finish_tool('once', 'a', 'SUCCEEDED', {'class': 'OK'})
     reopened = Store(gw.store.root)
     try:
-        assert reopened.health()['schema'] == SCHEMA_VERSION == 7
+        assert reopened.health()['schema'] == SCHEMA_VERSION == 8
         assert reopened.claim_tool('once', 'b') is None
         assert reopened.db.execute('SELECT output_hash FROM ai_ops_tool_operations WHERE operation_id="once"').fetchone()[0] == finished['output_hash']
     finally:
@@ -155,7 +155,7 @@ def test_schema_six_upgrade_preserves_reviews_feedback_and_jobs(tmp_path):
     store.close()
     upgraded = Store(root)
     try:
-        assert upgraded.health()['schema'] == 7
+        assert upgraded.health()['schema'] == 8
         assert upgraded.db.execute('SELECT id FROM ai_ops_jobs').fetchone()[0] == 'existing-job'
         assert {'ai_ops_reviews', 'ai_ops_feedback', 'ai_ops_provider_health',
                 'ai_ops_tool_operations'} <= {r[0] for r in upgraded.db.execute('SELECT name FROM sqlite_master')}

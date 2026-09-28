@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -196,6 +196,39 @@ class Store:
                 )""")
                 db.execute("CREATE INDEX ai_ops_tool_job ON ai_ops_tool_operations(job_id,created)")
                 db.execute("PRAGMA user_version=7")
+                version = 7
+            if version == 7:
+                tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if "ai_ops_chat_sessions" not in tables:
+                    db.execute("""CREATE TABLE ai_ops_chat_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        conversation_id TEXT NOT NULL UNIQUE,
+                        session_provider TEXT NOT NULL,
+                        session_model TEXT NOT NULL,
+                        current_topic TEXT,
+                        verified_facts_json TEXT NOT NULL DEFAULT '[]',
+                        referenced_task_ids_json TEXT NOT NULL DEFAULT '[]',
+                        referenced_finding_ids_json TEXT NOT NULL DEFAULT '[]',
+                        completed_commands_json TEXT NOT NULL DEFAULT '[]',
+                        pending_action_json TEXT,
+                        last_backend_snapshot_version INTEGER NOT NULL DEFAULT 0,
+                        provider_switch_history_json TEXT NOT NULL DEFAULT '[]',
+                        created REAL NOT NULL,
+                        updated REAL NOT NULL
+                    )""")
+                if "ai_ops_chat_messages" not in tables:
+                    db.execute("""CREATE TABLE ai_ops_chat_messages (
+                        message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL REFERENCES ai_ops_chat_sessions(session_id),
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        provider TEXT,
+                        model TEXT,
+                        tool_calls_json TEXT,
+                        created REAL NOT NULL
+                    )""")
+                    db.execute("CREATE INDEX ai_ops_chat_msgs_session ON ai_ops_chat_messages(session_id, created)")
+                db.execute("PRAGMA user_version=8")
 
     @staticmethod
     def _mark_dr_dirty(db: sqlite3.Connection) -> None:
@@ -411,6 +444,75 @@ class Store:
                 ON CONFLICT(name) DO UPDATE SET checkpoint=excluded.checkpoint,updated=excluded.updated""",
                 (name, value, time.time()))
             self._mark_dr_dirty(db)
+
+    def create_chat_session(self, session_id: str, conversation_id: str, provider: str, model: str,
+                            topic: str | None = None) -> dict[str, object]:
+        now = time.time()
+        with self.transaction() as db:
+            db.execute("""INSERT INTO ai_ops_chat_sessions
+                (session_id, conversation_id, session_provider, session_model, current_topic, created, updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, conversation_id, provider, model, topic, now, now))
+            self._mark_dr_dirty(db)
+            return dict(db.execute("SELECT * FROM ai_ops_chat_sessions WHERE session_id=?", (session_id,)).fetchone())
+
+    def get_chat_session(self, session_id: str) -> dict[str, object] | None:
+        row = self.db.execute("SELECT * FROM ai_ops_chat_sessions WHERE session_id=? OR conversation_id=?",
+                              (session_id, session_id)).fetchone()
+        return dict(row) if row else None
+
+    def update_chat_continuity(self, session_id: str, *, provider: str | None = None, model: str | None = None,
+                               topic: str | None = None, verified_facts: list[str] | None = None,
+                               referenced_tasks: list[str] | None = None, referenced_findings: list[str] | None = None,
+                               completed_commands: list[str] | None = None, pending_action: dict[str, object] | None = None,
+                               provider_switch: dict[str, object] | None = None) -> dict[str, object]:
+        now = time.time()
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM ai_ops_chat_sessions WHERE session_id=?", (session_id,)).fetchone()
+            if not row:
+                raise KeyError("chat session not found")
+
+            p_provider = provider or row["session_provider"]
+            p_model = model or row["session_model"]
+            p_topic = topic if topic is not None else row["current_topic"]
+            p_facts = json.dumps(verified_facts) if verified_facts is not None else row["verified_facts_json"]
+            p_tasks = json.dumps(referenced_tasks) if referenced_tasks is not None else row["referenced_task_ids_json"]
+            p_findings = json.dumps(referenced_findings) if referenced_findings is not None else row["referenced_finding_ids_json"]
+            p_commands = json.dumps(completed_commands) if completed_commands is not None else row["completed_commands_json"]
+            p_action = json.dumps(pending_action) if pending_action is not None else row["pending_action_json"]
+
+            switches = json.loads(row["provider_switch_history_json"] or "[]")
+            if provider_switch:
+                switches.append(provider_switch)
+            p_switches = json.dumps(switches)
+
+            db.execute("""UPDATE ai_ops_chat_sessions SET
+                session_provider=?, session_model=?, current_topic=?, verified_facts_json=?,
+                referenced_task_ids_json=?, referenced_finding_ids_json=?, completed_commands_json=?,
+                pending_action_json=?, provider_switch_history_json=?, updated=?
+                WHERE session_id=?""",
+                (p_provider, p_model, p_topic, p_facts, p_tasks, p_findings, p_commands, p_action, p_switches, now, session_id))
+            self._mark_dr_dirty(db)
+            return dict(db.execute("SELECT * FROM ai_ops_chat_sessions WHERE session_id=?", (session_id,)).fetchone())
+
+    def append_chat_message(self, session_id: str, role: str, content: str, *,
+                            provider: str | None = None, model: str | None = None,
+                            tool_calls: list[dict[str, object]] | None = None) -> dict[str, object]:
+        now = time.time()
+        tc_json = json.dumps(tool_calls) if tool_calls else None
+        with self.transaction() as db:
+            cursor = db.execute("""INSERT INTO ai_ops_chat_messages
+                (session_id, role, content, provider, model, tool_calls_json, created)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, role, content, provider, model, tc_json, now))
+            db.execute("UPDATE ai_ops_chat_sessions SET updated=? WHERE session_id=?", (now, session_id))
+            self._mark_dr_dirty(db)
+            return dict(db.execute("SELECT * FROM ai_ops_chat_messages WHERE message_id=?", (cursor.lastrowid,)).fetchone())
+
+    def list_chat_messages(self, session_id: str, limit: int = 100) -> list[dict[str, object]]:
+        rows = self.db.execute("""SELECT * FROM ai_ops_chat_messages
+            WHERE session_id=? ORDER BY message_id ASC LIMIT ?""", (session_id, max(1, min(limit, 200)))).fetchall()
+        return [dict(r) for r in rows]
 
     def health(self) -> dict[str, object]:
         tables = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}

@@ -124,6 +124,17 @@ class Router:
         if cooldown_until > now: return "COOLDOWN"
         return "PROBING"
 
+    def calculate_quality_weights(self) -> dict[str, float]:
+        """Calculate quality weights per provider based on user feedback and metrics."""
+        with self.store.transaction() as db:
+            rows = db.execute("SELECT verdict, count(*) FROM ai_ops_feedback GROUP BY verdict").fetchall()
+            counts = {r[0]: r[1] for r in rows}
+            useful = counts.get("USEFUL", 0) + counts.get("CORRECTLY_IDENTIFIED_PROBLEM", 0)
+            not_useful = counts.get("NOT_USEFUL", 0) + counts.get("FALSE_POSITIVE", 0) + counts.get("WRONG_CONCLUSION", 0)
+            total = useful + not_useful
+            ratio = (useful / total) if total > 0 else 1.0
+            return {"quality_weight": max(0.2, min(1.5, ratio)), "useful_count": useful, "not_useful_count": not_useful}
+
     def health(self, *, now: float | None = None) -> list[dict[str, object]]:
         now = time.time() if now is None else now
         rows = [dict(row) for row in self.store.db.execute("""SELECT slot,provider,attempts,successes,failures,

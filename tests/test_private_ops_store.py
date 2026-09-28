@@ -39,7 +39,7 @@ def test_restart_preserves_committed_step_and_reclaims_expired_job(tmp_path, mon
     second.complete_step("audit:1", "packet:2", "worker-b", {"valid": False})
     second.finish_job("audit:1", "worker-b")
     assert second.claim("worker-c") is None
-    assert second.health() == {"schema": 7, "integrity": "ok", "pending": 0, "pending_ai": 0, "active_findings": 0}
+    assert second.health() == {"schema": 8, "integrity": "ok", "pending": 0, "pending_ai": 0, "active_findings": 0}
     second.close()
 
 
@@ -97,7 +97,7 @@ def test_isolated_health_endpoint_exposes_only_bounded_status(tmp_path):
         root = f"http://127.0.0.1:{ready.get(timeout=2)}"
         with urlopen(root + "/ready") as response:
             assert response.status == 200
-            assert response.read() == b'{"schema":7,"integrity":"ok","pending":0,"pending_ai":0,"active_findings":0}'
+            assert response.read() == b'{"schema":8,"integrity":"ok","pending":0,"pending_ai":0,"active_findings":0}'
         with pytest.raises(HTTPError) as error:
             urlopen(root + "/tasks")
         assert error.value.code == 404

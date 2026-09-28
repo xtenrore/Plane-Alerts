@@ -90,6 +90,19 @@ def _anomalies(events: list[dict]) -> list[str]:
     return reasons
 
 
+def verify_shadow_parity(legacy_output: list[dict], ai_ops_output: list[dict]) -> dict[str, object]:
+    """Verify parity between legacy automation output and AI Ops collector output before handover."""
+    legacy_ids = {r.get("event_id") or r.get("case_id") for r in legacy_output if r.get("event_id") or r.get("case_id")}
+    ai_ids = {r.get("event_id") or r.get("case_ref") for r in ai_ops_output if r.get("event_id") or r.get("case_ref")}
+    missing = legacy_ids - ai_ids
+    return {
+        "parity_ok": len(missing) == 0,
+        "legacy_count": len(legacy_ids),
+        "ai_ops_count": len(ai_ids),
+        "missing_in_ai_ops": list(missing)
+    }
+
+
 def adapt_prediction_lab_record(raw: Mapping[str, object]) -> dict:
     """Allowlist only sanitized Prediction Lab fields; discard raw coordinates."""
     captured = raw.get("captured_at")

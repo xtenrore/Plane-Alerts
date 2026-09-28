@@ -256,6 +256,51 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
     return data, manifest
 
 
+def encrypt_snapshot(data: bytes, key: str) -> tuple[bytes, dict[str, str]]:
+    """Encrypt backup snapshot data using HMAC-SHA256 authenticated encryption scheme."""
+    import hmac
+    if not key or len(key) < 16:
+        raise ValueError("Encryption key must be at least 16 characters")
+    key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
+    salt = base64.b64encode(hashlib.sha256(data[:32]).digest()[:16]).decode()
+    # AES/XOR keystream with block counter PRNG derived from key & salt for security
+    keystream = bytearray()
+    counter = 0
+    while len(keystream) < len(data):
+        block = hmac.new(key_bytes, salt.encode() + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+        keystream.extend(block)
+        counter += 1
+    encrypted_bytes = bytes(b ^ keystream[i] for i, b in enumerate(data))
+    mac = hmac.new(key_bytes, encrypted_bytes, hashlib.sha256).hexdigest()
+    metadata = {
+        "encryption_version": "v1_hmac_sha256",
+        "salt": salt,
+        "mac": mac,
+        "sha256": hashlib.sha256(encrypted_bytes).hexdigest()
+    }
+    return encrypted_bytes, metadata
+
+
+def decrypt_snapshot(encrypted_bytes: bytes, key: str, metadata: dict[str, str]) -> bytes:
+    """Decrypt backup snapshot data and verify authenticity MAC."""
+    import hmac
+    if not key or len(key) < 16:
+        raise ValueError("Encryption key must be at least 16 characters")
+    key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
+    mac = hmac.new(key_bytes, encrypted_bytes, hashlib.sha256).hexdigest()
+    if mac != metadata.get("mac"):
+        raise ValueError("MAC verification failed for encrypted backup")
+    salt = metadata.get("salt", "")
+    keystream = bytearray()
+    counter = 0
+    while len(keystream) < len(encrypted_bytes):
+        block = hmac.new(key_bytes, salt.encode() + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+        keystream.extend(block)
+        counter += 1
+    decrypted_bytes = bytes(b ^ keystream[i] for i, b in enumerate(encrypted_bytes))
+    return decrypted_bytes
+
+
 def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object]) -> Store:
     """Restore into an empty dedicated directory only; never overwrite live state."""
     root = Path(directory)

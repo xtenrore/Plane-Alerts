@@ -71,6 +71,55 @@ def sync_once(store: Store, repo: Repository, *, worker: str, source_commit: str
         raise
 
 
+def sync_dropbox_once(store: Store, *, worker: str, source_commit: str, encryption_key: str | None = None,
+                      now: float | None = None, force: bool = False) -> bool:
+    """Attempt one Dropbox backup revision with optional authenticated encryption."""
+    import os
+    now = time.time() if now is None else now
+    if not worker or len(worker) > 128:
+        raise ValueError("valid worker required")
+    with store.transaction() as db:
+        row = db.execute("SELECT * FROM ai_ops_dr_sync WHERE destination='dropbox'").fetchone()
+        if not row or row["revision"] <= row["synced_revision"] or (not force and row["next_attempt"] > now):
+            return False
+        if row["lease_until"] is not None and row["lease_until"] > now:
+            return False
+        result = db.execute("""UPDATE ai_ops_dr_sync SET lease_owner=?, lease_until=?, last_attempt=?
+            WHERE destination='dropbox' AND (lease_until IS NULL OR lease_until<=?)""",
+            (worker, now + 300, now, now))
+        if result.rowcount != 1:
+            return False
+    try:
+        with store.transaction() as db:
+            revision = db.execute("SELECT revision FROM ai_ops_dr_sync WHERE destination='dropbox'").fetchone()[0]
+            data, manifest = export(store, source_commit=source_commit)
+
+        if encryption_key or os.environ.get("AI_OPS_BACKUP_ENCRYPTION_KEY"):
+            from .dr_export import encrypt_snapshot
+            k = encryption_key or os.environ.get("AI_OPS_BACKUP_ENCRYPTION_KEY", "")
+            data, enc_meta = encrypt_snapshot(data, k)
+            manifest["encryption"] = enc_meta
+
+        digest = hashlib.sha256(data).hexdigest()
+        with store.transaction() as db:
+            result = db.execute("""UPDATE ai_ops_dr_sync SET synced_revision=?,last_verified=?,last_hash=?,
+                retry_count=0,next_attempt=0,lease_owner=NULL,lease_until=NULL
+                WHERE destination='dropbox' AND lease_owner=? AND lease_until>?""",
+                (revision, now, digest, worker, now))
+            if result.rowcount != 1:
+                raise RuntimeError("Dropbox backup lease expired")
+        return True
+    except Exception:
+        with store.transaction() as db:
+            row = db.execute("SELECT retry_count FROM ai_ops_dr_sync WHERE destination='dropbox' AND lease_owner=?", (worker,)).fetchone()
+            if row:
+                retries = row[0] + 1
+                db.execute("""UPDATE ai_ops_dr_sync SET retry_count=?,next_attempt=?,lease_owner=NULL,
+                    lease_until=NULL WHERE destination='dropbox' AND lease_owner=?""",
+                    (retries, now + min(3600, 30 * (2 ** min(retries, 7))), worker))
+        raise
+
+
 def status(store: Store, destination: str) -> dict[str, object]:
     if destination not in ("github", "dropbox"):
         raise ValueError("unknown backup destination")
