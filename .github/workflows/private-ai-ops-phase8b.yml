@@ -5,9 +5,11 @@ on:
     branches: [feature/private-ai-operations]
     paths:
       - 'app/private_ops/supervisor.py'
+      - 'app/private_ops/supervisor_transport_guard.py'
       - 'app/private_ops/supervisor_web.py'
       - 'app/private_ops/service.py'
       - 'tests/test_private_ops_supervisor.py'
+      - 'tests/test_private_ops_supervisor_transport_guard.py'
       - 'tests/test_private_ops_supervisor_web.py'
       - 'tests/test_private_ops_dashboard.py'
       - 'tests/test_private_ops_service_web.py'
@@ -18,9 +20,12 @@ on:
 permissions:
   contents: read
 
+# All workflows that mutate the dedicated AI Ops Railway service share this group.
+# Queue instead of cancelling a deployment because Railway may continue an external
+# deployment after the GitHub runner receives a cancellation signal.
 concurrency:
   group: private-ai-ops-phase8b
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   supervisor-tests:
@@ -41,10 +46,12 @@ jobs:
         run: >-
           python -m py_compile
           app/private_ops/supervisor.py
+          app/private_ops/supervisor_transport_guard.py
           app/private_ops/supervisor_web.py
           app/private_ops/service.py
           scripts/private_ai_ops_phase8b_benchmark.py
           tests/test_private_ops_supervisor.py
+          tests/test_private_ops_supervisor_transport_guard.py
           tests/test_private_ops_supervisor_web.py
       - name: Run grounded Supervisor acceptance tests
         env:
@@ -54,6 +61,7 @@ jobs:
         run: >-
           pytest -q
           tests/test_private_ops_supervisor.py
+          tests/test_private_ops_supervisor_transport_guard.py
           tests/test_private_ops_supervisor_web.py
           tests/test_private_ops_dashboard.py
           tests/test_private_ops_service_web.py
@@ -63,8 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|GROQ_KEY=.+|GEMINI_API_KEY=.+)' \
-            app/private_ops/supervisor.py app/private_ops/supervisor_web.py app/private_ops/service.py \
-            scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py tests/test_private_ops_supervisor_web.py
+            app/private_ops/supervisor.py app/private_ops/supervisor_transport_guard.py app/private_ops/supervisor_web.py app/private_ops/service.py \
+            scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py tests/test_private_ops_supervisor_transport_guard.py tests/test_private_ops_supervisor_web.py
           pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
       - name: Verify dependency consistency
         run: pip check
@@ -236,6 +244,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       conversation_id: ${{ steps.canary.outputs.conversation_id }}
+      conversation_model: ${{ steps.canary.outputs.conversation_model }}
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -324,6 +333,8 @@ jobs:
           assert status == 200 and result['status'] == 'OK'
           assert result['provider'] in {'cloudflare','groq','gemini','openrouter'}
           assert isinstance(result.get('answer'), str) and result['answer'].strip()
+          actual_model = str(result.get('model') or '').strip()
+          assert actual_model
           assert 'credential' not in raw.decode().lower()
 
           status, _, raw = request('/api/supervisor/history?conversation_id=' + cid)
@@ -331,13 +342,18 @@ jobs:
           assert status == 200 and len(history['messages']) >= 2
           assert history['messages'][-2]['role'] == 'user' and history['messages'][-1]['role'] == 'assistant'
           assert history['conversation']['provider'] == result['provider']
+          assert history['conversation']['model'] == actual_model
           print('PHASE8B_CONVERSATION_ID=' + cid)
-          print('PHASE8B_LIVE_SUPERVISOR_CANARY_OK provider=' + result['provider'] + ' model=' + str(result.get('model','')) + ' slot=' + str(result.get('slot','')))
+          print('PHASE8B_CONVERSATION_MODEL=' + actual_model)
+          print('PHASE8B_LIVE_SUPERVISOR_CANARY_OK provider=' + result['provider'] + ' model=' + actual_model + ' slot=' + str(result.get('slot','')))
           PY
           cat /tmp/canary.out
           CID="$(sed -n 's/^PHASE8B_CONVERSATION_ID=//p' /tmp/canary.out | tail -1)"
+          MODEL="$(sed -n 's/^PHASE8B_CONVERSATION_MODEL=//p' /tmp/canary.out | tail -1)"
           test -n "$CID"
+          test -n "$MODEL"
           echo "conversation_id=$CID" >> "$GITHUB_OUTPUT"
+          echo "conversation_model=$MODEL" >> "$GITHUB_OUTPUT"
 
   redeploy-same-checkpoint:
     needs: live-supervisor-canary
@@ -373,7 +389,7 @@ jobs:
             --ci --message "Private Ops Phase 8B continuity ${DEPLOY_SHA}"
 
   restart-readback:
-    needs: [redeploy-same-checkpoint, live-supervisor-canary, cloudflare-supervisor-benchmark]
+    needs: [redeploy-same-checkpoint, live-supervisor-canary]
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -385,7 +401,7 @@ jobs:
       WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
       GUI_URL: https://plane-alerts-ai-ops-production.up.railway.app
       CONVERSATION_ID: ${{ needs.live-supervisor-canary.outputs.conversation_id }}
-      SELECTED_MODEL: ${{ needs.cloudflare-supervisor-benchmark.outputs.selected_model }}
+      CONVERSATION_MODEL: ${{ needs.live-supervisor-canary.outputs.conversation_model }}
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -406,10 +422,11 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$CONVERSATION_ID"
+          test -n "$CONVERSATION_MODEL"
           railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY'
           import http.cookiejar, json, os, urllib.error, urllib.parse, urllib.request
-          base=os.environ['GUI_URL'].rstrip('/'); password=os.environ.get('ADMIN_PASSWORD',''); cid=os.environ['CONVERSATION_ID']; selected=os.environ['SELECTED_MODEL']
-          assert password and cid
+          base=os.environ['GUI_URL'].rstrip('/'); password=os.environ.get('ADMIN_PASSWORD',''); cid=os.environ['CONVERSATION_ID']; expected_model=os.environ['CONVERSATION_MODEL']
+          assert password and cid and expected_model
           jar=http.cookiejar.CookieJar(); opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
           def req(path, method='GET', body=None, csrf=None):
               raw=None if body is None else json.dumps(body).encode(); headers={'Accept':'application/json'}
@@ -424,7 +441,7 @@ jobs:
           status,raw=req('/api/auth/login','POST',{'password':password},login_csrf); csrf=json.loads(raw)['csrf']; assert status==200
           status,raw=req('/api/supervisor/history?conversation_id='+urllib.parse.quote(cid,safe=''))
           history=json.loads(raw); assert status==200 and len(history['messages'])>=2
-          assert history['conversation']['model']==selected
+          assert history['conversation']['model']==expected_model
           assert history['conversation']['status'] in {'ACTIVE','DEGRADED'}
           assert history['messages'][-2]['role']=='user' and history['messages'][-1]['role']=='assistant'
           status,raw=req('/api/supervisor/chat','POST',{'conversation_id':cid,'message':'Confirm the persisted conversation is continuing and report only durable backend facts.'},csrf)
