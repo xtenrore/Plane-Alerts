@@ -2,11 +2,6 @@ name: Private Operations Phase 6 one-shot free inference canary
 
 on:
   workflow_dispatch:
-  # One-shot bounded activation for the Gemini fallback checkpoint. Remove
-  # this branch-only trigger immediately after the canary result is inspected.
-  push:
-    branches: [feature/private-ai-operations]
-    paths: ['.github/workflows/private-ai-ops-phase6-canary.yml']
 
 permissions:
   contents: read
