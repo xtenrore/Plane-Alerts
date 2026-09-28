@@ -166,8 +166,12 @@ def main() -> None:
                 raise RuntimeError("canary_checkpoint_exceeds_bound")
             args.output.write_bytes(raw)
             if second is None:
+                failure = store.db.execute("SELECT failure_kind FROM ai_ops_usage WHERE provider=? ORDER BY id DESC LIMIT 1",
+                                           (second_provider,)).fetchone()
+                failure_kind = str(failure[0]) if failure and failure[0] in (
+                    "quota", "auth", "server", "network", "timeout", "malformed", "schema", "context", "request") else "unavailable"
                 print("PHASE6_REAL_CANARY_PARTIAL_PENDING_AI provider=groq reviews=1 "
-                      "second=" + second_provider + "-unavailable checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
+                      "second=" + second_provider + "-" + failure_kind + " checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
             else:
                 print("PHASE6_REAL_CANARY_VALIDATED providers=groq," + second_provider + " reviews=2 "
                       "independence=blind-different-family agreement=" + ("yes" if first == second else "no") +
