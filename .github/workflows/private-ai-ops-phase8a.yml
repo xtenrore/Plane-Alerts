@@ -7,6 +7,7 @@ on:
       - 'app/private_ops/dashboard.py'
       - 'app/private_ops/service.py'
       - 'tests/test_private_ops_dashboard.py'
+      - 'tests/test_private_ops_service_web.py'
       - '.github/workflows/private-ai-ops-phase8a.yml'
 
 permissions:
@@ -34,18 +35,18 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       - name: Compile GUI control plane
-        run: python -m py_compile app/private_ops/dashboard.py app/private_ops/service.py tests/test_private_ops_dashboard.py
+        run: python -m py_compile app/private_ops/dashboard.py app/private_ops/service.py tests/test_private_ops_dashboard.py tests/test_private_ops_service_web.py
       - name: Run Phase 8A acceptance tests
         env:
           TELEGRAM_BOT_TOKEN: ''
           GEMINI_API_KEY: ''
           GROQ_API_KEY: ''
-        run: pytest -q tests/test_private_ops_dashboard.py tests/test_private_ops_store.py
+        run: pytest -q tests/test_private_ops_dashboard.py tests/test_private_ops_service_web.py tests/test_private_ops_store.py
       - name: Secret and legacy-residue checks
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|DROPBOX_REFRESH_TOKEN=.+)' app/private_ops tests/test_private_ops_dashboard.py
+          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|DROPBOX_REFRESH_TOKEN=.+)' app/private_ops tests/test_private_ops_dashboard.py tests/test_private_ops_service_web.py
           pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
       - name: Refuse stale checkpoint deployment
         id: head
@@ -166,6 +167,10 @@ jobs:
                   return resp.status, resp.headers, data
               except urllib.error.HTTPError as exc:
                   return exc.code, exc.headers, exc.read()
+
+          status, _, ready_raw = request('/ready')
+          assert status == 200 and json.loads(ready_raw) == {'status': 'ready'}
+          assert b'pending' not in ready_raw and b'finding' not in ready_raw and b'schema' not in ready_raw
 
           status, _, page = request('/')
           assert status == 200 and b'Plane Alerts' in page and password.encode() not in page
