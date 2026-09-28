@@ -30,6 +30,7 @@ jobs:
       AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
       AI_OPS_CANARY_SECOND_PROVIDER: gemini
       AI_OPS_CANARY_GEMINI_MODEL: gemini-2.5-flash
+      # A single bounded request reports only the failure class and HTTP status.
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
