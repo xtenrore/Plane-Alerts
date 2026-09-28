@@ -10,7 +10,67 @@ from pathlib import Path
 
 from app.private_ops.dr_export import export, restore_empty
 from app.private_ops.store import Store
-from app.private_ops.tool_gateway import Gateway
+from app.private_ops.tool_gateway import Gateway, TEST_TARGETS, redact
+
+DIAGNOSTIC_TAIL_BYTES = 2048
+DIAGNOSTIC_MAX_BYTES = 6144
+
+
+def _bounded_tail(value: object) -> str:
+    if not isinstance(value, str):
+        return ''
+    data = value.encode('utf-8', 'replace')
+    return data[-DIAGNOSTIC_TAIL_BYTES:].decode('utf-8', 'replace')
+
+
+def safe_operation_diagnostic(record: dict[str, object]) -> str:
+    """Render only bounded, redacted fields already present in a durable tool result."""
+    try:
+        result = json.loads(str(record.get('result_json') or '{}'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        result = {}
+    try:
+        arguments = json.loads(str(record.get('arguments_json') or '{}'))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        arguments = {}
+
+    target = result.get('target')
+    if not target and record.get('tool') == 'run_replay':
+        target = TEST_TARGETS.get(arguments.get('case'))
+    elif not target and record.get('tool') == 'run_test':
+        target = TEST_TARGETS.get(arguments.get('target'), arguments.get('target'))
+
+    payload = {
+        'operation_id': record.get('operation_id'),
+        'operation_type': record.get('tool'),
+        'status': record.get('status'),
+        'result_class': record.get('result_class') or result.get('class'),
+        'exit_code': result.get('exit_code'),
+        'approved_target': target,
+        'source_commit': record.get('source_commit'),
+        'timeout_status': record.get('status') == 'TIMED_OUT' or result.get('class') == 'TIMEOUT',
+        'output_truncated': bool(result.get('truncated')) or result.get('class') == 'OUTPUT_TRUNCATED',
+        'result_hash': record.get('output_hash'),
+        'stdout_tail': _bounded_tail(result.get('stdout')),
+        'stderr_tail': _bounded_tail(result.get('stderr')),
+    }
+    rendered, _ = redact(json.dumps(payload, sort_keys=True, ensure_ascii=True))
+    data = rendered.encode('utf-8')
+    if len(data) > DIAGNOSTIC_MAX_BYTES:
+        # Each output field is independently bounded, so this is a final defense-in-depth cap.
+        rendered = json.dumps({
+            'operation_id': record.get('operation_id'),
+            'operation_type': record.get('tool'),
+            'status': record.get('status'),
+            'result_class': record.get('result_class') or result.get('class'),
+            'approved_target': target,
+            'source_commit': record.get('source_commit'),
+            'timeout_status': record.get('status') == 'TIMED_OUT' or result.get('class') == 'TIMEOUT',
+            'output_truncated': True,
+            'result_hash': record.get('output_hash'),
+            'diagnostic_truncated': True,
+        }, sort_keys=True)
+    return rendered
 
 
 def main() -> None:
@@ -32,6 +92,7 @@ def main() -> None:
             gateway.request(operation_id, 'investigation:canary', tool, arguments, commit)
             record = gateway.execute(operation_id, 'phase7-canary-worker')
             if record['status'] != 'SUCCEEDED':
+                print('phase7_operation_failure ' + safe_operation_diagnostic(record), flush=True)
                 raise RuntimeError(f'canary operation failed: {operation_id}: {record["result_class"]}')
             return json.loads(record['result_json'])
 
