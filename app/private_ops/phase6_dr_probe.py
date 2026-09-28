@@ -37,7 +37,7 @@ def run(store: Store, repo: Repository, *, source_commit: str) -> str:
     prefix = "private-ai-ops/snapshots/" + str(current["last_hash"])
     data = repo.get(prefix + ".json")
     manifest = json.loads(repo.get(prefix + ".manifest.json"))
-    if manifest.get("schema") != 4 or manifest.get("source_commit") != source_commit:
+    if manifest.get("schema") not in (4, 5) or manifest.get("source_commit") != source_commit:
         raise RuntimeError("remote snapshot is not the Phase 6 source")
     with tempfile.TemporaryDirectory(prefix="ai-ops-phase6-dr-") as directory:
         root = Path(directory)

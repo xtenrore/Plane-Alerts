@@ -29,8 +29,8 @@ def test_live_volume_roundtrip_preserves_phase1_and_phase6_state(tmp_path):
     assert run(store, repo, source_commit=COMMIT) == "PHASE6_DR_LIVE_ROUNDTRIP_VERIFIED"
     assert store.db.execute("SELECT synced_revision=revision FROM ai_ops_dr_sync WHERE destination='github'").fetchone()[0] == 1
     manifest = json.loads(next(v for k, v in repo.files.items() if k.endswith(".manifest.json")))
-    assert manifest["schema"] == 4 and manifest["source_commit"] == COMMIT
-    assert store.health()["schema"] == 6
+    assert manifest["schema"] == 5 and manifest["source_commit"] == COMMIT
+    assert store.health()["schema"] == 7
     store.close()
 
 

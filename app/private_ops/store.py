@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 STATUSES = frozenset({"PENDING", "RUNNING", "COMPLETE", "FAILED", "RETRY"})
 
 
@@ -180,6 +180,22 @@ class Store:
                     updated REAL NOT NULL
                 )""")
                 db.execute("PRAGMA user_version=6")
+                version = 6
+            if version == 6:
+                db.execute("""CREATE TABLE ai_ops_tool_operations (
+                    operation_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES ai_ops_jobs(id),
+                    finding_id TEXT REFERENCES ai_ops_findings(finding_id),
+                    tool TEXT NOT NULL, arguments_json TEXT NOT NULL, input_hash TEXT NOT NULL,
+                    source_commit TEXT NOT NULL, sandbox_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN
+                        ('QUEUED','RUNNING','SUCCEEDED','FAILED','TIMED_OUT','CANCELLED')),
+                    lease_owner TEXT, lease_until REAL, started REAL, finished REAL,
+                    result_class TEXT, result_json TEXT, output_hash TEXT,
+                    artifact_hash TEXT, retry_of TEXT REFERENCES ai_ops_tool_operations(operation_id),
+                    created REAL NOT NULL
+                )""")
+                db.execute("CREATE INDEX ai_ops_tool_job ON ai_ops_tool_operations(job_id,created)")
+                db.execute("PRAGMA user_version=7")
 
     @staticmethod
     def _mark_dr_dirty(db: sqlite3.Connection) -> None:
@@ -204,6 +220,83 @@ class Store:
             db.execute("INSERT INTO ai_ops_jobs(id,status,priority,created,updated) VALUES(?,'PENDING',?,?,?)", (job_id, priority, now, now))
             self._mark_dr_dirty(db)
         return True
+
+    def queue_tool(self, operation_id: str, job_id: str, tool: str, arguments: dict[str, object],
+                   source_commit: str, *, finding_id: str | None = None,
+                   retry_of: str | None = None) -> dict[str, object]:
+        """Register one immutable, bounded operation under an existing durable job."""
+        import re
+        if (not re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", operation_id)
+                or not re.fullmatch(r"[0-9a-f]{40}", source_commit)):
+            raise ValueError("invalid operation id or source commit")
+        encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded.encode()) > 4096:
+            raise ValueError("tool arguments too large")
+        digest = self.digest([tool, arguments, source_commit, finding_id])
+        with self.transaction() as db:
+            existing = db.execute("SELECT * FROM ai_ops_tool_operations WHERE operation_id=?", (operation_id,)).fetchone()
+            if existing:
+                if existing["input_hash"] != digest or existing["job_id"] != job_id:
+                    raise ValueError("operation id reused with different input")
+                return dict(existing)
+            if not db.execute("SELECT 1 FROM ai_ops_jobs WHERE id=?", (job_id,)).fetchone():
+                raise ValueError("tool operation requires an existing job")
+            if db.execute("SELECT count(*) FROM ai_ops_tool_operations WHERE status IN ('QUEUED','RUNNING')").fetchone()[0] >= 16:
+                raise QueueFull("too many pending engineering tool operations")
+            now = time.time()
+            db.execute("""INSERT INTO ai_ops_tool_operations
+                (operation_id,job_id,finding_id,tool,arguments_json,input_hash,source_commit,sandbox_id,status,retry_of,created)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (operation_id, job_id, finding_id, tool, encoded, digest, source_commit,
+                 'sandbox-' + operation_id, 'QUEUED', retry_of, now))
+            self._mark_dr_dirty(db)
+            return dict(db.execute("SELECT * FROM ai_ops_tool_operations WHERE operation_id=?", (operation_id,)).fetchone())
+
+    def claim_tool(self, operation_id: str, worker: str, *, lease_seconds: int = 120) -> dict[str, object] | None:
+        if not worker or not 1 <= lease_seconds <= 300:
+            raise ValueError("invalid tool worker or lease")
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM ai_ops_tool_operations WHERE operation_id=?", (operation_id,)).fetchone()
+            if row is None:
+                raise KeyError("unknown tool operation")
+            if row["status"] in ("SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED"):
+                return None
+            now = time.time()
+            if row["status"] == 'RUNNING' and row["lease_until"] > now:
+                raise PermissionError("tool operation held by another worker")
+            # An expired RUNNING operation is uncertain: the process may have
+            # finished its command before dying. Never silently rerun it.
+            if row["status"] == 'RUNNING':
+                db.execute("""UPDATE ai_ops_tool_operations SET status='FAILED',result_class='INTERRUPTED',
+                    finished=?,lease_owner=NULL,lease_until=NULL WHERE operation_id=?""", (now, operation_id))
+                self._mark_dr_dirty(db)
+                return None
+            if db.execute("SELECT count(*) FROM ai_ops_tool_operations WHERE status='RUNNING'").fetchone()[0] >= 1:
+                raise QueueFull("engineering sandbox concurrency limit reached")
+            db.execute("""UPDATE ai_ops_tool_operations SET status='RUNNING',lease_owner=?,lease_until=?,started=?
+                WHERE operation_id=?""", (worker, now + lease_seconds, now, operation_id))
+            self._mark_dr_dirty(db)
+            return dict(db.execute("SELECT * FROM ai_ops_tool_operations WHERE operation_id=?", (operation_id,)).fetchone())
+
+    def finish_tool(self, operation_id: str, worker: str, status: str, result: dict[str, object],
+                    *, artifact_hash: str | None = None) -> dict[str, object]:
+        if status not in ('SUCCEEDED', 'FAILED', 'TIMED_OUT', 'CANCELLED'):
+            raise ValueError("invalid tool terminal status")
+        encoded = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if len(encoded.encode()) > 16384:
+            raise ValueError("tool result exceeds durable size limit")
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
+        if artifact_hash is not None and (len(artifact_hash) != 64 or any(c not in '0123456789abcdef' for c in artifact_hash)):
+            raise ValueError("invalid artifact hash")
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM ai_ops_tool_operations WHERE operation_id=?", (operation_id,)).fetchone()
+            if not row or row['status'] != 'RUNNING' or row['lease_owner'] != worker or row['lease_until'] <= time.time():
+                raise PermissionError("worker no longer owns tool operation")
+            db.execute("""UPDATE ai_ops_tool_operations SET status=?,result_class=?,result_json=?,output_hash=?,
+                artifact_hash=?,finished=?,lease_owner=NULL,lease_until=NULL WHERE operation_id=?""",
+                (status, str(result.get('class', status))[:64], encoded, digest, artifact_hash, time.time(), operation_id))
+            self._mark_dr_dirty(db)
+            return dict(db.execute("SELECT * FROM ai_ops_tool_operations WHERE operation_id=?", (operation_id,)).fetchone())
 
     def claim(self, worker: str, *, lease_seconds: int = 300) -> str | None:
         if not worker or lease_seconds < 1:

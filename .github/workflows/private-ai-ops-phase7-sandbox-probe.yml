@@ -1,0 +1,26 @@
+name: Private AI Ops Phase 7 sandbox compatibility probe
+
+on:
+  push:
+    branches: [investigate/phase7-sandbox]
+    paths:
+      - '.github/workflows/private-ai-ops-phase7-sandbox-probe.yml'
+      - 'app/private_ops/tool_gateway.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-namespace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install only the sandbox launcher
+        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+      - name: Verify unprivileged network and mount isolation
+        run: |
+          bwrap --unshare-all --die-with-parent \
+            --ro-bind /usr /usr --ro-bind /bin /bin --proc /proc --dev /dev \
+            --tmpfs /tmp -- /bin/true

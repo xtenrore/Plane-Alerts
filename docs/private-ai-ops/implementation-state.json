@@ -4,7 +4,7 @@
   "state_schema_version": 1,
   "last_completed_phase": 6,
   "current_phase": 7,
-  "phase_status": "phase_6_verified_complete_phase_7_in_progress",
+  "phase_status": "phase_6_verified_complete_phase_7_blocked_sandbox_runtime",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -102,7 +102,9 @@
     "final_steady_deployment": "6f8808b1-a0e5-4c73-923a-f6c1a3666554; fault injection disabled",
     "idempotency": "second redeploy of same source created no duplicate remote snapshot; immutable remote paths read back"
   },
-  "open_blockers_for_next_phase": [],
+  "open_blockers_for_next_phase": [
+    "Phase 7 fail-closed runner cannot create isolated network namespace on current execution host; Railway image lacks bubblewrap, pinned source and approved test runtime; real sandbox and security canaries, CI and Railway checkpoint remain pending."
+  ],
   "phase_3_progress": {
     "status": "completed",
     "checkpoint_branch_commit": "5e7d92f5bd45ec6026372013b159f0d335a55e54",
@@ -219,5 +221,14 @@
     ],
     "completion_note": "Phase 6 validated on owner-private two-family free canary, real-volume shadow store readback after Railway restart. Hourly scheduler disabled; draft PR unmerged; no Phase 7 deployment yet."
   },
-  "phase_7_status": "in_progress"
+  "phase_7_status": "blocked_sandbox_runtime_canary",
+  "phase_7_progress": {
+    "status": "blocked_not_complete",
+    "schema_target": 7,
+    "local_checkpoint": "structured gateway, schema-7 migration, DR schema-5 operation/candidate artifact metadata and focused tests implemented in isolated investigate/phase7-sandbox branch; NOT deployed",
+    "sandbox_probe": "2026-09-28: bwrap --unshare-all denied NETLINK_ROUTE socket; real pinned Error Museum test operation returned FAILED/RuntimeError and cleaned temporary snapshot",
+    "production_schema": 6,
+    "production_scheduler_enabled": false,
+    "phase_8_status": "not_started"
+  }
 }
