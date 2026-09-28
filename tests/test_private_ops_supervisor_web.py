@@ -90,7 +90,7 @@ def test_supervisor_chat_requires_owner_session_and_csrf_and_persists(tmp_path):
     try:
         status, _, page = _request(server.server_port, "GET", "/supervisor")
         assert status == 200 and b"Supervisor Chat" in page and b"read-only operations chat" in page
-        assert b"Chat history" in page and b"Reasoning trace" in page
+        assert b"Chat history" in page and b"Execution trace" in page
         assert b"hidden chain-of-thought is not stored or exposed" in page
         status, _, _ = _request(server.server_port, "GET", "/api/supervisor/status")
         assert status == 401
