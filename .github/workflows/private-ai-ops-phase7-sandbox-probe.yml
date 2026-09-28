@@ -1,0 +1,40 @@
+name: Private AI Ops Phase 7 sandbox compatibility probe
+
+on:
+  push:
+    branches: [feature/private-ai-operations, investigate/phase7-sandbox]
+    paths:
+      - '.github/workflows/private-ai-ops-phase7-sandbox-probe.yml'
+      - 'app/private_ops/tool_gateway.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-namespace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify disposable credential-free container isolation
+        run: |
+          set -eu
+          docker run --rm --pull always --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 \
+            --memory 768m --cpus 1 --user 65534:65534 \
+            --mount type=bind,src="$GITHUB_WORKSPACE",dst=/work,readonly \
+            -w /work python:3.11-slim \
+            python -c 'import pathlib,socket; assert pathlib.Path("app/private_ops/store.py").is_file(); assert not pathlib.Path("/data/ai_ops").exists();
+          try:
+            socket.create_connection(("example.com", 443), timeout=2)
+          except OSError:
+            pass
+          else:
+            raise AssertionError("network reachable from sandbox")
+          try:
+            pathlib.Path("/work/sandbox-escape").write_text("no")
+          except OSError:
+            pass
+          else:
+            raise AssertionError("read-only source mount writable")'
