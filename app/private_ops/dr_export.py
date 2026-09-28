@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 from .store import Store
+from .provider_adapters import SLOT_NAMES
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9:_./-]{1,128}$")
 _SAFE_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
@@ -52,6 +53,16 @@ def _id(value: str) -> str:
     if not isinstance(value, str) or not _SAFE_ID.fullmatch(value) or _SECRET.search(value):
         raise ValueError("unsafe checkpoint identifier")
     return value
+
+
+def _review_slot(provider: str, value: str) -> str:
+    """Export a stable slot identity without secret-looking environment names."""
+    if not _SECRET.search(value):
+        return _id(value)
+    slots = SLOT_NAMES.get(provider, ())
+    if value not in slots:
+        raise ValueError("unknown review credential slot")
+    return _id(f"{provider}_slot_{slots.index(value) + 1}")
 
 
 def _bounded_note(value: object, *, limit: int) -> str:
@@ -186,7 +197,7 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
             validation_status,result_json,agreement,disposition,created,independence FROM ai_ops_reviews ORDER BY review_id"""):
             compact = _review_compact(row[9])
             reviews.append({"review_id": _id(row[0]), "packet_id": _id(row[1]), "role": _id(row[2]), "provider": _id(row[3]),
-                            "model": _id(row[4]), "key_slot": _id(row[5]), "classification": _id(row[6]), "severity": _id(row[7]),
+                            "model": _id(row[4]), "key_slot": _review_slot(row[3], row[5]), "classification": _id(row[6]), "severity": _id(row[7]),
                             "validation_status": _id(row[8]), "result": compact, "agreement": _id(row[10]) if row[10] else None,
                             "disposition": _id(row[11]) if row[11] else None, "created": row[12], "independence": _id(row[13])})
         for row in store.db.execute("""SELECT finding_id,signature,occurrence,status,classification,severity,subsystem,case_ref,

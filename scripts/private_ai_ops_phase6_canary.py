@@ -24,12 +24,15 @@ from app.private_ops.provider_router import NoFreeRoute, Router
 from app.private_ops.store import Store
 
 
-def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str]) -> tuple[str, str | None]:
-    """Exactly one call per provider; no rotation and no deep reviewer."""
+def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str],
+             second_provider: str = "mistral") -> tuple[str, str | None]:
+    """Exactly one call per independent provider; no rotation or deep reviewer."""
+    if second_provider not in ("mistral", "gemini") or second_provider not in models:
+        raise ValueError("approved independent provider required")
     packet = _packet(store, packet_id)
     case = str(packet["case_ref"])
     results = []
-    for role, provider in (("triage", "groq"), ("independent_review", "mistral")):
+    for role, provider in (("triage", "groq"), ("independent_review", second_provider)):
         prompt = _build_prompt(role, [packet])
         try:
             result = router.execute(AnalysisTask(role, prompt, batch_id="phase6:shadow", packet_id=packet_id),
@@ -68,14 +71,22 @@ def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str
 def _catalog_contains(provider: str, model: str, credential: str) -> bool:
     import httpx
     url = {"groq": "https://api.groq.com/openai/v1/models",
-           "mistral": "https://api.mistral.ai/v1/models"}[provider]
+           "mistral": "https://api.mistral.ai/v1/models",
+           "gemini": "https://generativelanguage.googleapis.com/v1beta/models"}[provider]
     with httpx.Client(timeout=8, follow_redirects=False) as client:
-        response = client.get(url, headers={"Authorization": "Bearer " + credential})
+        headers = ({"x-goog-api-key": credential} if provider == "gemini"
+                   else {"Authorization": "Bearer " + credential})
+        response = client.get(url, headers=headers)
     if response.status_code != 200 or len(response.content) > 131072:
         raise RuntimeError(provider + "_catalog_unavailable")
     data = response.json()
-    identifiers = sorted(str(item["id"]) for item in data.get("data", [])
-                         if isinstance(item, dict) and isinstance(item.get("id"), str))
+    if provider == "gemini":
+        identifiers = sorted(str(item["name"]).removeprefix("models/") for item in data.get("models", [])
+                             if isinstance(item, dict) and isinstance(item.get("name"), str)
+                             and "generateContent" in item.get("supportedGenerationMethods", []))
+    else:
+        identifiers = sorted(str(item["id"]) for item in data.get("data", [])
+                             if isinstance(item, dict) and isinstance(item.get("id"), str))
     if model not in identifiers:
         # Model names are public metadata; never print the request or credential.
         print(provider + "_CATALOG_MODEL_IDS=" + ",".join(identifiers[:40]), flush=True)
@@ -99,12 +110,16 @@ def main() -> None:
     hour = datetime.fromisoformat(args.hour.replace("Z", "+00:00"))
     if hour.tzinfo is None or hour.utcoffset().total_seconds() or hour.minute or hour.second or hour.microsecond:
         raise ValueError("closed UTC hour required")
-    names = {"groq": "GROQ_KEY", "mistral": "MISTRAL_API"}
+    second_provider = os.environ.get("AI_OPS_CANARY_SECOND_PROVIDER", "mistral")
+    if second_provider not in ("mistral", "gemini"):
+        raise RuntimeError("approved independent provider required")
+    names = {"groq": "GROQ_KEY", "mistral": "MISTRAL_API", "gemini": "GEMINI_API_KEY"}
     models = {"groq": os.environ.get("AI_OPS_CANARY_GROQ_MODEL", ""),
-              "mistral": os.environ.get("AI_OPS_CANARY_MISTRAL_MODEL", "")}
+              second_provider: os.environ.get("AI_OPS_CANARY_" + second_provider.upper() + "_MODEL", "")}
     slots = []
     unavailable = []
-    for provider, name in names.items():
+    for provider in models:
+        name = names[provider]
         key = os.environ.get(name, "")
         if not key or not re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", models[provider]):
             raise RuntimeError(provider + "_free_route_not_configured")
@@ -129,7 +144,7 @@ def main() -> None:
                 db.execute("DELETE FROM ai_ops_evidence WHERE packet_id<>?", (packet_id,))
             seed_pending_cases(store)
             router = Router(store, slots, adapter=Adapter(), approved_free_routes=set(models.items()))
-            first, second = run_pair(store, packet_id, router, models)
+            first, second = run_pair(store, packet_id, router, models, second_provider)
             data, manifest = export(store, source_commit=args.source_commit)
             restored_root = Path(td) / "reopen"
             restored_root.mkdir()
@@ -138,7 +153,7 @@ def main() -> None:
                 reviews = reopened.db.execute("SELECT role,provider,model,independence,validation_status FROM ai_ops_reviews ORDER BY created").fetchall()
                 expected = 1 if second is None else 2
                 if (len(reviews) != expected or reviews[0][1] != "groq" or
-                        (second is not None and (reviews[1][1] != "mistral" or
+                        (second is not None and (reviews[1][1] != second_provider or
                                                  reviews[1][3] != "DIFFERENT_PROVIDER_AND_MODEL_BLIND"))):
                     raise RuntimeError("independent_reviews_not_durable")
             finally:
@@ -152,9 +167,9 @@ def main() -> None:
             args.output.write_bytes(raw)
             if second is None:
                 print("PHASE6_REAL_CANARY_PARTIAL_PENDING_AI provider=groq reviews=1 "
-                      "second=mistral-quota checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
+                      "second=" + second_provider + "-unavailable checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
             else:
-                print("PHASE6_REAL_CANARY_VALIDATED providers=groq,mistral reviews=2 "
+                print("PHASE6_REAL_CANARY_VALIDATED providers=groq," + second_provider + " reviews=2 "
                       "independence=blind-different-family agreement=" + ("yes" if first == second else "no") +
                       " checkpoint_sha256=" + hashlib.sha256(raw).hexdigest(), flush=True)
         finally:

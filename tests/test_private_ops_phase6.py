@@ -12,7 +12,7 @@ from app.private_ops.store import Store
 from test_private_ops_phase5 import (
     FREE, MODELS, ScenarioAdapter, add_packet, item_for, packet, queued_store,
 )
-from scripts.private_ai_ops_phase6_canary import run_pair
+from scripts.private_ai_ops_phase6_canary import run_pair, _catalog_contains
 
 
 def route(store, adapter, slots=None):
@@ -39,6 +39,43 @@ def test_one_packet_shadow_canary_is_blind_durable_and_never_calls_deep(tmp_path
     restored = restore_empty(tmp_path / "restored", saved, manifest)
     assert restored.db.execute("SELECT count(*) FROM ai_ops_reviews").fetchone()[0] == 2
     restored.close()
+
+
+def test_canary_falls_back_to_different_gemini_family_with_original_evidence(tmp_path):
+    store, (pid,) = queued_store(tmp_path)
+    adapter = ScenarioAdapter()
+    first, second = run_pair(store, pid, route(store, adapter), MODELS, "gemini")
+    assert first == second
+    assert [provider for provider, _, _, _ in adapter.calls] == ["groq", "gemini"]
+    reviews = store.db.execute("SELECT role,provider,model,independence,validation_status FROM ai_ops_reviews ORDER BY created").fetchall()
+    assert reviews[1][0] == "independent_review" and reviews[1][1] == "gemini"
+    assert reviews[1][3:] == ("DIFFERENT_PROVIDER_AND_MODEL_BLIND", "VALID")
+    saved, manifest = export(store, source_commit="a" * 40)
+    store.close()
+    (tmp_path / "gemini-reopen").mkdir()
+    restored = restore_empty(tmp_path / "gemini-reopen", saved, manifest)
+    assert restored.db.execute("SELECT count(*) FROM ai_ops_reviews WHERE validation_status='VALID'").fetchone()[0] == 2
+    restored.close()
+
+
+def test_gemini_catalog_requires_generate_content(monkeypatch):
+    class Response:
+        status_code = 200
+        content = b'{}'
+        def json(self):
+            return {"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
+                               {"name": "models/embedding", "supportedGenerationMethods": ["embedContent"]}]}
+    class Client:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, url, headers):
+            assert headers == {"x-goog-api-key": "test-only"}
+            return Response()
+    import httpx
+    monkeypatch.setattr(httpx, "Client", Client)
+    assert _catalog_contains("gemini", "gemini-2.5-flash", "test-only")
+    assert not _catalog_contains("gemini", "embedding", "test-only")
 
 
 def test_provider_prompt_explicitly_describes_outer_json_shape():
