@@ -23,6 +23,9 @@ from .phase5_probe import run as run_phase5_probe
 from .phase6_dr_probe import run as run_phase6_dr_probe
 from .phase6_volume_canary import run as run_phase6_volume_canary
 from .dashboard import create_dashboard_handler, read_health
+from .provider_adapters import configured_slots
+from .supervisor import SupervisorBackend, SupervisorEngine, SupervisorStore
+from .supervisor_web import extend_private_handler
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
@@ -58,6 +61,7 @@ def create_private_web_handler(
     password: str,
     require_https: bool = True,
     session_ttl: int = 1800,
+    supervisor: SupervisorEngine | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Wrap the dashboard so public readiness never leaks operational counters."""
     base = create_dashboard_handler(
@@ -88,6 +92,8 @@ def create_private_web_handler(
                 return
             super().do_HEAD()
 
+    if supervisor is not None:
+        return extend_private_handler(PrivateWebHandler, supervisor)
     return PrivateWebHandler
 
 
@@ -110,6 +116,31 @@ def main() -> None:
         raise
 
     web_enabled = os.environ.get("AI_OPS_WEB_GUI_ENABLED", "").lower() == "true"
+    supervisor_enabled = os.environ.get("AI_OPS_SUPERVISOR_ENABLED", "").lower() == "true"
+    supervisor_engine: SupervisorEngine | None = None
+    if supervisor_enabled:
+        if not web_enabled:
+            store.close()
+            raise RuntimeError("Supervisor requires the authenticated private web control plane")
+        if os.environ.get("AI_OPS_PAID_USAGE_ALLOWED", "false").lower() != "false":
+            store.close()
+            raise RuntimeError("Phase 8B Supervisor refuses paid runtime AI")
+        model = os.environ.get("AI_OPS_SUPERVISOR_MODEL", "")
+        slots = configured_slots(os.environ)
+        if not slots:
+            store.close()
+            raise RuntimeError("Supervisor enabled without an approved configured provider slot")
+        try:
+            supervisor_engine = SupervisorEngine(
+                SupervisorBackend(store.path),
+                SupervisorStore(data_dir),
+                slots,
+                cloudflare_model=model,
+            )
+        except Exception:
+            store.close()
+            raise
+
     if web_enabled:
         admin_password = os.environ.get("ADMIN_PASSWORD", "")
         if not admin_password:
@@ -122,6 +153,7 @@ def main() -> None:
             password=admin_password,
             require_https=require_https,
             session_ttl=session_ttl,
+            supervisor=supervisor_engine,
         )
         server: HTTPServer = ThreadingHTTPServer(
             ("0.0.0.0", int(os.environ.get("PORT", "8080"))), handler
