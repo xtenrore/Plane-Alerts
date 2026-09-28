@@ -33,18 +33,56 @@ def estimate(model: str, input_tokens: int, output_tokens: int) -> int:
 
 
 def parse_json_text(text: str | None) -> dict:
+    """Extract the first valid JSON object without relaxing any scoring criteria.
+
+    Some otherwise-correct providers wrap a requested JSON object in a short preface,
+    a fenced block, or model-specific reasoning text. The benchmark should score the
+    structured answer itself rather than accidentally turning a correct object into an
+    empty dict merely because the transport included surrounding text.
+    """
     if not text:
         return {}
     stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.startswith("json"):
-            stripped = stripped[4:].lstrip()
+    decoder = json.JSONDecoder()
+
+    # Fast path for the requested response format.
     try:
         value = json.loads(stripped)
     except ValueError:
-        return {}
-    return value if isinstance(value, dict) else {}
+        value = None
+    if isinstance(value, dict):
+        return value
+
+    # Common markdown wrapper. Keep the contents bounded to the received response;
+    # no repair or inferred values are introduced.
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        candidate = "\n".join(lines).strip()
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:].lstrip()
+        try:
+            value = json.loads(candidate)
+        except ValueError:
+            value = None
+        if isinstance(value, dict):
+            return value
+
+    # Finally locate an actual JSON object embedded in provider pre/postamble. Using
+    # JSONDecoder.raw_decode means braces inside quoted strings are handled correctly.
+    for index, char in enumerate(stripped):
+        if char != "{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(stripped[index:])
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
 
 
 def score_answer(value: dict) -> dict[str, int]:
