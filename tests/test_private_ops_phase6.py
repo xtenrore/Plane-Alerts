@@ -158,6 +158,21 @@ def test_schema_five_upgrade_preserves_prior_review_and_finding(tmp_path):
     upgraded.close()
 
 
+def test_generic_status_transition_cannot_bypass_resolution_proof(tmp_path):
+    store = Store(tmp_path)
+    p = packet(); pid = add_packet(store, p)
+    finding, _ = phase5.upsert_finding(store, pid, phase5.validate_result(p, item_for(p)))
+    phase5.transition_finding(store, finding, "INVESTIGATING")
+    phase5.transition_finding(store, finding, "FIX_CANDIDATE")
+    with pytest.raises(ValueError, match="verified resolution"):
+        phase5.transition_finding(store, finding, "RESOLVED")
+    phase5.transition_finding(store, finding, "DEPLOYED_PENDING_VERIFICATION")
+    with pytest.raises(ValueError, match="verified resolution"):
+        phase5.transition_finding(store, finding, "RESOLVED")
+    assert store.db.execute("SELECT status FROM ai_ops_findings").fetchone()[0] == "DEPLOYED_PENDING_VERIFICATION"
+    store.close()
+
+
 @pytest.mark.parametrize("verdict", sorted(phase5.FEEDBACK))
 def test_feedback_and_review_relationship_survive_dr(tmp_path, verdict):
     root = tmp_path / "root"; restored_root = tmp_path / "restore"

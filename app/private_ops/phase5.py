@@ -404,8 +404,8 @@ def _transition_allowed(old: str, new: str) -> bool:
         "TRIAGED": {"REVIEWING", "INVESTIGATING", *TERMINAL_FINDINGS},
         "REVIEWING": {"INVESTIGATING", *TERMINAL_FINDINGS},
         "INVESTIGATING": {"FIX_CANDIDATE", *TERMINAL_FINDINGS},
-        "FIX_CANDIDATE": {"DEPLOYED_PENDING_VERIFICATION", "RESOLVED", "WONT_FIX_WITH_REASON"},
-        "DEPLOYED_PENDING_VERIFICATION": {"RESOLVED", "INVESTIGATING"},
+        "FIX_CANDIDATE": {"DEPLOYED_PENDING_VERIFICATION", "WONT_FIX_WITH_REASON"},
+        "DEPLOYED_PENDING_VERIFICATION": {"INVESTIGATING"},
     }
     return new in allowed.get(old, set())
 
@@ -413,6 +413,8 @@ def _transition_allowed(old: str, new: str) -> bool:
 def transition_finding(store: Store, finding_id: str, new_status: str) -> None:
     if new_status not in ACTIVE_FINDINGS | TERMINAL_FINDINGS:
         raise ValueError("unknown finding status")
+    if new_status == "RESOLVED":
+        raise ValueError("use verified resolution gate")
     now = time.time()
     with store.transaction() as db:
         row = db.execute("SELECT status FROM ai_ops_findings WHERE finding_id=?", (finding_id,)).fetchone()
