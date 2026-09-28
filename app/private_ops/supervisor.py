@@ -227,7 +227,8 @@ class SupervisorStore:
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
-    def set_affinity(self, conversation_id: str, provider: str, model: str, slot: str, *, reason: str) -> None:
+    def set_affinity(self, conversation_id: str, provider: str, model: str, slot: str, *, reason: str,
+                     from_route: tuple[str, str, str] | None = None) -> None:
         now = time.time()
         with self._connect() as db:
             old = db.execute(
@@ -236,12 +237,14 @@ class SupervisorStore:
             ).fetchone()
             if not old:
                 raise KeyError("unknown conversation")
-            changed = (old["provider"], old["model"], old["slot"]) != (provider, model, slot)
-            if changed and old["provider"]:
+            old_route = (old["provider"], old["model"], old["slot"])
+            target = (provider, model, slot)
+            source = from_route if from_route and from_route[0] else old_route
+            if source[0] and source != target:
                 db.execute("""INSERT INTO supervisor_switches(
                     conversation_id,from_provider,from_model,from_slot,to_provider,to_model,to_slot,reason,created)
                     VALUES(?,?,?,?,?,?,?,?,?)""",
-                    (conversation_id, old["provider"], old["model"], old["slot"], provider, model, slot, reason[:80], now),
+                    (conversation_id, source[0], source[1], source[2], provider, model, slot, reason[:80], now),
                 )
             db.execute(
                 "UPDATE supervisor_conversations SET provider=?,model=?,slot=?,status='ACTIVE',updated=? WHERE conversation_id=?",
@@ -744,6 +747,7 @@ class SupervisorEngine:
         base_messages.extend({"role": str(item["role"]), "content": str(item["content"])} for item in history)
         last_failure = "unavailable"
         previous_route = (conversation.get("provider"), conversation.get("model"), conversation.get("slot"))
+        failed_route: tuple[str, str, str] | None = None
 
         for slot, model in self._candidate_routes(conversation, explicit_switch=explicit_switch):
             label = cloudflare_slot_label(slot)
@@ -783,8 +787,12 @@ class SupervisorEngine:
                 neurons = self._estimated_neurons(model, total_in, total_out) if slot.provider == "cloudflare" else 0
                 self.state.record_usage(conversation_id, slot.provider, model, label, total_in, total_out, neurons,
                                         success=True, latency_ms=elapsed)
-                reason = "explicit_user_request" if explicit_switch else "provider_failover" if previous_route[0] else "initial_selection"
-                self.state.set_affinity(conversation_id, slot.provider, model, slot.name, reason=reason)
+                reason = ("explicit_user_request" if explicit_switch else
+                          "provider_failover" if (previous_route[0] or failed_route) else "initial_selection")
+                self.state.set_affinity(
+                    conversation_id, slot.provider, model, slot.name, reason=reason,
+                    from_route=failed_route if not previous_route[0] else None,
+                )
                 answer = self._validated_answer(response.content, evidence)
                 self.state.append_message(conversation_id, "assistant", answer)
                 continuity = {
@@ -807,6 +815,7 @@ class SupervisorEngine:
                 last_failure = exc.kind
                 self.state.record_usage(conversation_id, slot.provider, model, label, 0, 0, 0,
                                         success=False, latency_ms=elapsed, failure_kind=exc.kind)
+                failed_route = (slot.provider, model, slot.name)
                 continue
         self.state.set_degraded(conversation_id)
         answer = "Supervisor AI is currently unavailable. The private Operations GUI and durable backend remain available; no model reasoning was performed."
