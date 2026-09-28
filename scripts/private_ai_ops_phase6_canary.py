@@ -20,7 +20,7 @@ from app.private_ops.phase5 import (_build_prompt, _packet, _persist_review, _st
                                     seed_pending_cases)
 from app.private_ops.prediction_source import read_hour
 from app.private_ops.provider_adapters import Adapter, AnalysisTask, Slot
-from app.private_ops.provider_router import Router
+from app.private_ops.provider_router import NoFreeRoute, Router
 from app.private_ops.store import Store
 
 
@@ -31,9 +31,14 @@ def run_pair(store: Store, packet_id: str, router: Router, models: dict[str, str
     results = []
     for role, provider in (("triage", "groq"), ("independent_review", "mistral")):
         prompt = _build_prompt(role, [packet])
-        result = router.execute(AnalysisTask(role, prompt, batch_id="phase6:shadow", packet_id=packet_id),
-                                models, preferred_providers=[provider],
-                                exclude_providers=[p for p in models if p != provider], max_attempts=1)
+        try:
+            result = router.execute(AnalysisTask(role, prompt, batch_id="phase6:shadow", packet_id=packet_id),
+                                    models, preferred_providers=[provider],
+                                    exclude_providers=[p for p in models if p != provider], max_attempts=1)
+        except NoFreeRoute:
+            usage = store.db.execute("SELECT provider,failure_kind FROM ai_ops_usage ORDER BY id DESC LIMIT 1").fetchone()
+            kind = str(usage[1]) if usage and usage[0] == provider else "not_attempted"
+            raise RuntimeError(role + "_free_route_unavailable_failure_kind=" + kind) from None
         validated, shape = _strict_batch({case: packet}, result.analysis)
         if not shape or len(validated) != 1 or validated[0].validation_status != "VALID":
             raise RuntimeError(role + "_evidence_validation_failed")
