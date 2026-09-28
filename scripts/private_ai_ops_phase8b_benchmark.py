@@ -44,17 +44,12 @@ def parse_json_text(text: str | None) -> dict:
         return {}
     stripped = text.strip()
     decoder = json.JSONDecoder()
-
-    # Fast path for the requested response format.
     try:
         value = json.loads(stripped)
     except ValueError:
         value = None
     if isinstance(value, dict):
         return value
-
-    # Common markdown wrapper. Keep the contents bounded to the received response;
-    # no repair or inferred values are introduced.
     if stripped.startswith("```"):
         lines = stripped.splitlines()
         if lines:
@@ -70,9 +65,6 @@ def parse_json_text(text: str | None) -> dict:
             value = None
         if isinstance(value, dict):
             return value
-
-    # Finally locate an actual JSON object embedded in provider pre/postamble. Using
-    # JSONDecoder.raw_decode means braces inside quoted strings are handled correctly.
     for index, char in enumerate(stripped):
         if char != "{":
             continue
@@ -107,7 +99,8 @@ def score_answer(value: dict) -> dict[str, int]:
 
 def benchmark_model(transport: SupervisorTransport, slots, model: str, run_id: str, used_neurons: int) -> tuple[dict, int]:
     result = {"model": model, "available": False, "score": 0, "criteria": {}, "latency_ms": 0,
-              "estimated_neurons": 0, "slot": None, "failure": None}
+              "estimated_neurons": 0, "slot": None, "failure": None,
+              "truth_content_bytes": 0, "truth_parsed_keys": []}
     tool = [{"type": "function", "function": {
         "name": "get_provider_health",
         "description": "Read current provider health from the durable Plane Alerts backend.",
@@ -132,8 +125,6 @@ def benchmark_model(transport: SupervisorTransport, slots, model: str, run_id: s
             "Report the rate-limited slot, task:benchmark state, replay result, what you know about task:ghost, "
             "whether you may deploy it, the relevant failover source file, the context marker, and a concise summary.")},
     ]
-    # Conservative reserve before any real request. Even on a paid-capable account,
-    # this benchmark will stop instead of crossing the free-only local budget.
     rough_in = sum(len(str(m["content"])) for m in benchmark_messages + truth_messages) // 3 + 500
     reserve = estimate(model, rough_in, 1400)
     if used_neurons + reserve > BENCHMARK_BUDGET:
@@ -170,6 +161,8 @@ def benchmark_model(transport: SupervisorTransport, slots, model: str, run_id: s
             "estimated_neurons": neurons,
             "slot": "Slot 2" if slot.name.endswith("_2") else "Slot 1",
             "failure": None,
+            "truth_content_bytes": len((truth_response.content or "").encode()),
+            "truth_parsed_keys": sorted(str(key) for key in parsed.keys())[:20],
         })
         return result, used_neurons
     return result, used_neurons
@@ -209,6 +202,11 @@ def main() -> int:
     if any(secret and secret in raw for name, secret in os.environ.items() if any(part in name for part in ("TOKEN", "KEY", "SECRET"))):
         raise RuntimeError("benchmark output secret scan failed")
     Path(args.output).write_text(raw + "\n", encoding="utf-8")
+    for item in results:
+        print("PHASE8B_BENCHMARK_RESULT model=%s available=%s score=%s criteria=%s latency_ms=%s estimated_neurons=%s content_bytes=%s parsed_keys=%s failure=%s" % (
+            item["model"], item["available"], item["score"], json.dumps(item["criteria"], sort_keys=True),
+            item["latency_ms"], item["estimated_neurons"], item["truth_content_bytes"],
+            ",".join(item["truth_parsed_keys"]), item["failure"]))
     print("PHASE8B_SUPERVISOR_BENCHMARK_COMPLETE selected=" + selected["model"] +
           " score=" + str(selected["score"]) + " estimated_neurons=" + str(used))
     return 0
