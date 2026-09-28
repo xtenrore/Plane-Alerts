@@ -62,6 +62,22 @@ def test_provider_wire_shape_and_normalized_result(provider, name, model, url_pa
         assert transport.calls[0][1]["Authorization"].endswith(slot.credential)
 
 
+def test_current_gemini_interactions_free_route_is_structured_and_never_stored():
+    content = json.dumps({"summary": "synthetic audit", "findings": []})
+    response = {"steps": [{"type": "model_output", "content": [{"type": "text", "text": content}]}],
+                "usage": {"input_tokens": 18, "output_tokens": 6}}
+    transport = FakeHTTP([(200, {}, json.dumps(response).encode())])
+    result = Adapter(transport).execute(Slot("gemini", "GEMINI_API_KEY", "test-only"),
+                                        TASK, "gemini-3.8-flash", now=0)
+    url, headers, body = transport.calls[0]
+    assert url.endswith("/v1beta/interactions") and headers["x-goog-api-key"] == "test-only"
+    assert body["store"] is False and body["model"] == "gemini-3.8-flash"
+    assert body["response_format"]["schema"]["properties"]["findings"]["items"]["properties"]["event_ids"] == {
+        "type": "array", "items": {"type": "string"}}
+    assert result.analysis == {"summary": "synthetic audit", "findings": []}
+    assert (result.input_tokens, result.output_tokens) == (18, 6)
+
+
 def test_pairing_and_paid_routes_fail_closed():
     env = {"CLOUDFLARE_ACCOUNT_ID": "a" * 32, "CLOUDFLARE_API_TOKEN": "first",
            "CLOUDFLARE_API_TOKEN_2": "second", "GROQ_KEY": "groq", "GROQ_KEY_5": "groq5"}

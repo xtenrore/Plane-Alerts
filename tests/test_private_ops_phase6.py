@@ -63,7 +63,8 @@ def test_gemini_catalog_requires_generate_content(monkeypatch):
         status_code = 200
         content = b'{}'
         def json(self):
-            return {"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
+            return {"models": [{"name": "models/gemini-3.8-flash", "supportedGenerationMethods": []},
+                               {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
                                {"name": "models/embedding", "supportedGenerationMethods": ["embedContent"]}]}
     class Client:
         def __init__(self, **kwargs): pass
@@ -75,6 +76,7 @@ def test_gemini_catalog_requires_generate_content(monkeypatch):
     import httpx
     monkeypatch.setattr(httpx, "Client", Client)
     assert _catalog_contains("gemini", "gemini-2.5-flash", "test-only")
+    assert _catalog_contains("gemini", "gemini-3.8-flash", "test-only")
     assert not _catalog_contains("gemini", "embedding", "test-only")
 
 

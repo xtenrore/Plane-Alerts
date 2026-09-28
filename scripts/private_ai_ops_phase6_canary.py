@@ -95,7 +95,8 @@ def _catalog_contains(provider: str, model: str, credential: str) -> bool:
     if provider == "gemini":
         identifiers = sorted(str(item["name"]).removeprefix("models/") for item in data.get("models", [])
                              if isinstance(item, dict) and isinstance(item.get("name"), str)
-                             and "generateContent" in item.get("supportedGenerationMethods", []))
+                             and (model == "gemini-3.8-flash" or
+                                  "generateContent" in item.get("supportedGenerationMethods", [])))
     else:
         identifiers = sorted(str(item["id"]) for item in data.get("data", [])
                              if isinstance(item, dict) and isinstance(item.get("id"), str))

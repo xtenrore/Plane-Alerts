@@ -204,7 +204,23 @@ class Adapter:
         instruction = ("Return JSON with summary and findings for independent audit only. "
                        "Never decide aircraft trajectory, CPA, ETA, pass/no-pass, alert qualification, cancellation, or timing.")
         headers = {"Content-Type": "application/json"}
-        if slot.provider == "gemini":
+        if slot.provider == "gemini" and model == "gemini-3.8-flash":
+            url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+            headers["x-goog-api-key"] = slot.credential
+            fields = {name: {"type": "array", "items": {"type": "string"}} for name in ("event_ids", "states")}
+            fields.update({name: {"type": "array", "items": {"type": "number"}} for name in ("cpa_km", "observed_km")})
+            fields.update({name: {"type": "string"} for name in (
+                "case_ref", "classification", "severity", "subsystem", "coverage", "rationale")})
+            fields["needs_review"] = {"type": "boolean"}
+            payload = {"model": model, "store": False, "input": instruction + "\n" + task.prompt,
+                       "generation_config": {"thinking_level": "low", "temperature": 0},
+                       "response_format": {"type": "text", "mime_type": "application/json",
+                                           "schema": {"type": "object", "properties": {
+                                               "summary": {"type": "string"},
+                                               "findings": {"type": "array", "items": {"type": "object",
+                                                  "properties": fields, "required": list(fields)}}},
+                                               "required": ["summary", "findings"]}}}
+        elif slot.provider == "gemini":
             url = "https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(model, safe="") + ":generateContent"
             headers["x-goog-api-key"] = slot.credential
             payload = {"contents": [{"parts": [{"text": instruction + "\n" + task.prompt}]}],
@@ -234,7 +250,14 @@ class Adapter:
             raise ProviderFailure("malformed")
         try:
             envelope = json.loads(raw)
-            if slot.provider == "gemini":
+            if slot.provider == "gemini" and model == "gemini-3.8-flash":
+                steps = envelope.get("steps", [])
+                texts = [part["text"] for step in steps if step.get("type") == "model_output"
+                         for part in step.get("content", []) if part.get("type") == "text"]
+                content = texts[-1]
+                usage = envelope.get("usage", {})
+                incoming, outgoing = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+            elif slot.provider == "gemini":
                 content = envelope["candidates"][0]["content"]["parts"][0]["text"]
                 usage = envelope.get("usageMetadata", {})
                 incoming, outgoing = usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
