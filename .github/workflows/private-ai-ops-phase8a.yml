@@ -41,12 +41,12 @@ jobs:
           GEMINI_API_KEY: ''
           GROQ_API_KEY: ''
         run: pytest -q tests/test_private_ops_dashboard.py tests/test_private_ops_store.py
-      - name: Secret and retired-agent negative checks
+      - name: Secret and legacy-residue checks
         shell: bash
         run: |
           set -euo pipefail
           ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|DROPBOX_REFRESH_TOKEN=.+)' app/private_ops tests/test_private_ops_dashboard.py
-          ! grep -RniE 'antigravity|Plane-Alerts-AGY|Railway AI Agent' app/private_ops/dashboard.py app/private_ops/service.py
+          pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
       - name: Refuse stale checkpoint deployment
         id: head
         env:
