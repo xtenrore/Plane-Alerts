@@ -84,13 +84,16 @@ def main() -> None:
     models = {"groq": os.environ.get("AI_OPS_CANARY_GROQ_MODEL", ""),
               "mistral": os.environ.get("AI_OPS_CANARY_MISTRAL_MODEL", "")}
     slots = []
+    unavailable = []
     for provider, name in names.items():
         key = os.environ.get(name, "")
         if not key or not re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", models[provider]):
             raise RuntimeError(provider + "_free_route_not_configured")
         if not _catalog_contains(provider, models[provider], key):
-            raise RuntimeError(provider + "_approved_model_not_in_current_catalog")
+            unavailable.append(provider)
         slots.append(Slot(provider, name, key))
+    if unavailable:
+        raise RuntimeError("approved_model_not_in_current_catalog:" + ",".join(unavailable))
     start = int(hour.timestamp())
     with tempfile.TemporaryDirectory(prefix="phase6-canary-") as td:
         store = Store(Path(td))
