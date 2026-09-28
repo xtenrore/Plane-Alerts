@@ -1,0 +1,128 @@
+name: Private Operations Phase 8B final live acceptance
+
+on:
+  push:
+    branches: [feature/private-ai-operations]
+    paths: ['.github/workflows/private-ai-ops-phase8b-live-finalize.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  final-live-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      CHECKPOINT_SHA: dad6b3f14f681c8a466eb9ae195fa6926c2563d5
+      SELECTED_MODEL: '@cf/nvidia/nemotron-3-120b-a12b'
+      GUI_URL: https://plane-alerts-ai-ops-production.up.railway.app
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID_2: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_2 }}
+      CLOUDFLARE_API_TOKEN_2: ${{ secrets.CLOUDFLARE_API_TOKEN_2 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dad6b3f14f681c8a466eb9ae195fa6926c2563d5
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: npm install --global @railway/cli >/dev/null
+      - name: Resolve Railway authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Reassert free-only Supervisor configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"; test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID_2"; test -n "$CLOUDFLARE_API_TOKEN_2"
+          D='$'
+          railway variable set \
+            "ADMIN_PASSWORD=${D}{{Gemini-Telegram-Bot-Exprience.ADMIN_PASSWORD}}" \
+            "GROQ_KEY=${D}{{Gemini-Telegram-Bot-Exprience.GROQ_KEY}}" \
+            "GROQ_KEY_2=${D}{{Gemini-Telegram-Bot-Exprience.GROQ_KEY_2}}" \
+            "GEMINI_API_KEY=${D}{{Gemini-Telegram-Bot-Exprience.GEMINI_API_KEY}}" \
+            "GEMINI_API_KEY_2=${D}{{Gemini-Telegram-Bot-Exprience.GEMINI_API_KEY_2}}" \
+            "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID" "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN" \
+            "CLOUDFLARE_ACCOUNT_ID_2=$CLOUDFLARE_ACCOUNT_ID_2" "CLOUDFLARE_API_TOKEN_2=$CLOUDFLARE_API_TOKEN_2" \
+            "AI_OPS_WEB_GUI_ENABLED=true" "AI_OPS_REQUIRE_HTTPS=true" "AI_OPS_SESSION_TTL_SECONDS=1800" \
+            "AI_OPS_SUPERVISOR_ENABLED=true" "AI_OPS_SUPERVISOR_MODEL=$SELECTED_MODEL" \
+            "AI_OPS_PAID_USAGE_ALLOWED=false" "AI_OPS_SOURCE_COMMIT=$CHECKPOINT_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+      - name: Deploy exact tested checkpoint
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHECKPOINT_SHA"
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Private Ops Phase 8B final ${CHECKPOINT_SHA}"
+      - name: Authenticated live canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY' > /tmp/canary.out
+          import http.cookiejar,json,os,urllib.error,urllib.parse,urllib.request
+          base=os.environ['GUI_URL'].rstrip('/'); password=os.environ.get('ADMIN_PASSWORD',''); selected=os.environ['SELECTED_MODEL']; assert password
+          jar=http.cookiejar.CookieJar(); opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+          def req(path,method='GET',body=None,csrf=None,timeout=35):
+              raw=None if body is None else json.dumps(body).encode(); h={'Accept':'application/json'}
+              if raw is not None:h['Content-Type']='application/json'
+              if csrf:h['X-CSRF-Token']=csrf
+              try:r=opener.open(urllib.request.Request(base+path,data=raw,headers=h,method=method),timeout=timeout);return r.status,r.read()
+              except urllib.error.HTTPError as e:return e.code,e.read()
+          s,r=req('/ready'); assert s==200 and json.loads(r)=={'status':'ready'}
+          s,p=req('/supervisor'); assert s==200 and b'Supervisor Chat' in p
+          s,_=req('/api/supervisor/status'); assert s==401
+          s,r=req('/api/auth/bootstrap'); assert s==200; lc=json.loads(r)['csrf']
+          s,r=req('/api/auth/login','POST',{'password':password},lc); assert s==200; csrf=json.loads(r)['csrf']
+          s,r=req('/api/supervisor/status'); st=json.loads(r); assert s==200 and st['enabled'] is True and st['primary_provider']=='cloudflare' and st['model']==selected and st['authority']=='read_only_operations'
+          assert all(x not in r.decode().lower() for x in ('credential','password','authorization'))
+          s,r=req('/api/supervisor/conversations','POST',{},csrf); assert s==201; cid=json.loads(r)['conversation_id']
+          s,r=req('/api/supervisor/chat','POST',{'conversation_id':cid,'message':'Summarize current durable operations state using only backend evidence. Mark missing evidence unavailable and invent no record IDs.'},csrf)
+          out=json.loads(r); assert s==200 and out['status']=='OK' and isinstance(out.get('answer'),str) and out['answer'].strip()
+          s,r=req('/api/supervisor/history?conversation_id='+urllib.parse.quote(cid,safe='')); hist=json.loads(r); assert s==200 and len(hist['messages'])>=2 and hist['conversation']['provider']==out['provider']
+          print('PHASE8B_CONVERSATION_ID='+cid); print('PHASE8B_LIVE_CANARY_OK provider='+out['provider']+' model='+str(out.get('model',''))+' slot='+str(out.get('slot','')))
+          PY
+          cat /tmp/canary.out
+          sed -n 's/^PHASE8B_CONVERSATION_ID=//p' /tmp/canary.out | tail -1 > /tmp/cid
+          test -s /tmp/cid
+      - name: Redeploy identical checkpoint for continuity proof
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHECKPOINT_SHA"
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Private Ops Phase 8B continuity ${CHECKPOINT_SHA}"
+      - name: Restart readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CONVERSATION_ID="$(cat /tmp/cid)"
+          railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY'
+          import http.cookiejar,json,os,urllib.error,urllib.parse,urllib.request
+          base=os.environ['GUI_URL'].rstrip('/'); password=os.environ.get('ADMIN_PASSWORD',''); cid=os.environ['CONVERSATION_ID']; selected=os.environ['SELECTED_MODEL']; assert password and cid
+          jar=http.cookiejar.CookieJar(); opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+          def req(path,method='GET',body=None,csrf=None,timeout=35):
+              raw=None if body is None else json.dumps(body).encode(); h={'Accept':'application/json'}
+              if raw is not None:h['Content-Type']='application/json'
+              if csrf:h['X-CSRF-Token']=csrf
+              try:r=opener.open(urllib.request.Request(base+path,data=raw,headers=h,method=method),timeout=timeout);return r.status,r.read()
+              except urllib.error.HTTPError as e:return e.code,e.read()
+          s,r=req('/ready'); assert s==200 and json.loads(r)=={'status':'ready'}
+          s,r=req('/api/auth/bootstrap'); lc=json.loads(r)['csrf']; assert s==200
+          s,r=req('/api/auth/login','POST',{'password':password},lc); csrf=json.loads(r)['csrf']; assert s==200
+          s,r=req('/api/supervisor/history?conversation_id='+urllib.parse.quote(cid,safe='')); hist=json.loads(r); assert s==200 and len(hist['messages'])>=2 and hist['conversation']['model']==selected and hist['conversation']['status'] in {'ACTIVE','DEGRADED'}
+          s,r=req('/api/supervisor/chat','POST',{'conversation_id':cid,'message':'Continue this persisted conversation and report only current durable backend facts.'},csrf); out=json.loads(r)
+          assert s==200 and out['status'] in {'OK','DEGRADED'} and isinstance(out.get('answer'),str) and out['answer'].strip()
+          print('PHASE8B_RESTART_READBACK_OK status='+out['status']+' provider='+str(out.get('provider',''))+' model='+str(out.get('model','')))
+          PY
