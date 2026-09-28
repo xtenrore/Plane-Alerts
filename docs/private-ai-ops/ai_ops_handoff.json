@@ -1,45 +1,141 @@
 {
-  "schema_version": 2,
-  "generated_at": "2026-09-28T10:33:00Z",
-  "source_commit": "06336be01f899d41d8b5a5b59f34ef0ab1fdc5cb",
+  "schema_version": 3,
+  "generated_at": "2026-09-28T12:06:22Z",
+  "source_commit": "5468d273f71648d353cf46337fd3f7dcf2b4e2fd",
+  "deployed_commit": "5468d273f71648d353cf46337fd3f7dcf2b4e2fd",
   "deployed_version": "5.8.7",
-  "ai_ops_schema_version": 6,
+  "ai_ops_schema_version": 7,
   "current_phase": 7,
-  "phase_status": "PHASE6_VERIFIED_COMPLETE_PHASE7_BLOCKED_SANDBOX_RUNTIME",
+  "phase_status": "PHASE7_COMPLETE_PHASE8_NOT_STARTED",
+  "phase_6_status": "VERIFIED_COMPLETE_PRESERVED_NOT_RERUN",
+  "phase_7_status": "COMPLETE",
+  "phase_8_status": "NOT_STARTED",
+  "umbrella_branch": "feature/private-ai-operations",
+  "phase_7_development_branch": "investigate/phase7-sandbox",
+  "phase_7_development_head": "5096d559ace9ecfc6bc7e522894f59afcc821253",
   "unresolved_findings": [],
-  "active_tasks": [],
-  "blocked_tasks": [
-    "Phase 7 real sandbox/test canary and isolation security gate: current host denies bubblewrap network namespace, and dedicated Railway image has no approved runner/pinned repository."
-  ],
-  "provider_health_summary": {
-    "metadata_slots_available": 18,
-    "metadata_slots_configured": 18,
-    "groq_real_first_review": "VALIDATED",
-    "mistral_real_independent_review": "ACCOUNT_QUOTA_LIMITED",
-    "gemini_real_independent_review": "VALIDATED_DIFFERENT_PROVIDER_AND_MODEL_BLIND"
-  },
-  "latest_sync_status": "SCHEMA_4_PRIVATE_GITHUB_CANARY_SHA256_READBACK_AND_SCHEMA_6_VOLUME_REOPEN_VERIFIED",
+  "active_investigations": [],
+  "blocked_investigations": [],
   "required_human_decisions": [],
-  "recommended_review_order": [],
-  "evidence_refs": [
-    "prediction-lab-data:2d6775b5b98a900b09d74124cfc409505bf751fa:2026-09-27T08:00:00Z",
-    "phase6-canary:06336be01f899d41d8b5a5b59f34ef0ab1fdc5cb:sha256:4b70cc77d57fb6616a6a2a2923eec292b41a5715b76e784dbd2115913cdd5da5"
-  ],
-  "replay_refs": [
-    "sha256:0ed1585b2b0023f46603921b1a9ee3c34765b45a3acfed9c0795f229ba0eccc9"
-  ],
+  "tool_operation_summary": {
+    "real_canary_operations": 10,
+    "real_canary_succeeded": 8,
+    "real_canary_failed_expected_output_bound_probe": 1,
+    "real_canary_timed_out_expected_hang_probe": 1,
+    "security_rejections": 17,
+    "source_commit_pinned": "5468d273f71648d353cf46337fd3f7dcf2b4e2fd",
+    "completed_result_reuse_verified": true,
+    "duplicate_execution_prevented": true,
+    "crash_restart_recovery_verified": true
+  },
+  "replay": {
+    "target": "tests/test_error_museum_v47.py",
+    "original_failed_run": 36412626489,
+    "diagnostic_run": 36414194131,
+    "root_cause": "Docker CLI inherited RLIMIT_AS=768 MiB and its Go runtime aborted with pthread_create failed before the isolated test container started.",
+    "fix_commit": "d27c0d7a552307660852c5c2fe76a2478b481db2",
+    "first_successful_fixed_rerun": 36414767889,
+    "final_exact_checkpoint_run": 36416809098,
+    "final_result": "PASS"
+  },
   "test_refs": [
-    "github-actions:36379869710",
-    "github-actions:36379873511",
-    "github-actions:36409909225",
-    "github-actions:36410066099",
-    "github-actions:36410061533"
+    "github-actions:36412243895:container-isolation:PASS",
+    "github-actions:36416809098:phase7-sandbox-security-replay:PASS",
+    "github-actions:36416809040:private-ai-ops-checkpoint:PASS",
+    "github-actions:36416814014:full-pr-tests:PASS"
   ],
-  "candidate_patch_refs": [],
-  "last_completed_checkpoint": "phase6_real_two_family_canary_volume_reopen_verified",
-  "recent_resolved": [],
-  "railway_deployment": "820aa35b-c9cb-4dd1-884b-b40b790de969",
+  "test_summary": {
+    "private_ai_ops": "139 passed",
+    "full_repository": "822 passed, 1 warning",
+    "dependency_integrity": "PASS",
+    "error_museum": "PASS",
+    "prediction_lab_relevant_regressions": "PASS",
+    "provider_resilience_regressions": "PASS",
+    "finding_lifecycle_regressions": "PASS"
+  },
+  "candidate_artifacts": {
+    "candidate_regression_test": "sandbox-only demonstration persisted with exact base commit, diff/hash and passing approved targeted test",
+    "candidate_patch": "sandbox-only demonstration persisted with exact base commit and diff/hash",
+    "canonical_source_modified": false,
+    "push_performed": false,
+    "merge_performed": false,
+    "deployment_performed_from_candidate": false,
+    "finding_auto_resolved": false
+  },
+  "sandbox_security": {
+    "container_network": "none",
+    "source_mount": "read-only",
+    "capabilities": "dropped",
+    "no_new_privileges": true,
+    "unprivileged_user": true,
+    "memory_limit": "768m",
+    "cpu_limit": "1",
+    "pids_limit": 64,
+    "secret_mount_present": false,
+    "ai_ops_volume_mounted_in_sandbox": false,
+    "path_traversal": "REJECTED",
+    "absolute_path_escape": "REJECTED",
+    "symlink_escape": "REJECTED",
+    "arbitrary_shell": "REJECTED",
+    "environment_dump": "REJECTED",
+    "secret_access": "REJECTED",
+    "arbitrary_network": "REJECTED",
+    "git_push_merge_force_push": "REJECTED",
+    "railway_github_production_mutation": "REJECTED",
+    "timeout_cleanup": "PASS",
+    "bounded_redacted_output": "PASS"
+  },
+  "provider_health_summary": {
+    "metadata_probe": "all configured Groq, Mistral, Gemini, Cloudflare and OpenRouter slots available in metadata-only checks on the final checkpoint",
+    "phase_6_groq_real_first_review": "VALIDATED",
+    "phase_6_gemini_real_independent_review": "VALIDATED_DIFFERENT_PROVIDER_AND_MODEL_BLIND",
+    "phase_7_real_inference_performed": false,
+    "phase_7_real_providers_enabled": false,
+    "paid_usage_performed": false,
+    "approved_free_routes_only": true
+  },
+  "dr_status": {
+    "private_repository": "xtenrore/Plane-Alerts-Private-Repo",
+    "export_schema": 5,
+    "roundtrip": "PASS",
+    "canary_sha256": "3d9774cac8c3bf9faf0c6ef12fab1b64356cbb8269507ed8c9b1f212d1a8f27b",
+    "tool_operation_provenance_preserved": true,
+    "candidate_metadata_preserved": true,
+    "secret_bearing_candidate_blocked": true
+  },
+  "railway": {
+    "service": "Plane-Alerts-AI-Ops",
+    "deployment_id": "79a16cc9-697e-497a-85d8-d175362431b2",
+    "deployment_result": "SUCCESS",
+    "schema": 7,
+    "ready_healthcheck": "PASS",
+    "persistent_volume": "/data/ai_ops",
+    "phase_6_two_review_readback_after_migration": "PASS",
+    "phase_1_stability_marker_after_migration": "PASS",
+    "scheduler_enabled": false,
+    "real_providers_enabled": false
+  },
+  "main_monitor_after_phase_7_checkpoint": {
+    "main_deployment": "e055cf20-9d4e-4a28-91ff-e927e4219472",
+    "phase_7_redeployed_main": false,
+    "samples": 720,
+    "p50_ms": 5000.2,
+    "p95_ms": 5001.1,
+    "p99_ms": 5001.5,
+    "max_ms": 5024.8,
+    "intervals_above_10000_ms": 0,
+    "notification_storm_observed": false,
+    "telegram_specific_errors_in_bounded_window": 0
+  },
+  "observed_external_limitations": [
+    "The unchanged main Plane Alerts service intermittently failed auxiliary notification_telemetry SQLite persistence after the Phase 7 checkpoint while the monitor cadence and notification cycles continued. This is outside the Phase 7 AI Ops code path and is not claimed fixed here.",
+    "Security-sensitive engineering operations intentionally execute only in the isolated GitHub/Docker runner; Railway remains a durable coordination/checkpoint service, not an unrestricted engineering host."
+  ],
+  "last_completed_checkpoint": "phase7_controlled_engineering_gateway_replay_security_dr_schema7_railway_checkpoint_verified",
+  "railway_deployment": "79a16cc9-697e-497a-85d8-d175362431b2",
   "scheduler_enabled": false,
   "paid_usage_performed": false,
-  "note": "Phase 6 remains verified and deployed as schema 6. Phase 7 gateway/schema 7 are isolated development work only; no Phase 7 deployment or acceptance. Preserve the Phase 6 production service and disabled scheduler; Phase 8 not started."
+  "draft_pr": 143,
+  "draft_pr_merged": false,
+  "note": "Phase 6 remains verified complete. Phase 7 is complete on exact code checkpoint 5468d273f71648d353cf46337fd3f7dcf2b4e2fd and deployed only to the dedicated AI Ops checkpoint service. Keep hourly AI scheduling disabled, keep PR #143 draft/unmerged, do not deploy the final umbrella release, and do not start Phase 8."
 }
