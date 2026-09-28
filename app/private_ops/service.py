@@ -19,6 +19,7 @@ from .dr_sync import sync_once
 from .github_dr import GitHubDR
 from .phase2_probe import run as run_phase2_probe
 from .phase5_probe import run as run_phase5_probe
+from .phase6_dr_probe import run as run_phase6_dr_probe
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
@@ -78,6 +79,8 @@ def main() -> None:
 
         if os.environ.get("AI_OPS_PHASE2_FAULT_PROBE_ENABLED", "").lower() == "true":
             print(run_phase2_probe(store, GitHubDR(token), source_commit=commit), flush=True)
+        if os.environ.get("AI_OPS_PHASE6_DR_PROBE_ENABLED", "").lower() == "true":
+            print(run_phase6_dr_probe(store, GitHubDR(token), source_commit=commit), flush=True)
 
         def backup_loop() -> None:
             backup_store = Store(data_dir)
