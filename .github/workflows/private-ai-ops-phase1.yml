@@ -15,9 +15,12 @@ on:
 permissions:
   contents: read
 
+# Serialize this generic deployer with the Phase 8B workflow because both target the
+# same dedicated Railway service. A stale generic run must never race a Supervisor
+# deployment/canary and remove the exact deployment that Phase 8B is validating.
 concurrency:
-  group: private-ai-ops-phase1
-  cancel-in-progress: true
+  group: private-ai-ops-phase8b
+  cancel-in-progress: false
 
 jobs:
   tests:

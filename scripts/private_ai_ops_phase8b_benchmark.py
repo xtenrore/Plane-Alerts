@@ -3,6 +3,7 @@
 
 Uses only current explicitly allow-listed Workers-Free models, never prints
 credentials, and fails closed before the free allocation could be exhausted.
+The benchmark deliberately uses the same guarded transport as the live Supervisor.
 """
 from __future__ import annotations
 

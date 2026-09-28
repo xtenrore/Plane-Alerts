@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# Phase 8A, Phase 8B and the generic Private Ops deployer all mutate the same
+# dedicated Railway service. Queue them so their deployments/canaries cannot race.
 concurrency:
-  group: private-ai-ops-phase8a
-  cancel-in-progress: true
+  group: private-ai-ops-phase8b
+  cancel-in-progress: false
 
 jobs:
   gui-gate:
