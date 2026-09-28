@@ -1,8 +1,8 @@
-"""Opt-in health process for the isolated Private Operations service.
+"""Process entry point for the isolated Private AI Operations service.
 
-No scheduler is enabled by this process. Provider inference remains disabled unless
-a later phase explicitly projects credentials and enables a scheduler. Phase probes
-are bounded one-shot verification hooks for the isolated service only.
+The service remains inert unless explicitly enabled. Phase probes are bounded one-shot
+verification hooks. The Phase 8 web control plane is opt-in and authenticated; the
+hourly AI scheduler is still a separate explicit production switch.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import os
 import re
 import signal
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 from .store import SCHEMA_VERSION, Store
 from .phase1_probe import run as run_phase1_probe
@@ -21,9 +21,11 @@ from .phase2_probe import run as run_phase2_probe
 from .phase5_probe import run as run_phase5_probe
 from .phase6_dr_probe import run as run_phase6_dr_probe
 from .phase6_volume_canary import run as run_phase6_volume_canary
+from .dashboard import create_dashboard_handler
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
+    """Legacy health-only handler used when the private web control plane is disabled."""
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.path not in ("/health", "/ready"):
@@ -62,14 +64,33 @@ def main() -> None:
         if os.environ.get("AI_OPS_PHASE1_PROBE_ENABLED", "").lower() == "true":
             print(run_phase1_probe(store), flush=True)
         if os.environ.get("AI_OPS_PHASE5_SHADOW_PROBE_ENABLED", "").lower() == "true":
-            # The probe copies already-sanitized durable evidence to a temporary
-            # store and uses deterministic fake providers. It cannot spend quota,
-            # mutate source evidence, or start an inference scheduler.
             print(run_phase5_probe(store), flush=True)
     except BaseException:
         store.close()
         raise
-    server = HTTPServer(("0.0.0.0", int(os.environ.get("PORT", "8080"))), create_handler(store))
+
+    web_enabled = os.environ.get("AI_OPS_WEB_GUI_ENABLED", "").lower() == "true"
+    if web_enabled:
+        admin_password = os.environ.get("ADMIN_PASSWORD", "")
+        if not admin_password:
+            store.close()
+            raise RuntimeError("Private web GUI enabled without ADMIN_PASSWORD")
+        session_ttl = int(os.environ.get("AI_OPS_SESSION_TTL_SECONDS", "1800"))
+        require_https = os.environ.get("AI_OPS_REQUIRE_HTTPS", "true").lower() != "false"
+        handler = create_dashboard_handler(
+            store.path,
+            password=admin_password,
+            require_https=require_https,
+            session_ttl=session_ttl,
+        )
+        server: HTTPServer = ThreadingHTTPServer(
+            ("0.0.0.0", int(os.environ.get("PORT", "8080"))), handler
+        )
+        server.daemon_threads = True
+    else:
+        server = HTTPServer(
+            ("0.0.0.0", int(os.environ.get("PORT", "8080"))), create_handler(store)
+        )
 
     if os.environ.get("AI_OPS_GITHUB_DR_ENABLED", "").lower() == "true":
         token = os.environ.get("AI_OPS_GITHUB_DR_TOKEN", "")
@@ -81,7 +102,6 @@ def main() -> None:
         canary_commit = os.environ.get("AI_OPS_PHASE6_CANARY_SHA", "")
         if canary_commit:
             print(run_phase6_volume_canary(data_dir, GitHubDR(token), source_commit=canary_commit), flush=True)
-
         if os.environ.get("AI_OPS_PHASE2_FAULT_PROBE_ENABLED", "").lower() == "true":
             print(run_phase2_probe(store, GitHubDR(token), source_commit=commit), flush=True)
         if os.environ.get("AI_OPS_PHASE6_DR_PROBE_ENABLED", "").lower() == "true":

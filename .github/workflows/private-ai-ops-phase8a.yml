@@ -1,0 +1,108 @@
+name: Private Operations Phase 8A GUI checkpoint
+
+on:
+  push:
+    branches: [feature/private-ai-operations]
+    paths:
+      - 'app/private_ops/dashboard.py'
+      - 'app/private_ops/service.py'
+      - 'tests/test_private_ops_dashboard.py'
+      - '.github/workflows/private-ai-ops-phase8a.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase8a
+  cancel-in-progress: true
+
+jobs:
+  gui-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      deploy: ${{ steps.head.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Compile GUI control plane
+        run: python -m py_compile app/private_ops/dashboard.py app/private_ops/service.py tests/test_private_ops_dashboard.py
+      - name: Run Phase 8A acceptance tests
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+        run: pytest -q tests/test_private_ops_dashboard.py tests/test_private_ops_store.py
+      - name: Secret and retired-agent negative checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|DROPBOX_REFRESH_TOKEN=.+)' app/private_ops tests/test_private_ops_dashboard.py
+          ! grep -RniE 'antigravity|Plane-Alerts-AGY|Railway AI Agent' app/private_ops/dashboard.py app/private_ops/service.py
+      - name: Refuse stale checkpoint deployment
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations" --jq '.object.sha')"
+          if [[ "$CURRENT" == "$GITHUB_SHA" ]]; then
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-private-gui:
+    needs: gui-gate
+    if: needs.gui-gate.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      DEPLOY_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Resolve Railway authentication
+        shell: sh
+        run: |
+          set -eu
+          if [ -n "${RAILWAY_TOKEN:-}" ]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Configure private owner auth without copying its value
+        shell: sh
+        run: |
+          set -eu
+          D='$'
+          railway variable set \
+            "ADMIN_PASSWORD=${D}{{Gemini-Telegram-Bot-Exprience.ADMIN_PASSWORD}}" \
+            "AI_OPS_WEB_GUI_ENABLED=true" \
+            "AI_OPS_REQUIRE_HTTPS=true" \
+            "AI_OPS_SESSION_TTL_SECONDS=1800" \
+            "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+      - name: Deploy exact tested Phase 8A checkpoint
+        shell: sh
+        run: |
+          set -eu
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            --ci --message "Private Ops Phase 8A ${DEPLOY_SHA}"
