@@ -38,7 +38,9 @@ jobs:
       - name: Read existing Prediction Lab source without changing it
         uses: actions/checkout@v4
         with:
-          ref: prediction-lab-data
+          # Retained Phase 4 source snapshot, before the growing daily branch
+          # exceeded the safety bound on source files per day.
+          ref: 2d6775b5b98a900b09d74124cfc409505bf751fa
           path: evidence
       - uses: actions/setup-python@v5
         with:
@@ -60,7 +62,9 @@ jobs:
           cd engineering
           PYTHONPATH=. python scripts/private_ai_ops_phase6_canary.py \
             --source ../evidence --hour 2026-09-27T08:00:00Z \
-            --source-commit "$SOURCE_COMMIT" --output /tmp/phase6-canary.json
+            --source-commit "$SOURCE_COMMIT" \
+            --evidence-commit 2d6775b5b98a900b09d74124cfc409505bf751fa \
+            --output /tmp/phase6-canary.json
       - name: Persist isolated shadow state on dedicated AI Ops volume and read back
         run: |
           set -euo pipefail

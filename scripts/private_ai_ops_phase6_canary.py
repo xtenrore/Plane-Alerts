@@ -71,12 +71,15 @@ def main() -> None:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--hour", required=True)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--evidence-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if os.environ.get("AI_OPS_PAID_USAGE_ALLOWED", "false").lower() != "false":
         raise RuntimeError("paid usage policy must remain false")
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_commit):
         raise ValueError("source commit required")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.evidence_commit):
+        raise ValueError("evidence commit required")
     hour = datetime.fromisoformat(args.hour.replace("Z", "+00:00"))
     if hour.tzinfo is None or hour.utcoffset().total_seconds() or hour.minute or hour.second or hour.microsecond:
         raise ValueError("closed UTC hour required")
@@ -121,7 +124,8 @@ def main() -> None:
                     raise RuntimeError("independent_reviews_not_durable")
             finally:
                 reopened.close()
-            payload = {"schema": 1, "source_commit": args.source_commit, "manifest": manifest,
+            payload = {"schema": 1, "source_commit": args.source_commit, "evidence_commit": args.evidence_commit,
+                       "manifest": manifest,
                        "snapshot": json.loads(data)}
             raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
             if len(raw) > 100000:
