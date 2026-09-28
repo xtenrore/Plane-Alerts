@@ -165,6 +165,7 @@ def main() -> None:
             if len(raw) > 100000:
                 raise RuntimeError("canary_checkpoint_exceeds_bound")
             args.output.write_bytes(raw)
+            args.output.with_suffix(".status").write_text("COMPLETE" if second is not None else "PENDING_AI")
             if second is None:
                 failure = store.db.execute("SELECT failure_kind FROM ai_ops_usage WHERE provider=? ORDER BY id DESC LIMIT 1",
                                            (second_provider,)).fetchone()
