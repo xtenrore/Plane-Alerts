@@ -1,0 +1,95 @@
+name: Private Operations Phase 8B Supervisor gate
+
+on:
+  push:
+    branches: [feature/private-ai-operations]
+    paths:
+      - 'app/private_ops/supervisor.py'
+      - 'tests/test_private_ops_supervisor.py'
+      - 'scripts/private_ai_ops_phase8b_benchmark.py'
+      - '.github/workflows/private-ai-ops-phase8b.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase8b
+  cancel-in-progress: true
+
+jobs:
+  supervisor-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Compile Supervisor control plane
+        run: python -m py_compile app/private_ops/supervisor.py scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py
+      - name: Run grounded Supervisor acceptance tests
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+        run: pytest -q tests/test_private_ops_supervisor.py tests/test_private_ops_dashboard.py tests/test_private_ops_service_web.py tests/test_private_ops_store.py
+      - name: Secret and retired-runtime residue checks
+        run: |
+          set -euo pipefail
+          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,})' app/private_ops/supervisor.py scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py
+          pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
+
+  cloudflare-supervisor-benchmark:
+    needs: supervisor-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      selected_model: ${{ steps.selection.outputs.selected_model }}
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID_2: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_2 }}
+      CLOUDFLARE_API_TOKEN_2: ${{ secrets.CLOUDFLARE_API_TOKEN_2 }}
+      AI_OPS_PAID_USAGE_ALLOWED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded inference dependency
+        run: python -m pip install 'httpx>=0.27,<1'
+      - name: Benchmark current approved Workers-Free candidates
+        run: PYTHONPATH=. python scripts/private_ai_ops_phase8b_benchmark.py --output /tmp/phase8b-supervisor-benchmark.json
+      - name: Validate and expose sanitized model selection
+        id: selection
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('/tmp/phase8b-supervisor-benchmark.json').read_text())
+          assert data['free_only'] is True
+          assert data['selected_model'] in {
+              '@cf/zai-org/glm-4.7-flash',
+              '@cf/google/gemma-4-26b-a4b-it',
+              '@cf/nvidia/nemotron-3-120b-a12b',
+          }
+          assert data['used_estimated_neurons'] <= 5000
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+              handle.write('selected_model=' + data['selected_model'] + '\n')
+          print('BENCHMARK_SELECTED_MODEL=' + data['selected_model'])
+          for item in data['results']:
+              print('BENCHMARK_RESULT model=%s available=%s score=%s latency_ms=%s estimated_neurons=%s failure=%s' % (
+                  item['model'], item['available'], item['score'], item['latency_ms'], item['estimated_neurons'], item['failure']))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase8b-supervisor-benchmark
+          path: /tmp/phase8b-supervisor-benchmark.json
+          retention-days: 14
