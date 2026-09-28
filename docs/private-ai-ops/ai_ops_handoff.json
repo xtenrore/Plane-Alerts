@@ -5,10 +5,12 @@
   "deployed_version": "5.8.7",
   "ai_ops_schema_version": 6,
   "current_phase": 7,
-  "phase_status": "PHASE6_VERIFIED_COMPLETE_PHASE7_IN_PROGRESS",
+  "phase_status": "PHASE6_VERIFIED_COMPLETE_PHASE7_BLOCKED_SANDBOX_RUNTIME",
   "unresolved_findings": [],
   "active_tasks": [],
-  "blocked_tasks": [],
+  "blocked_tasks": [
+    "Phase 7 real sandbox/test canary and isolation security gate: current host denies bubblewrap network namespace, and dedicated Railway image has no approved runner/pinned repository."
+  ],
   "provider_health_summary": {
     "metadata_slots_available": 18,
     "metadata_slots_configured": 18,
@@ -39,5 +41,5 @@
   "railway_deployment": "820aa35b-c9cb-4dd1-884b-b40b790de969",
   "scheduler_enabled": false,
   "paid_usage_performed": false,
-  "note": "Phase 6 real two-family canary and real-volume reopen after restart verified; isolated schema-6 shadow Store holds both validated reviews. Main monitor 720 intervals p50 5000.2ms p95 5001.0ms p99 5001.6ms max 5003.3ms, none above 10s. Phase 7 in progress; hourly scheduler disabled; PR unmerged."
+  "note": "Phase 6 remains verified and deployed as schema 6. Phase 7 gateway/schema 7 are isolated development work only; no Phase 7 deployment or acceptance. Preserve the Phase 6 production service and disabled scheduler; Phase 8 not started."
 }
