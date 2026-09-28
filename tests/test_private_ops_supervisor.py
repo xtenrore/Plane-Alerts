@@ -10,7 +10,7 @@ from app.private_ops.provider_adapters import ProviderFailure, Slot
 from app.private_ops.store import Store
 from app.private_ops.supervisor import (
     ChatResult, SupervisorBackend, SupervisorEngine, SupervisorStore,
-    CLOUDFLARE_DAILY_NEURON_BUDGET,
+    CLOUDFLARE_DAILY_NEURON_BUDGET, cloudflare_reasoning_controls,
 )
 
 
@@ -204,3 +204,13 @@ def test_paid_cloudflare_and_openrouter_models_are_rejected(tmp_path):
     with pytest.raises(ValueError, match="paid OpenRouter"):
         SupervisorEngine(backend, state, _slots(), cloudflare_model="@cf/zai-org/glm-4.7-flash",
                          fallback_models={"openrouter": "vendor/paid-model"})
+
+
+
+def test_cloudflare_reasoning_controls_keep_bounded_chat_user_visible():
+    assert cloudflare_reasoning_controls("@cf/nvidia/nemotron-3-120b-a12b") == {
+        "enable_thinking": False, "force_nonempty_content": True,
+    }
+    assert cloudflare_reasoning_controls("@cf/google/gemma-4-26b-a4b-it") == {"enable_thinking": False}
+    assert cloudflare_reasoning_controls("@cf/zai-org/glm-4.7-flash") == {"enable_thinking": False}
+    assert cloudflare_reasoning_controls("not-approved") == {}

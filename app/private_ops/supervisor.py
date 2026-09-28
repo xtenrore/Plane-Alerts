@@ -97,6 +97,20 @@ def cloudflare_slot_label(slot: Slot) -> str:
     return "Slot 2" if slot.name.endswith("_2") else "Slot 1"
 
 
+def cloudflare_reasoning_controls(model: str) -> dict[str, object]:
+    """Force bounded user-visible output for approved reasoning-capable Workers AI chat models.
+
+    These settings are sent directly in the Workers AI REST request. They prevent the
+    small Supervisor output budget from being consumed entirely by hidden reasoning.
+    Nemotron additionally documents force_nonempty_content for agent/coding use.
+    """
+    if model == "@cf/nvidia/nemotron-3-120b-a12b":
+        return {"enable_thinking": False, "force_nonempty_content": True}
+    if model in {"@cf/google/gemma-4-26b-a4b-it", "@cf/zai-org/glm-4.7-flash"}:
+        return {"enable_thinking": False}
+    return {}
+
+
 class SupervisorStore:
     """Small auxiliary SQLite store on the same dedicated persistent volume."""
 
@@ -566,8 +580,9 @@ class SupervisorTransport:
             headers["Authorization"] = "Bearer " + slot.credential
             if affinity:
                 headers["x-session-affinity"] = affinity[:128]
-            payload = {"model": model, "messages": list(messages), "max_tokens": 700,
-                       "temperature": 0, "options": {"rejectIfBusy": True}}
+            payload = {"model": model, "messages": list(messages), "max_completion_tokens": 700,
+                       "temperature": 0, "options": {"rejectIfBusy": True},
+                       "chat_template_kwargs": cloudflare_reasoning_controls(model)}
             if tools:
                 payload["tools"] = list(tools)
                 payload["tool_choice"] = "auto"
