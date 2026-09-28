@@ -58,7 +58,12 @@ def _catalog_contains(provider: str, model: str, credential: str) -> bool:
     if response.status_code != 200 or len(response.content) > 131072:
         raise RuntimeError(provider + "_catalog_unavailable")
     data = response.json()
-    return any(isinstance(item, dict) and item.get("id") == model for item in data.get("data", []))
+    identifiers = sorted(str(item["id"]) for item in data.get("data", [])
+                         if isinstance(item, dict) and isinstance(item.get("id"), str))
+    if model not in identifiers:
+        # Model names are public metadata; never print the request or credential.
+        print(provider + "_CATALOG_MODEL_IDS=" + ",".join(identifiers[:40]), flush=True)
+    return model in identifiers
 
 
 def main() -> None:
