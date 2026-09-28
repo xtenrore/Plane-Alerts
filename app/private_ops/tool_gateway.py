@@ -30,7 +30,10 @@ TEST_TARGETS = {
     "private_review": "tests/test_private_ops_phase6.py",
     "error_museum": "tests/test_error_museum_v47.py",
     "prediction_lab": "tests/test_prediction_lab_pipeline_v55.py",
+    "phase7_output": "scripts/private_ai_ops_phase7_output_fixture.py",
+    "phase7_timeout": "scripts/private_ai_ops_phase7_timeout_fixture.py",
 }
+TEST_TIMEOUTS = {"phase7_timeout": 2}
 MAX_OUTPUT = 8192
 MAX_ARTIFACT = 8192
 TIMEOUT = 90
@@ -140,18 +143,30 @@ def _launcher_limits(timeout: int, backend: str):
         # For bwrap the launcher becomes the sandboxed Python process, so an
         # address-space limit belongs here. For Docker the launcher is the
         # trusted Go client; the untrusted container is instead bounded by
-        # Docker's --memory/--cpus/--pids-limit controls below. Constraining the
-        # Docker client itself prevented it from creating runtime threads before
-        # the container could even start.
+        # Docker's --memory/--cpus/--pids-limit controls below.
         if backend != 'docker':
             resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
         resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024, 64 * 1024))
     return limits
 
 
+def _cleanup_docker_container(docker: str, cid_file: Path, env: dict[str, str]) -> None:
+    """Best-effort deterministic cleanup of a timed-out Docker sandbox."""
+    try:
+        container_id = cid_file.read_text().strip()
+    except OSError:
+        return
+    if re.fullmatch(r'[0-9a-f]{12,64}', container_id):
+        subprocess.run([docker, 'rm', '-f', container_id], env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=10, check=False)
+
+
 def _sandbox_command(root: Path, target: str, timeout: int) -> tuple[str, str, int, bool]:
     """Run fixed Python pytest target, with no network and no host writable mounts."""
     backend = os.environ.get('AI_OPS_SANDBOX_BACKEND', 'bwrap')
+    docker = None
+    cid_file = None
     if backend == 'docker':
         image = os.environ.get('AI_OPS_SANDBOX_IMAGE', '')
         if not re.fullmatch(r'plane-alerts-investigator:[0-9a-f]{40}', image):
@@ -159,12 +174,12 @@ def _sandbox_command(root: Path, target: str, timeout: int) -> tuple[str, str, i
         docker = shutil.which('docker')
         if not docker:
             raise RuntimeError('isolated Docker runner unavailable')
-        # The trusted worker must have access to Docker; the container does not.
-        # Never pass its environment, credentials, Docker socket, or host paths.
-        command = [docker, 'run', '--rm', '--pull', 'never', '--network', 'none',
-                   '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                   '--pids-limit', '64', '--memory', '768m', '--cpus', '1',
-                   '--user', '65534:65534', '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m',
+        cid_file = root.parent / (root.name + '.cid')
+        command = [docker, 'run', '--rm', '--pull', 'never', '--cidfile', str(cid_file),
+                   '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+                   '--security-opt', 'no-new-privileges', '--pids-limit', '64',
+                   '--memory', '768m', '--cpus', '1', '--user', '65534:65534',
+                   '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m',
                    '--mount', 'type=bind,src=' + str(root) + ',dst=/work,readonly',
                    '--workdir', '/work', '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work',
                    image, 'python', '-m', 'pytest', '-q', target]
@@ -189,21 +204,27 @@ def _sandbox_command(root: Path, target: str, timeout: int) -> tuple[str, str, i
         raise RuntimeError('unknown sandbox backend')
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
 
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        process = subprocess.Popen(command, env=env, stdout=stdout_file, stderr=stderr_file,
-                                   start_new_session=True, preexec_fn=_launcher_limits(timeout, backend))
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5)
-            raise TimeoutError('sandbox time limit exceeded') from exc
-        stdout_file.seek(0)
-        stderr_file.seek(0)
-        out = stdout_file.read(MAX_OUTPUT + 1)
-        err = stderr_file.read(MAX_OUTPUT + 1)
-        return (out[:MAX_OUTPUT].decode('utf-8', 'replace'), err[:MAX_OUTPUT].decode('utf-8', 'replace'),
-                process.returncode, len(out) > MAX_OUTPUT or len(err) > MAX_OUTPUT)
+    try:
+        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            process = subprocess.Popen(command, env=env, stdout=stdout_file, stderr=stderr_file,
+                                       start_new_session=True, preexec_fn=_launcher_limits(timeout, backend))
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+                if docker and cid_file:
+                    _cleanup_docker_container(docker, cid_file, env)
+                raise TimeoutError('sandbox time limit exceeded') from exc
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            out = stdout_file.read(MAX_OUTPUT + 1)
+            err = stderr_file.read(MAX_OUTPUT + 1)
+            return (out[:MAX_OUTPUT].decode('utf-8', 'replace'), err[:MAX_OUTPUT].decode('utf-8', 'replace'),
+                    process.returncode, len(out) > MAX_OUTPUT or len(err) > MAX_OUTPUT)
+    finally:
+        if cid_file:
+            cid_file.unlink(missing_ok=True)
 
 
 class Gateway:
@@ -228,8 +249,6 @@ class Gateway:
         root = Path(tempfile.mkdtemp(prefix='investigate-', dir=self.scratch))
         try:
             _snapshot(self.repository, row['source_commit'], root)
-            # The sandbox user is intentionally unprivileged. Give it only
-            # read permission to the disposable checkout; never the host repo.
             if os.environ.get('AI_OPS_SANDBOX_BACKEND') == 'docker':
                 root.chmod(0o755)
                 for member in root.rglob('*'):
@@ -297,13 +316,14 @@ class Gateway:
                 artifact_hash = hashlib.sha256(args['content'].encode()).hexdigest()
                 result['changed_file'] = args['path']
                 result['artifact_hash'] = artifact_hash
-                result['artifact'] = args['content']  # bounded; restored from durable record
+                result['artifact'] = args['content']
                 result['class'] = 'CANDIDATE_ONLY'
             elif tool in ('run_test', 'run_replay'):
                 target = (candidate_test_path if args['target'] == 'candidate_regression' else TEST_TARGETS[args['target']]) if tool == 'run_test' else TEST_TARGETS[args['case']]
                 if target is None:
                     raise ValueError('candidate regression test missing')
-                out, err, code, truncated = _sandbox_command(root, target, TIMEOUT)
+                operation_timeout = TEST_TIMEOUTS.get(args['target'], TIMEOUT) if tool == 'run_test' else TIMEOUT
+                out, err, code, truncated = _sandbox_command(root, target, operation_timeout)
                 result.update(stdout=out, stderr=err, exit_code=code, truncated=truncated, target=target)
                 result['class'] = 'PASS' if code == 0 else 'FAIL'
             elif tool == 'candidate_diff':
@@ -337,7 +357,6 @@ class Gateway:
         except TimeoutError:
             return self.store.finish_tool(operation_id, worker, 'TIMED_OUT', {'class': 'TIMEOUT'})
         except Exception as exc:
-            # Never persist exception bodies: they may contain host paths or credentials.
             return self.store.finish_tool(operation_id, worker, 'FAILED', {'class': type(exc).__name__})
         finally:
             shutil.rmtree(root)
