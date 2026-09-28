@@ -178,6 +178,8 @@ def _result_schema_instruction() -> str:
     return ("Return exactly one JSON object with only summary (a short string) and findings (an array); no markdown or extra keys. "
             "Return exactly one object in findings for every supplied case. Each object must contain exactly: "
             "case_ref, classification, severity, subsystem, event_ids, cpa_km, observed_km, states, coverage, rationale, needs_review. "
+            "case_ref, classification, severity, subsystem, coverage, rationale are strings; needs_review is a boolean. "
+            "event_ids and states are arrays of strings; cpa_km and observed_km are arrays of numbers (use [] when none). "
             "classification must be one of: " + ", ".join(sorted(CLASSIFICATIONS)) + ". "
             "severity: LOW|MEDIUM|HIGH|CRITICAL. subsystem: prediction|alert_lifecycle|route_guard|provider|coverage|storage|trajectory|unknown. "
             "Cite only event_ids and numeric/state/coverage values literally present in the evidence. Do not invent timestamps. "
