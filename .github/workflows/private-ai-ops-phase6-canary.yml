@@ -21,6 +21,7 @@ jobs:
       GROQ_KEY: ${{ secrets.GROQ_KEY }}
       MISTRAL_API: ${{ secrets.MISTRAL_API }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      AI_OPS_GITHUB_DR_TOKEN: ${{ secrets.AI_OPS_GITHUB_DR_TOKEN }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       AI_OPS_PAID_USAGE_ALLOWED: 'false'
@@ -29,12 +30,12 @@ jobs:
       AI_OPS_CANARY_GROQ_MODEL: openai/gpt-oss-120b
       AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
       AI_OPS_CANARY_SECOND_PROVIDER: gemini
-      AI_OPS_CANARY_GEMINI_MODEL: gemini-2.5-flash
+      AI_OPS_CANARY_GEMINI_MODEL: gemini-3.8-flash
       # A single bounded request reports only the failure class and HTTP status.
       PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
       ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
       SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
-      VOLUME_ID: 2e1fee18-ca07-4732-8329-9e3afab8cddc
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
     steps:
       - name: Check out exact engineering commit
         uses: actions/checkout@v4
@@ -70,25 +71,30 @@ jobs:
             --source-commit "$SOURCE_COMMIT" \
             --evidence-commit 2d6775b5b98a900b09d74124cfc409505bf751fa \
             --output /tmp/phase6-canary.json
-      - name: Persist isolated shadow state on dedicated AI Ops volume and read back
+      - name: Save sanitized checkpoint to owner-private DR and deploy isolated volume reader
         run: |
           set -euo pipefail
           test "$(cat /tmp/phase6-canary.status)" = COMPLETE
+          cd engineering
+          PYTHONPATH=. python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          from app.private_ops.github_dr import GitHubDR
+          raw = Path('/tmp/phase6-canary.json').read_bytes()
+          assert len(raw) < 100000
+          repo = GitHubDR(os.environ['AI_OPS_GITHUB_DR_TOKEN'])
+          path = 'private-ai-ops/snapshots/phase6-canary-' + os.environ['GITHUB_SHA'] + '.json'
+          repo.put(path, raw)
+          assert repo.get(path) == raw
+          print('PHASE6_PRIVATE_CANARY_READBACK_VERIFIED sha256=' + hashlib.sha256(raw).hexdigest())
+          PY
           npm install --global @railway/cli >/dev/null
           if [ -z "${RAILWAY_TOKEN:-}" ]; then
             test -n "${RAILWAY_API_TOKEN:-}"
             export RAILWAY_TOKEN="$RAILWAY_API_TOKEN"
           fi
-          REMOTE="/phase6-shadow-canary-${GITHUB_SHA}.json"
-          railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
-            files --volume "$VOLUME_ID" upload /tmp/phase6-canary.json "$REMOTE" >/dev/null
-          railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
-            files --volume "$VOLUME_ID" download "$REMOTE" /tmp/phase6-canary-reopened.json >/dev/null
-          python - <<'PY'
-          import hashlib
-          from pathlib import Path
-          a=Path('/tmp/phase6-canary.json').read_bytes()
-          b=Path('/tmp/phase6-canary-reopened.json').read_bytes()
-          assert a == b and len(a) < 100000
-          print('PHASE6_VOLUME_CANARY_REOPEN_VERIFIED sha256=' + hashlib.sha256(b).hexdigest())
-          PY
+          railway variable set "AI_OPS_PHASE6_CANARY_SHA=$GITHUB_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            --ci --message "Private Ops Phase 6 independent canary $GITHUB_SHA"
