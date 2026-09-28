@@ -118,6 +118,7 @@ def test_duplicate_worker_and_persistent_result(gateway):
 def test_redaction_and_fail_closed_runner(gateway):
     gw, commit, _, _ = gateway
     assert redact('Authorization: Bearer definitely-secret')[0] == '[REDACTED]'
+    assert redact('AIza12345678901234567890')[0] == '[REDACTED]'
     gw.request('sandbox', 'investigation:one', 'run_test', {'target': 'private_store', 'candidate': None}, commit)
     result = gw.execute('sandbox', 'worker')
     assert result['status'] == 'FAILED'  # fixture intentionally has no approved test file

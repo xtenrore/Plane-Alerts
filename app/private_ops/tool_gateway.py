@@ -35,7 +35,8 @@ MAX_OUTPUT = 8192
 MAX_ARTIFACT = 8192
 TIMEOUT = 90
 SECRET = re.compile(
-    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?[^\s]+|bearer\s+[^\s]+|(?:gh[pousr]_|sk-)[A-Za-z0-9_-]{12,}|"
+    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?[^\s]+|bearer\s+[^\s]+|"
+    r"(?:gh[pousr]_|sk-|gsk_|AIza)[A-Za-z0-9_-]{12,}|"
     r"(?:mongodb(?:\+srv)?://)[^\s]+|(?:api[_-]?key|password|token|secret)\s*[:=]\s*[^\s]+|"
     r"\b(?:latitude|longitude|lat|lon)\s*[:=]\s*-?\d+(?:\.\d+)?)"
 )
@@ -134,22 +135,42 @@ def _inside(root: Path, path: str) -> Path:
 
 def _sandbox_command(root: Path, target: str, timeout: int) -> tuple[str, str, int, bool]:
     """Run fixed Python pytest target, with no network and no host writable mounts."""
-    bwrap = shutil.which('bwrap')
-    if not bwrap:
-        raise RuntimeError('isolated sandbox unavailable')
-    python = Path('/usr/local/bin/python')
-    if not python.is_file():
-        raise RuntimeError('approved sandbox Python runtime unavailable')
-    command = [bwrap, '--unshare-all', '--die-with-parent', '--new-session',
-               '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin',
-               '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
-               '--ro-bind', str(root), '/work', '--chdir', '/work',
-               '--setenv', 'PATH', '/usr/local/bin:/usr/bin:/bin',
-               '--setenv', 'HOME', '/tmp', '--setenv', 'PYTHONPATH', '/work',
-               '--', '/usr/local/bin/python', '-m', 'pytest', '-q', target]
-    for link in ('/lib', '/lib64'):
-        if Path(link).exists():
-            command[command.index('--proc'):command.index('--proc')] = ['--ro-bind', link, link]
+    backend = os.environ.get('AI_OPS_SANDBOX_BACKEND', 'bwrap')
+    if backend == 'docker':
+        image = os.environ.get('AI_OPS_SANDBOX_IMAGE', '')
+        if not re.fullmatch(r'plane-alerts-investigator:[0-9a-f]{40}', image):
+            raise RuntimeError('exact approved sandbox image required')
+        docker = shutil.which('docker')
+        if not docker:
+            raise RuntimeError('isolated Docker runner unavailable')
+        # The trusted worker must have access to Docker; the container does not.
+        # Never pass its environment, credentials, Docker socket, or host paths.
+        command = [docker, 'run', '--rm', '--pull', 'never', '--network', 'none',
+                   '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                   '--pids-limit', '64', '--memory', '768m', '--cpus', '1',
+                   '--user', '65534:65534', '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m',
+                   '--mount', 'type=bind,src=' + str(root) + ',dst=/work,readonly',
+                   '--workdir', '/work', '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work',
+                   image, 'python', '-m', 'pytest', '-q', target]
+    elif backend == 'bwrap':
+        bwrap = shutil.which('bwrap')
+        if not bwrap:
+            raise RuntimeError('isolated sandbox unavailable')
+        python = Path('/usr/local/bin/python')
+        if not python.is_file():
+            raise RuntimeError('approved sandbox Python runtime unavailable')
+        command = [bwrap, '--unshare-all', '--die-with-parent', '--new-session',
+                   '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin',
+                   '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+                   '--ro-bind', str(root), '/work', '--chdir', '/work',
+                   '--setenv', 'PATH', '/usr/local/bin:/usr/bin:/bin',
+                   '--setenv', 'HOME', '/tmp', '--setenv', 'PYTHONPATH', '/work',
+                   '--', '/usr/local/bin/python', '-m', 'pytest', '-q', target]
+        for link in ('/lib', '/lib64'):
+            if Path(link).exists():
+                command[command.index('--proc'):command.index('--proc')] = ['--ro-bind', link, link]
+    else:
+        raise RuntimeError('unknown sandbox backend')
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
     def limits() -> None:
         resource.setrlimit(resource.RLIMIT_CPU, (min(timeout, 70), min(timeout, 70)))
@@ -195,6 +216,12 @@ class Gateway:
         root = Path(tempfile.mkdtemp(prefix='investigate-', dir=self.scratch))
         try:
             _snapshot(self.repository, row['source_commit'], root)
+            # The sandbox user is intentionally unprivileged. Give it only
+            # read permission to the disposable checkout; never the host repo.
+            if os.environ.get('AI_OPS_SANDBOX_BACKEND') == 'docker':
+                root.chmod(0o755)
+                for member in root.rglob('*'):
+                    member.chmod(0o755 if member.is_dir() else 0o644)
             tool = row['tool']
             args = json.loads(row['arguments_json'])
             candidate = args.get('candidate')
