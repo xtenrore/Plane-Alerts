@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-09-28T05:00:19Z",
-  "source_commit": "38669fac741faf45ac9e773159bd204e6eb8865d",
+  "generated_at": "2026-09-28T10:33:00Z",
+  "source_commit": "06336be01f899d41d8b5a5b59f34ef0ab1fdc5cb",
   "deployed_version": "5.8.7",
   "ai_ops_schema_version": 6,
-  "current_phase": 6,
-  "phase_status": "BLOCKED_REAL_INDEPENDENT_CANARY_QUOTA",
+  "current_phase": 7,
+  "phase_status": "PHASE6_VERIFIED_COMPLETE_PHASE7_IN_PROGRESS",
   "unresolved_findings": [],
   "active_tasks": [],
   "blocked_tasks": [],
@@ -13,28 +13,31 @@
     "metadata_slots_available": 18,
     "metadata_slots_configured": 18,
     "groq_real_first_review": "VALIDATED",
-    "mistral_real_independent_review": "ACCOUNT_QUOTA_LIMITED"
+    "mistral_real_independent_review": "ACCOUNT_QUOTA_LIMITED",
+    "gemini_real_independent_review": "VALIDATED_DIFFERENT_PROVIDER_AND_MODEL_BLIND"
   },
-  "latest_sync_status": "SCHEMA_4_LIVE_PRIVATE_GITHUB_DR_ROUNDTRIP_VERIFIED",
-  "required_human_decisions": [
-    "Wait for legitimate free Mistral quota or approve a different independent free provider family for a bounded manual canary. Do not rotate credentials to bypass account quota."
-  ],
+  "latest_sync_status": "SCHEMA_4_PRIVATE_GITHUB_CANARY_SHA256_READBACK_AND_SCHEMA_6_VOLUME_REOPEN_VERIFIED",
+  "required_human_decisions": [],
   "recommended_review_order": [],
   "evidence_refs": [
-    "prediction-lab-data:2d6775b5b98a900b09d74124cfc409505bf751fa:2026-09-27T08:00:00Z"
+    "prediction-lab-data:2d6775b5b98a900b09d74124cfc409505bf751fa:2026-09-27T08:00:00Z",
+    "phase6-canary:06336be01f899d41d8b5a5b59f34ef0ab1fdc5cb:sha256:4b70cc77d57fb6616a6a2a2923eec292b41a5715b76e784dbd2115913cdd5da5"
   ],
   "replay_refs": [
     "sha256:0ed1585b2b0023f46603921b1a9ee3c34765b45a3acfed9c0795f229ba0eccc9"
   ],
   "test_refs": [
     "github-actions:36379869710",
-    "github-actions:36379873511"
+    "github-actions:36379873511",
+    "github-actions:36409909225",
+    "github-actions:36410066099",
+    "github-actions:36410061533"
   ],
   "candidate_patch_refs": [],
-  "last_completed_checkpoint": "phase5_complete_phase6_code_deployed_live_canary_blocked",
+  "last_completed_checkpoint": "phase6_real_two_family_canary_volume_reopen_verified",
   "recent_resolved": [],
-  "railway_deployment": "946b7c11-adfe-4da5-a42c-d54817894b6a",
+  "railway_deployment": "820aa35b-c9cb-4dd1-884b-b40b790de969",
   "scheduler_enabled": false,
   "paid_usage_performed": false,
-  "note": "Navigation snapshot only. Verify live Railway volume, private GitHub DR, durable tasks, Prediction Lab, GitHub CI and monitor telemetry before acting. No live evidence or active findings were present on the AI Ops volume at this checkpoint. The failed ephemeral canary did not leave a persistent case."
+  "note": "Phase 6 real two-family canary and real-volume reopen after restart verified; isolated schema-6 shadow Store holds both validated reviews. Main monitor 720 intervals p50 5000.2ms p95 5001.0ms p99 5001.6ms max 5003.3ms, none above 10s. Phase 7 in progress; hourly scheduler disabled; PR unmerged."
 }
