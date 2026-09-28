@@ -5,7 +5,12 @@ on:
     branches: [feature/private-ai-operations]
     paths:
       - 'app/private_ops/supervisor.py'
+      - 'app/private_ops/supervisor_web.py'
+      - 'app/private_ops/service.py'
       - 'tests/test_private_ops_supervisor.py'
+      - 'tests/test_private_ops_supervisor_web.py'
+      - 'tests/test_private_ops_dashboard.py'
+      - 'tests/test_private_ops_service_web.py'
       - 'scripts/private_ai_ops_phase8b_benchmark.py'
       - '.github/workflows/private-ai-ops-phase8b.yml'
   workflow_dispatch:
@@ -20,7 +25,7 @@ concurrency:
 jobs:
   supervisor-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,25 +38,76 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       - name: Compile Supervisor control plane
-        run: python -m py_compile app/private_ops/supervisor.py scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py
+        run: >-
+          python -m py_compile
+          app/private_ops/supervisor.py
+          app/private_ops/supervisor_web.py
+          app/private_ops/service.py
+          scripts/private_ai_ops_phase8b_benchmark.py
+          tests/test_private_ops_supervisor.py
+          tests/test_private_ops_supervisor_web.py
       - name: Run grounded Supervisor acceptance tests
         env:
           TELEGRAM_BOT_TOKEN: ''
           GEMINI_API_KEY: ''
           GROQ_API_KEY: ''
-        run: pytest -q tests/test_private_ops_supervisor.py tests/test_private_ops_dashboard.py tests/test_private_ops_service_web.py tests/test_private_ops_store.py
+        run: >-
+          pytest -q
+          tests/test_private_ops_supervisor.py
+          tests/test_private_ops_supervisor_web.py
+          tests/test_private_ops_dashboard.py
+          tests/test_private_ops_service_web.py
+          tests/test_private_ops_store.py
       - name: Secret and retired-runtime residue checks
+        shell: bash
         run: |
           set -euo pipefail
-          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,})' app/private_ops/supervisor.py scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py
+          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|GROQ_KEY=.+|GEMINI_API_KEY=.+)' \
+            app/private_ops/supervisor.py app/private_ops/supervisor_web.py app/private_ops/service.py \
+            scripts/private_ai_ops_phase8b_benchmark.py tests/test_private_ops_supervisor.py tests/test_private_ops_supervisor_web.py
           pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
+      - name: Verify dependency consistency
+        run: pip check
+
+  full-repository-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Compile application and Vercel runtime
+        run: python -m compileall -q app vercel_runtime worker.py
+      - name: Build pinned global airport database
+        run: python scripts/build_airport_database.py
+      - name: Verify global airport database coverage and overrides
+        run: python scripts/verify_airport_database.py
+      - name: Run full repository test suite
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+          OPENSKY_CREDENTIALS_JSON: ''
+          LOCAL_ADSB_URL: ''
+        run: pytest -q
+      - name: Verify dependency consistency
+        run: pip check
 
   cloudflare-supervisor-benchmark:
-    needs: supervisor-tests
+    needs: [supervisor-tests, full-repository-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       selected_model: ${{ steps.selection.outputs.selected_model }}
+      selected_score: ${{ steps.selection.outputs.selected_score }}
+      estimated_neurons: ${{ steps.selection.outputs.estimated_neurons }}
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -69,6 +125,7 @@ jobs:
         run: PYTHONPATH=. python scripts/private_ai_ops_phase8b_benchmark.py --output /tmp/phase8b-supervisor-benchmark.json
       - name: Validate and expose sanitized model selection
         id: selection
+        shell: bash
         run: |
           python - <<'PY'
           import json, os
@@ -81,9 +138,14 @@ jobs:
               '@cf/nvidia/nemotron-3-120b-a12b',
           }
           assert data['used_estimated_neurons'] <= 5000
+          assert int(data['selected_score']) >= 7
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
               handle.write('selected_model=' + data['selected_model'] + '\n')
+              handle.write('selected_score=' + str(data['selected_score']) + '\n')
+              handle.write('estimated_neurons=' + str(data['used_estimated_neurons']) + '\n')
           print('BENCHMARK_SELECTED_MODEL=' + data['selected_model'])
+          print('BENCHMARK_SELECTED_SCORE=' + str(data['selected_score']))
+          print('BENCHMARK_ESTIMATED_NEURONS=' + str(data['used_estimated_neurons']))
           for item in data['results']:
               print('BENCHMARK_RESULT model=%s available=%s score=%s latency_ms=%s estimated_neurons=%s failure=%s' % (
                   item['model'], item['available'], item['score'], item['latency_ms'], item['estimated_neurons'], item['failure']))
@@ -93,3 +155,277 @@ jobs:
           name: phase8b-supervisor-benchmark
           path: /tmp/phase8b-supervisor-benchmark.json
           retention-days: 14
+
+  deploy-supervisor:
+    needs: cloudflare-supervisor-benchmark
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      DEPLOY_SHA: ${{ github.sha }}
+      SELECTED_MODEL: ${{ needs.cloudflare-supervisor-benchmark.outputs.selected_model }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID_2: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_2 }}
+      CLOUDFLARE_API_TOKEN_2: ${{ secrets.CLOUDFLARE_API_TOKEN_2 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Resolve Railway authentication
+        shell: sh
+        run: |
+          set -eu
+          if [ -n "${RAILWAY_TOKEN:-}" ]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Refuse stale checkpoint deployment
+        shell: sh
+        run: |
+          set -eu
+          CURRENT="$(wget -qO- "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations" | python -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')"
+          test "$CURRENT" = "$DEPLOY_SHA"
+      - name: Configure free-only Supervisor without exposing credentials
+        shell: sh
+        run: |
+          set -eu
+          test -n "$SELECTED_MODEL"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID_2"
+          test -n "$CLOUDFLARE_API_TOKEN_2"
+          D='$'
+          railway variable set \
+            "ADMIN_PASSWORD=${D}{{Gemini-Telegram-Bot-Exprience.ADMIN_PASSWORD}}" \
+            "GROQ_KEY=${D}{{Gemini-Telegram-Bot-Exprience.GROQ_KEY}}" \
+            "GROQ_KEY_2=${D}{{Gemini-Telegram-Bot-Exprience.GROQ_KEY_2}}" \
+            "GEMINI_API_KEY=${D}{{Gemini-Telegram-Bot-Exprience.GEMINI_API_KEY}}" \
+            "GEMINI_API_KEY_2=${D}{{Gemini-Telegram-Bot-Exprience.GEMINI_API_KEY_2}}" \
+            "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID" \
+            "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN" \
+            "CLOUDFLARE_ACCOUNT_ID_2=$CLOUDFLARE_ACCOUNT_ID_2" \
+            "CLOUDFLARE_API_TOKEN_2=$CLOUDFLARE_API_TOKEN_2" \
+            "AI_OPS_WEB_GUI_ENABLED=true" \
+            "AI_OPS_REQUIRE_HTTPS=true" \
+            "AI_OPS_SESSION_TTL_SECONDS=1800" \
+            "AI_OPS_SUPERVISOR_ENABLED=true" \
+            "AI_OPS_SUPERVISOR_MODEL=$SELECTED_MODEL" \
+            "AI_OPS_PAID_USAGE_ALLOWED=false" \
+            "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+      - name: Deploy exact tested Phase 8B checkpoint
+        shell: sh
+        run: |
+          set -eu
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            --ci --message "Private Ops Phase 8B ${DEPLOY_SHA}"
+
+  live-supervisor-canary:
+    needs: [deploy-supervisor, cloudflare-supervisor-benchmark]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      conversation_id: ${{ steps.canary.outputs.conversation_id }}
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      GUI_URL: https://plane-alerts-ai-ops-production.up.railway.app
+      SELECTED_MODEL: ${{ needs.cloudflare-supervisor-benchmark.outputs.selected_model }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli >/dev/null
+      - name: Resolve Railway authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Verify live grounded Supervisor and persistent conversation
+        id: canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY' > /tmp/canary.out
+          import http.cookiejar
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          base = os.environ['GUI_URL'].rstrip('/')
+          password = os.environ.get('ADMIN_PASSWORD', '')
+          selected = os.environ['SELECTED_MODEL']
+          assert password
+          jar = http.cookiejar.CookieJar()
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+          def request(path, *, method='GET', body=None, csrf=None, timeout=18):
+              raw = None if body is None else json.dumps(body).encode()
+              headers = {'Accept': 'application/json'}
+              if raw is not None: headers['Content-Type'] = 'application/json'
+              if csrf: headers['X-CSRF-Token'] = csrf
+              req = urllib.request.Request(base + path, data=raw, headers=headers, method=method)
+              try:
+                  resp = opener.open(req, timeout=timeout)
+                  return resp.status, resp.headers, resp.read()
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.headers, exc.read()
+
+          status, _, raw = request('/ready')
+          assert status == 200 and json.loads(raw) == {'status': 'ready'}
+          assert b'pending' not in raw and b'finding' not in raw and b'schema' not in raw
+          status, _, page = request('/supervisor')
+          assert status == 200 and b'Supervisor Chat' in page
+          status, _, _ = request('/api/supervisor/status')
+          assert status == 401
+
+          status, _, raw = request('/api/auth/bootstrap')
+          login_csrf = json.loads(raw)['csrf']; assert status == 200
+          status, _, raw = request('/api/auth/login', method='POST', body={'password': password}, csrf=login_csrf)
+          session = json.loads(raw); assert status == 200
+          csrf = session['csrf']
+          status, _, raw = request('/api/supervisor/status')
+          supervisor_status = json.loads(raw)
+          assert status == 200 and supervisor_status['enabled'] is True
+          assert supervisor_status['primary_provider'] == 'cloudflare'
+          assert supervisor_status['model'] == selected
+          assert supervisor_status['authority'] == 'read_only_operations'
+          lowered = raw.decode().lower()
+          assert 'credential' not in lowered and 'password' not in lowered and 'authorization' not in lowered
+
+          status, _, raw = request('/api/supervisor/conversations', method='POST', body={}, csrf=csrf)
+          assert status == 201
+          cid = json.loads(raw)['conversation_id']
+          status, _, raw = request('/api/supervisor/chat', method='POST', body={
+              'conversation_id': cid,
+              'message': 'Summarize the current durable operations state. If any requested fact is missing, say it is unavailable. Do not invent record IDs.'
+          }, csrf=csrf, timeout=30)
+          result = json.loads(raw)
+          assert status == 200 and result['status'] == 'OK'
+          assert result['provider'] in {'cloudflare','groq','gemini','openrouter'}
+          assert isinstance(result.get('answer'), str) and result['answer'].strip()
+          assert 'credential' not in raw.decode().lower()
+
+          status, _, raw = request('/api/supervisor/history?conversation_id=' + cid)
+          history = json.loads(raw)
+          assert status == 200 and len(history['messages']) >= 2
+          assert history['messages'][-2]['role'] == 'user' and history['messages'][-1]['role'] == 'assistant'
+          assert history['conversation']['provider'] == result['provider']
+          print('PHASE8B_CONVERSATION_ID=' + cid)
+          print('PHASE8B_LIVE_SUPERVISOR_CANARY_OK provider=' + result['provider'] + ' model=' + str(result.get('model','')) + ' slot=' + str(result.get('slot','')))
+          PY
+          cat /tmp/canary.out
+          CID="$(sed -n 's/^PHASE8B_CONVERSATION_ID=//p' /tmp/canary.out | tail -1)"
+          test -n "$CID"
+          echo "conversation_id=$CID" >> "$GITHUB_OUTPUT"
+
+  redeploy-same-checkpoint:
+    needs: live-supervisor-canary
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      DEPLOY_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Resolve Railway authentication
+        shell: sh
+        run: |
+          set -eu
+          if [ -n "${RAILWAY_TOKEN:-}" ]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Redeploy the same exact checkpoint to prove volume continuity
+        shell: sh
+        run: |
+          set -eu
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            --ci --message "Private Ops Phase 8B continuity ${DEPLOY_SHA}"
+
+  restart-readback:
+    needs: [redeploy-same-checkpoint, live-supervisor-canary, cloudflare-supervisor-benchmark]
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      GUI_URL: https://plane-alerts-ai-ops-production.up.railway.app
+      CONVERSATION_ID: ${{ needs.live-supervisor-canary.outputs.conversation_id }}
+      SELECTED_MODEL: ${{ needs.cloudflare-supervisor-benchmark.outputs.selected_model }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli >/dev/null
+      - name: Resolve Railway authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Verify conversation, model affinity and messages survived redeploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CONVERSATION_ID"
+          railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY'
+          import http.cookiejar, json, os, urllib.error, urllib.parse, urllib.request
+          base=os.environ['GUI_URL'].rstrip('/'); password=os.environ.get('ADMIN_PASSWORD',''); cid=os.environ['CONVERSATION_ID']; selected=os.environ['SELECTED_MODEL']
+          assert password and cid
+          jar=http.cookiejar.CookieJar(); opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+          def req(path, method='GET', body=None, csrf=None):
+              raw=None if body is None else json.dumps(body).encode(); headers={'Accept':'application/json'}
+              if raw is not None: headers['Content-Type']='application/json'
+              if csrf: headers['X-CSRF-Token']=csrf
+              request=urllib.request.Request(base+path,data=raw,headers=headers,method=method)
+              try:
+                  response=opener.open(request,timeout=15); return response.status,response.read()
+              except urllib.error.HTTPError as exc: return exc.code,exc.read()
+          status,raw=req('/ready'); assert status==200 and json.loads(raw)=={'status':'ready'}
+          status,raw=req('/api/auth/bootstrap'); login_csrf=json.loads(raw)['csrf']; assert status==200
+          status,raw=req('/api/auth/login','POST',{'password':password},login_csrf); csrf=json.loads(raw)['csrf']; assert status==200
+          status,raw=req('/api/supervisor/history?conversation_id='+urllib.parse.quote(cid,safe=''))
+          history=json.loads(raw); assert status==200 and len(history['messages'])>=2
+          assert history['conversation']['model']==selected
+          assert history['conversation']['status'] in {'ACTIVE','DEGRADED'}
+          assert history['messages'][-2]['role']=='user' and history['messages'][-1]['role']=='assistant'
+          status,raw=req('/api/supervisor/chat','POST',{'conversation_id':cid,'message':'Confirm the persisted conversation is continuing and report only durable backend facts.'},csrf)
+          result=json.loads(raw); assert status==200 and result['status'] in {'OK','DEGRADED'}
+          print('PHASE8B_RESTART_READBACK_OK status='+result['status']+' provider='+str(result.get('provider','unavailable')))
+          PY
