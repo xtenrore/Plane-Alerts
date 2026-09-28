@@ -12,6 +12,7 @@ import re
 import signal
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from pathlib import Path
 
 from .store import SCHEMA_VERSION, Store
 from .phase1_probe import run as run_phase1_probe
@@ -21,7 +22,7 @@ from .phase2_probe import run as run_phase2_probe
 from .phase5_probe import run as run_phase5_probe
 from .phase6_dr_probe import run as run_phase6_dr_probe
 from .phase6_volume_canary import run as run_phase6_volume_canary
-from .dashboard import create_dashboard_handler
+from .dashboard import create_dashboard_handler, read_health
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
@@ -51,6 +52,45 @@ def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
     return HealthHandler
 
 
+def create_private_web_handler(
+    db_path: Path,
+    *,
+    password: str,
+    require_https: bool = True,
+    session_ttl: int = 1800,
+) -> type[BaseHTTPRequestHandler]:
+    """Wrap the dashboard so public readiness never leaks operational counters."""
+    base = create_dashboard_handler(
+        db_path,
+        password=password,
+        require_https=require_https,
+        session_ttl=session_ttl,
+    )
+
+    class PrivateWebHandler(base):
+        def _public_health(self) -> None:
+            try:
+                health = read_health(db_path)
+                ready = health["integrity"] == "ok" and health["schema"] == SCHEMA_VERSION
+            except Exception:
+                ready = False
+            self._json(200 if ready else 503, {"status": "ready" if ready else "unavailable"})
+
+        def do_GET(self) -> None:
+            if self.path.split("?", 1)[0] in ("/health", "/ready"):
+                self._public_health()
+                return
+            super().do_GET()
+
+        def do_HEAD(self) -> None:
+            if self.path.split("?", 1)[0] in ("/health", "/ready"):
+                self._public_health()
+                return
+            super().do_HEAD()
+
+    return PrivateWebHandler
+
+
 def main() -> None:
     if os.environ.get("PRIVATE_AI_OPS_ENABLED", "").lower() != "true":
         raise RuntimeError("Private Operations must be explicitly enabled")
@@ -77,7 +117,7 @@ def main() -> None:
             raise RuntimeError("Private web GUI enabled without ADMIN_PASSWORD")
         session_ttl = int(os.environ.get("AI_OPS_SESSION_TTL_SECONDS", "1800"))
         require_https = os.environ.get("AI_OPS_REQUIRE_HTTPS", "true").lower() != "false"
-        handler = create_dashboard_handler(
+        handler = create_private_web_handler(
             store.path,
             password=admin_password,
             require_https=require_https,
