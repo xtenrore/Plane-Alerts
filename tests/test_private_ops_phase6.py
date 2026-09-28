@@ -226,13 +226,14 @@ def test_schema_five_upgrade_preserves_prior_review_and_finding(tmp_path):
     phase5._persist_review(store, pid, "triage", "groq", "g-free", "GROQ_KEY", validated)
     # Recreate exactly the old schema surface on a disposable fixture, including
     # its canonical data. The real migration must not replace these rows.
+    store.db.execute("DROP TABLE ai_ops_tool_operations")
     store.db.execute("DROP TABLE ai_ops_feedback")
     store.db.execute("ALTER TABLE ai_ops_reviews DROP COLUMN independence")
     store.db.execute("ALTER TABLE ai_ops_cases DROP COLUMN escalation_reason")
     store.db.execute("PRAGMA user_version=5")
     store.close()
     upgraded = Store(tmp_path)
-    assert upgraded.health()["schema"] == 6
+    assert upgraded.health()["schema"] == 7
     assert upgraded.db.execute("SELECT finding_id FROM ai_ops_findings").fetchone()[0] == finding
     assert upgraded.db.execute("SELECT packet_id,independence FROM ai_ops_reviews").fetchone()[:] == (pid, "NOT_APPLICABLE")
     phase5.record_feedback(upgraded, finding, "USEFUL")

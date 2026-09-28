@@ -8,6 +8,7 @@ text. The live persistent volume remains authoritative between checkpoints.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import math
 import re
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from .store import Store
 from .provider_adapters import SLOT_NAMES
+from .tool_gateway import SECRET as _TOOL_SECRET, safe_path
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9:_./-]{1,128}$")
 _SAFE_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
@@ -211,15 +213,46 @@ def export(store: Store, *, source_commit: str) -> tuple[bytes, dict[str, object
 
     feedback = [{"finding_id": _id(row[0]), "verdict": _id(row[1]), "updated": row[2]}
                 for row in store.db.execute("SELECT finding_id,verdict,updated FROM ai_ops_feedback ORDER BY finding_id")]
-    record = {"schema": 4, "source_commit": source_commit, "jobs": jobs, "steps": steps,
+    operations = []
+    for row in store.db.execute("""SELECT operation_id,job_id,finding_id,tool,arguments_json,input_hash,
+        source_commit,sandbox_id,status,started,finished,result_class,result_json,output_hash,artifact_hash,
+        retry_of,created FROM ai_ops_tool_operations ORDER BY operation_id"""):
+        arguments = json.loads(row[4])
+        # Candidate content is carried separately after scanning, never in the
+        # generic DR metadata. Other arguments are strictly allowlisted IDs.
+        artifact = None
+        if row[3] in ('candidate_test', 'candidate_patch'):
+            from .tool_gateway import _arguments
+            _arguments(row[3], arguments)
+            artifact = base64.b64encode(arguments.pop('content').encode()).decode()
+            safe_path(arguments['path'], editable=row[3] == 'candidate_test')
+        arguments = _safe(arguments)
+        result = json.loads(row[12]) if row[12] else None
+        summary = None
+        if result:
+            summary = _safe({'class': str(result.get('class', 'UNKNOWN')),
+                             'target': str(result.get('target', '')),
+                             'exit_code': result.get('exit_code') if isinstance(result.get('exit_code'), int) and result['exit_code'] >= 0 else None})
+        operations.append({'operation_id': _id(row[0]), 'job_id': _id(row[1]),
+                           'finding_id': _id(row[2]) if row[2] else None, 'tool': _id(row[3]),
+                           'arguments': arguments, 'artifact': artifact,
+                           'input_hash': row[5], 'source_commit': row[6],
+                           'sandbox_id': _id(row[7]), 'status': _id(row[8]),
+                           'started': row[9], 'finished': row[10],
+                           'result_class': _id(row[11]) if row[11] else None,
+                           'summary': summary, 'output_hash': row[13], 'artifact_hash': row[14],
+                           'retry_of': _id(row[15]) if row[15] else None, 'created': row[16]})
+    record = {"schema": 5, "source_commit": source_commit, "jobs": jobs, "steps": steps,
               "checkpoints": checkpoints, "evidence": evidence, "batches": batches, "cases": cases,
-              "reviews": reviews, "findings": findings, "finding_packets": finding_packets, "feedback": feedback}
+              "reviews": reviews, "findings": findings, "finding_packets": finding_packets, "feedback": feedback,
+              "tool_operations": operations}
     data = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(data) > 2_000_000 or _SECRET.search(data.decode()):
         raise ValueError("sanitized export failed privacy gate")
-    manifest = {"schema": 4, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+    manifest = {"schema": 5, "source_commit": source_commit, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
                 "jobs": len(jobs), "steps": len(steps), "evidence": len(evidence), "batches": len(batches), "cases": len(cases),
-                "reviews": len(reviews), "findings": len(findings), "finding_packets": len(finding_packets), "feedback": len(feedback)}
+                "reviews": len(reviews), "findings": len(findings), "finding_packets": len(finding_packets), "feedback": len(feedback),
+                "tool_operations": len(operations)}
     return data, manifest
 
 
@@ -233,7 +266,7 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
     if _SECRET.search(data.decode("utf-8")):
         raise ValueError("unsafe restore data")
     record = json.loads(data)
-    if record.get("schema") not in (1, 2, 3, 4) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
+    if record.get("schema") not in (1, 2, 3, 4, 5) or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", "")):
         raise ValueError("unsupported backup schema")
     if record["source_commit"] != manifest.get("source_commit") or len(record["jobs"]) != manifest.get("jobs") or len(record["steps"]) != manifest.get("steps"):
         raise ValueError("backup manifest mismatch")
@@ -245,6 +278,8 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
                 raise ValueError("backup Phase 5 manifest mismatch")
     if record["schema"] >= 4 and len(record["feedback"]) != manifest.get("feedback"):
         raise ValueError("backup Phase 6 feedback manifest mismatch")
+    if record['schema'] >= 5 and len(record['tool_operations']) != manifest.get('tool_operations'):
+        raise ValueError('backup Phase 7 operations manifest mismatch')
     store = Store(root)
     try:
         with store.transaction() as db:
@@ -302,6 +337,32 @@ def restore_empty(directory: str | Path, data: bytes, manifest: dict[str, object
                 for fb in record.get("feedback", []):
                     db.execute("INSERT INTO ai_ops_feedback(finding_id,verdict,updated) VALUES(?,?,?)",
                                (_id(fb["finding_id"]), _id(fb["verdict"]), fb["updated"]))
+            for op in record.get('tool_operations', []):
+                from .tool_gateway import _arguments
+                arguments = _safe(op['arguments'])
+                if op['artifact'] is not None:
+                    artifact = base64.b64decode(op['artifact'], validate=True).decode()
+                    if len(artifact.encode()) > 8192 or _TOOL_SECRET.search(artifact) or _SECRET.search(artifact):
+                        raise ValueError('unsafe candidate artifact in backup')
+                    arguments['content'] = artifact
+                _arguments(op['tool'], arguments)
+                source = op['source_commit']
+                if not re.fullmatch(r'[0-9a-f]{40}', source):
+                    raise ValueError('invalid operation source commit')
+                # An incomplete command is uncertain after DR: mark interrupted
+                # rather than execute the same operation ID a second time.
+                status = 'FAILED' if op['status'] == 'RUNNING' else _id(op['status'])
+                result_class = 'INTERRUPTED_AFTER_RESTORE' if op['status'] == 'RUNNING' else op['result_class']
+                result = json.dumps(op['summary'], sort_keys=True) if op['summary'] else None
+                db.execute("""INSERT INTO ai_ops_tool_operations(operation_id,job_id,finding_id,tool,
+                    arguments_json,input_hash,source_commit,sandbox_id,status,started,finished,result_class,
+                    result_json,output_hash,artifact_hash,retry_of,created)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (_id(op['operation_id']), _id(op['job_id']), _id(op['finding_id']) if op['finding_id'] else None,
+                     _id(op['tool']), json.dumps(arguments, sort_keys=True, separators=(',', ':')),
+                     op['input_hash'], source, _id(op['sandbox_id']), status, op['started'], op['finished'],
+                     _id(result_class) if result_class else None, result, op['output_hash'], op['artifact_hash'],
+                     _id(op['retry_of']) if op['retry_of'] else None, op['created']))
         if store.health()["integrity"] != "ok":
             raise RuntimeError("restored database failed integrity check")
         return store
