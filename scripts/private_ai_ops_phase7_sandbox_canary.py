@@ -12,15 +12,20 @@ from app.private_ops.dr_export import export, restore_empty
 from app.private_ops.store import Store
 from app.private_ops.tool_gateway import Gateway, TEST_TARGETS, redact
 
-DIAGNOSTIC_TAIL_BYTES = 2048
-DIAGNOSTIC_MAX_BYTES = 6144
+DIAGNOSTIC_STREAM_BYTES = 3072
+DIAGNOSTIC_MAX_BYTES = 8192
 
 
-def _bounded_tail(value: object) -> str:
+def _bounded_excerpt(value: object) -> str:
     if not isinstance(value, str):
         return ''
     data = value.encode('utf-8', 'replace')
-    return data[-DIAGNOSTIC_TAIL_BYTES:].decode('utf-8', 'replace')
+    if len(data) <= DIAGNOSTIC_STREAM_BYTES:
+        return data.decode('utf-8', 'replace')
+    half = DIAGNOSTIC_STREAM_BYTES // 2
+    return (data[:half].decode('utf-8', 'replace')
+            + '\n...[bounded diagnostic middle omitted]...\n'
+            + data[-half:].decode('utf-8', 'replace'))
 
 
 def safe_operation_diagnostic(record: dict[str, object]) -> str:
@@ -51,8 +56,8 @@ def safe_operation_diagnostic(record: dict[str, object]) -> str:
         'timeout_status': record.get('status') == 'TIMED_OUT' or result.get('class') == 'TIMEOUT',
         'output_truncated': bool(result.get('truncated')) or result.get('class') == 'OUTPUT_TRUNCATED',
         'result_hash': record.get('output_hash'),
-        'stdout_tail': _bounded_tail(result.get('stdout')),
-        'stderr_tail': _bounded_tail(result.get('stderr')),
+        'stdout_tail': _bounded_excerpt(result.get('stdout')),
+        'stderr_tail': _bounded_excerpt(result.get('stderr')),
     }
     rendered, _ = redact(json.dumps(payload, sort_keys=True, ensure_ascii=True))
     data = rendered.encode('utf-8')
