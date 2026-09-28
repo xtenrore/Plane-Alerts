@@ -1,0 +1,84 @@
+name: Private Operations Phase 6 one-shot free inference canary
+
+on:
+  push:
+    branches: [feature/private-ai-operations]
+    paths:
+      - scripts/private_ai_ops_phase6_canary.py
+      - .github/workflows/private-ai-ops-phase6-canary.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase6-canary
+  cancel-in-progress: false
+
+jobs:
+  one-packet-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GROQ_KEY: ${{ secrets.GROQ_KEY }}
+      MISTRAL_API: ${{ secrets.MISTRAL_API }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      AI_OPS_PAID_USAGE_ALLOWED: 'false'
+      AI_OPS_CANARY_GROQ_MODEL: llama-3.3-70b-versatile
+      AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      VOLUME_ID: 2e1fee18-ca07-4732-8329-9e3afab8cddc
+    steps:
+      - name: Check out exact engineering commit
+        uses: actions/checkout@v4
+        with:
+          path: engineering
+      - name: Read existing Prediction Lab source without changing it
+        uses: actions/checkout@v4
+        with:
+          ref: prediction-lab-data
+          path: evidence
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded inference dependencies
+        run: python -m pip install 'httpx>=0.27,<1'
+      - name: Refuse a superseded engineering commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations" --jq '.object.sha')"
+          test "$CURRENT" = "$GITHUB_SHA"
+      - name: One sanitized real packet, one call to each approved free provider
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd engineering
+          PYTHONPATH=. python scripts/private_ai_ops_phase6_canary.py \
+            --source ../evidence --hour 2026-09-27T08:00:00Z \
+            --source-commit "$SOURCE_COMMIT" --output /tmp/phase6-canary.json
+      - name: Persist isolated shadow state on dedicated AI Ops volume and read back
+        run: |
+          set -euo pipefail
+          npm install --global @railway/cli >/dev/null
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            test -n "${RAILWAY_API_TOKEN:-}"
+            export RAILWAY_TOKEN="$RAILWAY_API_TOKEN"
+          fi
+          REMOTE="/phase6-shadow-canary-${GITHUB_SHA}.json"
+          railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            files --volume "$VOLUME_ID" upload /tmp/phase6-canary.json "$REMOTE" >/dev/null
+          railway volume --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            files --volume "$VOLUME_ID" download "$REMOTE" /tmp/phase6-canary-reopened.json >/dev/null
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          a=Path('/tmp/phase6-canary.json').read_bytes()
+          b=Path('/tmp/phase6-canary-reopened.json').read_bytes()
+          assert a == b and len(a) < 100000
+          print('PHASE6_VOLUME_CANARY_REOPEN_VERIFIED sha256=' + hashlib.sha256(b).hexdigest())
+          PY

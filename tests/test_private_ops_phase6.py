@@ -12,6 +12,7 @@ from app.private_ops.store import Store
 from test_private_ops_phase5 import (
     FREE, MODELS, ScenarioAdapter, add_packet, item_for, packet, queued_store,
 )
+from scripts.private_ai_ops_phase6_canary import run_pair
 
 
 def route(store, adapter, slots=None):
@@ -19,6 +20,25 @@ def route(store, adapter, slots=None):
                                    Slot("mistral", "MISTRAL_API", "fake"),
                                    Slot("gemini", "GEMINI_API_KEY", "fake")],
                   adapter=adapter, approved_free_routes=FREE)
+
+
+def test_one_packet_shadow_canary_is_blind_durable_and_never_calls_deep(tmp_path):
+    store, (pid,) = queued_store(tmp_path)
+    adapter = ScenarioAdapter()
+    first, second = run_pair(store, pid, route(store, adapter), MODELS)
+    assert first == second
+    assert [provider for provider, _, _, _ in adapter.calls] == ["groq", "mistral"]
+    rows = store.db.execute("SELECT role,provider,independence FROM ai_ops_reviews ORDER BY created").fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("triage", "groq", "NOT_APPLICABLE"),
+        ("independent_review", "mistral", "DIFFERENT_PROVIDER_AND_MODEL_BLIND"),
+    ]
+    saved, manifest = export(store, source_commit="a" * 40)
+    store.close()
+    (tmp_path / "restored").mkdir()
+    restored = restore_empty(tmp_path / "restored", saved, manifest)
+    assert restored.db.execute("SELECT count(*) FROM ai_ops_reviews").fetchone()[0] == 2
+    restored.close()
 
 
 def test_low_risk_agreement_needs_no_third_call(tmp_path):
