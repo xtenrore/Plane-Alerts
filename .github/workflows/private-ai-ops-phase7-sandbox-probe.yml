@@ -44,10 +44,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
       - name: Install locked host test dependencies
         run: |
-          python -m pip install -r requirements.txt
-          python -m pip install 'pytest>=8,<9' 'pytest-asyncio>=0.24,<1'
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
       - name: Compile Phase 7 implementation
         run: python -m py_compile app/private_ops/*.py scripts/private_ai_ops_phase7_*.py tests/test_private_ops*.py
       - name: Run full Private AI Ops suite
@@ -58,6 +60,10 @@ jobs:
         run: pytest -q tests/test_private_ops*.py
       - name: Compile full repository runtime
         run: python -m compileall -q app vercel_runtime worker.py
+      - name: Build pinned global airport database
+        run: python scripts/build_airport_database.py
+      - name: Verify global airport database coverage and overrides
+        run: python scripts/verify_airport_database.py
       - name: Run full repository test suite
         env:
           TELEGRAM_BOT_TOKEN: ''
