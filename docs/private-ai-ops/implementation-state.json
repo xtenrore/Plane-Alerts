@@ -4,7 +4,7 @@
   "state_schema_version": 1,
   "last_completed_phase": 5,
   "current_phase": 6,
-  "phase_status": "phase_6_blocked_live_canary_and_remote_dr_verification",
+  "phase_status": "phase_6_blocked_mistral_free_quota_before_independent_real_canary",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -15,8 +15,8 @@
   "deployment_architecture": "separate_railway_service_with_dedicated_persistent_volume",
   "orchestration_store_target": "sqlite_wal_on_dedicated_volume",
   "private_github_dr_repository_target": "xtenrore/Plane-Alerts-Private-Repo",
-  "private_github_dr_repository_status": "private_verified_live_volume_sync_and_clean_restore_passed",
-  "provider_slots_status": "all_18_configured_slots_metadata_available; inference_remains_disabled",
+  "private_github_dr_repository_status": "private_verified_live_volume_schema_6_sync_readback_clean_restore",
+  "provider_slots_status": "18/18_metadata_available; Groq_real_triage_validated; Mistral_independent_review_quota_limited",
   "provider_credentials_verified": true,
   "paid_usage_performed": false,
   "production_mutation_performed": true,
@@ -103,8 +103,7 @@
     "idempotency": "second redeploy of same source created no duplicate remote snapshot; immutable remote paths read back"
   },
   "open_blockers_for_next_phase": [
-    "Phase 6 is not complete: real inference canary has not run because the existing credentials are metadata-verified but account billing/free entitlement is not verified for two independent providers.",
-    "Live Phase 6 volume-to-private-GitHub DR readback/clean restore of schema 6 could not be independently observed through the connected Railway service interface."
+    "Phase 6 cannot be declared complete: the bounded real canary validated a Groq first opinion, but the Mistral independent-review account returned a quota response (GitHub Actions run 36379674195); no two-review end-to-end inference and persistent canary checkpoint. Wait for legitimate approved free capacity and manually rerun; do not rotate keys to bypass provider/account quota."
   ],
   "phase_3_progress": {
     "status": "completed",
@@ -177,31 +176,35 @@
     "status": "blocked_not_complete",
     "schema_version": 6,
     "scope": "independent review enforcement, high-impact/disagreement escalation, explicit approved deep routes, evidence validation, usefulness feedback, observational metrics and sanitized DR schema 4",
-    "local_tests": "private focused and full repository tested; final results recorded after checkpoint",
-    "real_provider_canary": "NOT RUN: available metadata/API credentials do not attest billing tier or a guaranteed free inference route for two distinct provider families; cannot risk paid calls",
+    "local_tests": "795 full repository passed and 112 private AI Ops targeted passed; compileall and pip check clean",
+    "real_provider_canary": "PARTIAL_ONLY: 2026-09-28 GitHub Actions run 36379674195, one real sanitized retained Prediction Lab packet, Groq openai/gpt-oss-120b first inference passed deterministic validation; Mistral independent model mistral-small-latest returned account quota 429 before producing a second opinion. No durable two-review canary, no deep inference, no notification, no paid usage. Runner was ephemeral and its validated first opinion was not persisted in live volume. Manual-only future runner now preserves partial stage as PENDING_AI.",
     "scheduler_enabled": false,
     "paid_usage_performed": false,
-    "community_impact": "none_private_owner_railway_checkpoint_only",
-    "next_gate": "verify two provider routes are guaranteed free, run/persist bounded real inference canary on original sanitized evidence and verify live volume/DR restore; do not begin Phase 7",
-    "validated_code_checkpoint": "58e6f10f43f66323d01022d42141944c5d448706",
+    "community_impact": "none_private_owner_railway_checkpoint_only; Weekly Community Release owns platform installer matrix",
+    "next_gate": "Legitimate free Mistral quota must become available or an independently approved different free provider/model must be selected, then manually run one sanitized two-review shadow canary, persist and reopen its state, check primary monitor; do not begin Phase 7",
+    "validated_code_checkpoint": "38669fac741faf45ac9e773159bd204e6eb8865d",
     "dr_export_schema_version": 4,
-    "focused_local_tests": "106 passed; additional schema 5 upgrade and resolution-bypass regressions covered",
-    "full_repository_tests": "789 passed, 1 deprecation warning; pip check clean; airport database build/verify passed",
+    "focused_local_tests": "112 private AI Ops tests passed in final isolated CI; targeted Phase 6 and provider regression suite passed",
+    "full_repository_tests": "795 passed, 1 warning locally and in required PR CI; pip check and compileall clean",
     "github_private_ci": {
-      "run_id": 36377809460,
-      "result": "success after retry of transient Railway upload HTTP 500",
-      "individual_jobs": "tests, provider-metadata-probes, provision-and-deploy all passed"
+      "run_id": 36379869710,
+      "result": "success",
+      "individual_jobs": "tests (112 passed), provider-metadata-probes (18/18 available), provision-and-deploy all passed"
     },
     "github_full_ci": {
-      "run_id": 36377812073,
+      "run_id": 36379873511,
       "result": "success",
-      "full_tests": "789 passed",
-      "individual_job": "pytest and all required regression/benchmark/dependency steps passed"
+      "full_tests": "795 passed, 1 warning",
+      "individual_job": "pytest plus required regressions, benchmarks and pip check all succeeded"
     },
-    "railway_deployment": "2770ec1b-f214-461a-b38a-757ce5563c50 SUCCESS; dedicated volume mounted, Phase 1 stability marker intact, no persisted Phase 4 packet",
-    "deployed_commit": "58e6f10f43f66323d01022d42141944c5d448706",
-    "provider_metadata_only_health": "18/18 available, no inference performed",
-    "github_dr_state": "schema 4 local export/restore tests pass; post-migration live-volume GitHub DR sync status not independently exposed by available Railway connector, no claim of completed Phase 6 remote restore",
-    "monitor": "primary deployment unchanged; latest rolling 720 start intervals p50 5000.2ms, p95 5001.1ms, p99 5002.0ms, max 5013.4ms, zero above 10000ms"
-  }
+    "railway_deployment": "946b7c11-adfe-4da5-a42c-d54817894b6a SUCCESS; schema 6, PHASE1_VERIFIED_STABLE, PHASE5_SHADOW_SKIPPED_NO_PERSISTED_EVIDENCE, PHASE6_DR_LIVE_ROUNDTRIP_VERIFIED",
+    "deployed_commit": "38669fac741faf45ac9e773159bd204e6eb8865d",
+    "provider_metadata_only_health": "all 18 configured slots metadata available; the separate real Mistral inference quota response does not imply metadata health proves inference",
+    "github_dr_state": "schema 4 live-volume sanitized private GitHub sync, remote readback, SHA verification and empty restore verified by one-shot deployment probe; Phase 1 marker preserved",
+    "monitor": "primary deployment e055cf20-9d4e-4a28-91ff-e927e4219472 unchanged; rolling 720 start intervals at 2026-09-28T04:58:37Z p50 5000.2ms p95 5001.1ms p99 5001.5ms max 5002.6ms; zero above 10000ms",
+    "implementation_commit": "38669fac741faf45ac9e773159bd204e6eb8865d",
+    "real_provider_canary_run_id": 36379674195,
+    "real_provider_canary_complete": false
+  },
+  "phase_7_status": "not_started"
 }
