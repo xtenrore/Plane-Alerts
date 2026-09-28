@@ -1,8 +1,8 @@
 """Fail-closed structured engineering tools. No model-supplied shell or host paths.
 
-Execution requires bubblewrap user/mount/network namespaces. When the host does
-not permit them, execution fails safely; there is deliberately no shell fallback.
-The backend checks out an immutable Git archive into disposable scratch space.
+Execution requires an approved isolated backend. When the host does not permit
+one, execution fails safely; there is deliberately no shell fallback. The
+backend checks out an immutable Git archive into disposable scratch space.
 """
 from __future__ import annotations
 
@@ -133,6 +133,22 @@ def _inside(root: Path, path: str) -> Path:
     return target
 
 
+def _launcher_limits(timeout: int, backend: str):
+    """Return host-launcher limits without applying sandbox memory to Docker itself."""
+    def limits() -> None:
+        resource.setrlimit(resource.RLIMIT_CPU, (min(timeout, 70), min(timeout, 70)))
+        # For bwrap the launcher becomes the sandboxed Python process, so an
+        # address-space limit belongs here. For Docker the launcher is the
+        # trusted Go client; the untrusted container is instead bounded by
+        # Docker's --memory/--cpus/--pids-limit controls below. Constraining the
+        # Docker client itself prevented it from creating runtime threads before
+        # the container could even start.
+        if backend != 'docker':
+            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024, 64 * 1024))
+    return limits
+
+
 def _sandbox_command(root: Path, target: str, timeout: int) -> tuple[str, str, int, bool]:
     """Run fixed Python pytest target, with no network and no host writable mounts."""
     backend = os.environ.get('AI_OPS_SANDBOX_BACKEND', 'bwrap')
@@ -172,14 +188,10 @@ def _sandbox_command(root: Path, target: str, timeout: int) -> tuple[str, str, i
     else:
         raise RuntimeError('unknown sandbox backend')
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
-    def limits() -> None:
-        resource.setrlimit(resource.RLIMIT_CPU, (min(timeout, 70), min(timeout, 70)))
-        resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024, 64 * 1024))
 
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         process = subprocess.Popen(command, env=env, stdout=stdout_file, stderr=stderr_file,
-                                   start_new_session=True, preexec_fn=limits)
+                                   start_new_session=True, preexec_fn=_launcher_limits(timeout, backend))
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
