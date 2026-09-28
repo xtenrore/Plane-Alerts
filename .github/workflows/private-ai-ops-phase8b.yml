@@ -191,7 +191,9 @@ jobs:
         shell: sh
         run: |
           set -eu
-          CURRENT="$(wget -qO- "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations" | python -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')"
+          REF_JSON="$(wget -qO- "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations")"
+          CURRENT="$(printf '%s' "$REF_JSON" | grep -oE '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' | head -1 | grep -oE '[0-9a-f]{40}')"
+          test -n "$CURRENT"
           test "$CURRENT" = "$DEPLOY_SHA"
       - name: Configure free-only Supervisor without exposing credentials
         shell: sh
