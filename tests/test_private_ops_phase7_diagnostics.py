@@ -12,7 +12,7 @@ def test_failed_replay_diagnostic_is_debuggable_redacted_and_bounded():
         'class': 'FAIL',
         'exit_code': 1,
         'target': 'tests/test_error_museum_v47.py',
-        'stdout': ('x' * 5000) + '\nAuthorization: Bearer definitely-secret-value\nFAILED replay assertion',
+        'stdout': ('x' * 5000) + '\nREPLAY_ASSERTION_MARKER\nAuthorization: Bearer definitely-secret-value',
         'stderr': 'pytest stderr tail',
         'truncated': True,
     }
@@ -39,7 +39,7 @@ def test_failed_replay_diagnostic_is_debuggable_redacted_and_bounded():
     assert payload['timeout_status'] is False
     assert payload['output_truncated'] is True
     assert payload['result_hash'] == 'b' * 64
-    assert 'FAILED replay assertion' in payload['stdout_tail']
+    assert 'REPLAY_ASSERTION_MARKER' in payload['stdout_tail']
     assert 'pytest stderr tail' in payload['stderr_tail']
     assert 'definitely-secret-value' not in rendered
     assert '[REDACTED]' in rendered
