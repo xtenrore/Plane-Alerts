@@ -20,6 +20,7 @@ from .github_dr import GitHubDR
 from .phase2_probe import run as run_phase2_probe
 from .phase5_probe import run as run_phase5_probe
 from .phase6_dr_probe import run as run_phase6_dr_probe
+from .phase6_volume_canary import run as run_phase6_volume_canary
 
 
 def create_handler(store: Store) -> type[BaseHTTPRequestHandler]:
@@ -76,6 +77,10 @@ def main() -> None:
         if not token or not re.fullmatch(r"[0-9a-f]{40}", commit):
             store.close()
             raise RuntimeError("GitHub DR enabled without GitHub-controlled credentials or source commit")
+
+        canary_commit = os.environ.get("AI_OPS_PHASE6_CANARY_SHA", "")
+        if canary_commit:
+            print(run_phase6_volume_canary(data_dir, GitHubDR(token), source_commit=canary_commit), flush=True)
 
         if os.environ.get("AI_OPS_PHASE2_FAULT_PROBE_ENABLED", "").lower() == "true":
             print(run_phase2_probe(store, GitHubDR(token), source_commit=commit), flush=True)
