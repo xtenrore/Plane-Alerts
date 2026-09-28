@@ -117,3 +117,31 @@ def test_empty_primary_response_fails_over_and_persists_real_answer(tmp_path):
             (cid,),
         ).fetchall()
     assert ("empty_response",) in failures
+
+
+def test_all_empty_routes_degrade_without_old_no_answer_fallback(tmp_path):
+    backend, state = _seed(tmp_path)
+    cid = state.create_conversation("sup-all-empty-regression")
+    delegate = FakeDelegate(lambda *_: ChatResult(None, (), 25, 0))
+    engine = SupervisorEngine(
+        backend,
+        state,
+        _slots(),
+        cloudflare_model="@cf/nvidia/nemotron-3-120b-a12b",
+        transport=GuardedSupervisorTransport(delegate),
+    )
+
+    result = engine.chat(cid, "How is things looking? Have we found evidence?")
+
+    assert result["status"] == "DEGRADED"
+    assert result["failure"] == "empty_response"
+    assert "Supervisor AI is currently unavailable" in result["answer"]
+    assert "provider returned no answer" not in result["answer"].lower()
+    assert state.messages(cid)[-1]["content"] == result["answer"]
+
+    with sqlite3.connect(tmp_path / "supervisor.sqlite") as db:
+        failures = db.execute(
+            "SELECT failure_kind FROM supervisor_usage WHERE conversation_id=? AND success=0 ORDER BY id",
+            (cid,),
+        ).fetchall()
+    assert failures == [("empty_response",), ("empty_response",), ("empty_response",)]
