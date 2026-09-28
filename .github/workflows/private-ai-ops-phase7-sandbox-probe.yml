@@ -5,6 +5,7 @@ on:
     branches: [feature/private-ai-operations, investigate/phase7-sandbox]
     paths:
       - '.github/workflows/private-ai-ops-phase7-sandbox-probe.yml'
+      - '.github/workflows/private-ai-ops-phase1.yml'
       - 'app/private_ops/**'
       - 'deploy/private-ai-ops/sandbox.Dockerfile'
       - 'scripts/private_ai_ops_phase7_*.py'
