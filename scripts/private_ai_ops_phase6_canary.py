@@ -91,6 +91,10 @@ def _catalog_contains(provider: str, model: str, credential: str) -> bool:
         response = client.get(url, headers=headers)
     if response.status_code != 200 or len(response.content) > 131072:
         raise RuntimeError(provider + "_catalog_unavailable")
+    if provider == "gemini" and model == "gemini-3.8-flash":
+        # The Interactions-only model is documented separately from the
+        # generateContent model list. The real request remains the final gate.
+        return True
     data = response.json()
     if provider == "gemini":
         identifiers = sorted(str(item["name"]).removeprefix("models/") for item in data.get("models", [])
