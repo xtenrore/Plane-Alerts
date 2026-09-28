@@ -90,6 +90,8 @@ def test_supervisor_chat_requires_owner_session_and_csrf_and_persists(tmp_path):
     try:
         status, _, page = _request(server.server_port, "GET", "/supervisor")
         assert status == 200 and b"Supervisor Chat" in page and b"read-only operations chat" in page
+        assert b"Chat history" in page and b"Reasoning trace" in page
+        assert b"hidden chain-of-thought is not stored or exposed" in page
         status, _, _ = _request(server.server_port, "GET", "/api/supervisor/status")
         assert status == 401
 
@@ -132,8 +134,47 @@ def test_supervisor_chat_requires_owner_session_and_csrf_and_persists(tmp_path):
         assert status == 200
         assert [item["role"] for item in history["messages"]] == ["user", "assistant"]
         assert history["conversation"]["slot"] == "Slot 1"
+
+        status, _, raw = _request(
+            server.server_port, "GET", "/api/supervisor/conversations?limit=50", headers=auth,
+        )
+        conversations = json.loads(raw)["conversations"]
+        assert status == 200 and conversations[0]["conversation_id"] == cid
+        assert conversations[0]["title"] == "What is active right now?"
+        assert conversations[0]["message_count"] == 2
+        assert conversations[0]["slot"] == "Slot 1"
+        assert "CLOUDFLARE_API_TOKEN" not in raw.decode()
+
+        engine.state.record_tool(cid, "get_current_tasks", {}, {"available": True, "tasks": [{"id": "task:live"}]})
+        status, _, raw = _request(
+            server.server_port, "GET", "/api/supervisor/trace?conversation_id=" + cid, headers=auth,
+        )
+        trace = json.loads(raw)
+        assert status == 200
+        assert trace["trace_kind"] == "observable_execution_not_hidden_chain_of_thought"
+        assert trace["usage"] and trace["usage"][-1]["success"] is True
+        assert trace["usage"][-1]["slot"] == "Slot 1"
+        assert trace["tools"][-1]["tool"] == "get_current_tasks"
+        assert trace["tools"][-1]["result"]["tasks"][0]["id"] == "task:live"
+        assert len(trace["tools"][-1]["result_hash"]) == 64
+        assert trace["continuity"]["conversation_id"] == cid
+        assert "credential-one" not in raw.decode()
+        assert "CLOUDFLARE_API_TOKEN" not in raw.decode()
+
         reopened = SupervisorStore(tmp_path)
         assert reopened.messages(cid)[-1]["content"] == "Current durable backend state shows task:live."
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_history_and_trace_require_owner_authentication(tmp_path):
+    server, thread, engine, _transport = _serve(tmp_path)
+    try:
+        cid = engine.new_conversation()
+        status, _, _ = _request(server.server_port, "GET", "/api/supervisor/conversations?limit=50")
+        assert status == 401
+        status, _, _ = _request(server.server_port, "GET", "/api/supervisor/trace?conversation_id=" + cid)
+        assert status == 401
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=2)
 
