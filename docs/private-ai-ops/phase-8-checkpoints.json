@@ -1,0 +1,50 @@
+{
+  "phase": "FINAL_PHASE_8",
+  "umbrella_branch": "feature/private-ai-operations",
+  "draft_pr": 143,
+  "phase_7_verified_before_phase_8": true,
+  "subgates": {
+    "8A": {
+      "status": "COMPLETE",
+      "checkpoint_commit": "5fae311b2c16986abb57579f8f22481f704f6f4d",
+      "github_full_tests_run": 36428006613,
+      "github_phase8a_run": 36428000319,
+      "railway_deployment": "96e0bca8-450f-4719-bd29-2d3f937a79d7",
+      "production_url": "https://plane-alerts-ai-ops-production.up.railway.app",
+      "schema": 7,
+      "scheduler_enabled": false,
+      "paid_runtime_ai_enabled": false,
+      "acceptance": {
+        "authenticated_gui": "PASS",
+        "wrong_login": "PASS",
+        "login_throttling": "PASS",
+        "secure_http_only_same_site_cookie": "PASS",
+        "csrf": "PASS",
+        "logout": "PASS",
+        "session_expiry": "PASS",
+        "unauthorized_api": "PASS",
+        "public_readiness_only_no_operational_counts": "PASS",
+        "secret_and_private_coordinate_redaction": "PASS",
+        "bounded_large_task_list": "PASS",
+        "loading_empty_error_stale_states": "PASS",
+        "sse_cursor_resume": "PASS",
+        "live_sse_canary": "PASS",
+        "provider_failover_visual_state": "PASS",
+        "mobile_responsive_contract": "PASS"
+      },
+      "notes": [
+        "The GUI reads the durable AI Ops SQLite database through short-lived read-only connections; it does not create a second source of truth.",
+        "The owner password is referenced from the existing Railway service variable and is never copied into source, logs, browser storage, or API responses.",
+        "The production live canary resolved the owner secret only inside Railway and did not print it.",
+        "Direct external screenshot automation was unavailable from the execution environment; responsive/mobile behavior is covered by the committed layout contract and acceptance tests."
+      ]
+    },
+    "8B": {"status": "NOT_STARTED"},
+    "8C": {"status": "NOT_STARTED"},
+    "8D": {"status": "NOT_STARTED"},
+    "8E": {"status": "NOT_STARTED"},
+    "8F": {"status": "NOT_STARTED"},
+    "8G": {"status": "NOT_STARTED"},
+    "8H": {"status": "NOT_STARTED"}
+  }
+}
