@@ -4,7 +4,7 @@
   "state_schema_version": 1,
   "last_completed_phase": 5,
   "current_phase": 6,
-  "phase_status": "phase_6_in_progress_validation_pending",
+  "phase_status": "phase_6_blocked_live_canary_and_remote_dr_verification",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -102,7 +102,10 @@
     "final_steady_deployment": "6f8808b1-a0e5-4c73-923a-f6c1a3666554; fault injection disabled",
     "idempotency": "second redeploy of same source created no duplicate remote snapshot; immutable remote paths read back"
   },
-  "open_blockers_for_next_phase": [],
+  "open_blockers_for_next_phase": [
+    "Phase 6 is not complete: real inference canary has not run because the existing credentials are metadata-verified but account billing/free entitlement is not verified for two independent providers.",
+    "Live Phase 6 volume-to-private-GitHub DR readback/clean restore of schema 6 could not be independently observed through the connected Railway service interface."
+  ],
   "phase_3_progress": {
     "status": "completed",
     "checkpoint_branch_commit": "5e7d92f5bd45ec6026372013b159f0d335a55e54",
@@ -171,14 +174,34 @@
     "next_gate": "Phase 6 remains completely unstarted until explicit owner instruction"
   },
   "phase_6_progress": {
-    "status": "in_progress",
+    "status": "blocked_not_complete",
     "schema_version": 6,
     "scope": "independent review enforcement, high-impact/disagreement escalation, explicit approved deep routes, evidence validation, usefulness feedback, observational metrics and sanitized DR schema 4",
     "local_tests": "private focused and full repository tested; final results recorded after checkpoint",
-    "real_provider_canary": "pending verified free-account capacity and isolated persistent canary",
+    "real_provider_canary": "NOT RUN: available metadata/API credentials do not attest billing tier or a guaranteed free inference route for two distinct provider families; cannot risk paid calls",
     "scheduler_enabled": false,
     "paid_usage_performed": false,
     "community_impact": "none_private_owner_railway_checkpoint_only",
-    "next_gate": "GitHub CI individual jobs, dedicated-service exact commit deploy, DR and health, 5-second production cadence, safe real canary if free capacity verifiable"
+    "next_gate": "verify two provider routes are guaranteed free, run/persist bounded real inference canary on original sanitized evidence and verify live volume/DR restore; do not begin Phase 7",
+    "validated_code_checkpoint": "58e6f10f43f66323d01022d42141944c5d448706",
+    "dr_export_schema_version": 4,
+    "focused_local_tests": "106 passed; additional schema 5 upgrade and resolution-bypass regressions covered",
+    "full_repository_tests": "789 passed, 1 deprecation warning; pip check clean; airport database build/verify passed",
+    "github_private_ci": {
+      "run_id": 36377809460,
+      "result": "success after retry of transient Railway upload HTTP 500",
+      "individual_jobs": "tests, provider-metadata-probes, provision-and-deploy all passed"
+    },
+    "github_full_ci": {
+      "run_id": 36377812073,
+      "result": "success",
+      "full_tests": "789 passed",
+      "individual_job": "pytest and all required regression/benchmark/dependency steps passed"
+    },
+    "railway_deployment": "2770ec1b-f214-461a-b38a-757ce5563c50 SUCCESS; dedicated volume mounted, Phase 1 stability marker intact, no persisted Phase 4 packet",
+    "deployed_commit": "58e6f10f43f66323d01022d42141944c5d448706",
+    "provider_metadata_only_health": "18/18 available, no inference performed",
+    "github_dr_state": "schema 4 local export/restore tests pass; post-migration live-volume GitHub DR sync status not independently exposed by available Railway connector, no claim of completed Phase 6 remote restore",
+    "monitor": "primary deployment unchanged; latest rolling 720 start intervals p50 5000.2ms, p95 5001.1ms, p99 5002.0ms, max 5013.4ms, zero above 10000ms"
   }
 }
