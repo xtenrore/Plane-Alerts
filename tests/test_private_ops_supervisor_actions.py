@@ -307,6 +307,21 @@ class ActionTransport:
             (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
             "",
         )
+        # A provider receives the backend tool result on the follow-up round.
+        # Consume it before considering a new user-driven tool call so this
+        # test models the actual OpenAI-compatible tool protocol correctly.
+        if messages and messages[-1].get("role") == "tool":
+            tool_result = json.loads(messages[-1]["content"])
+            if "action" in tool_result and tool_result["action"].get("action_id"):
+                action = tool_result["action"]
+                self.action_id = action["action_id"]
+                if action.get("status") == "PROPOSED":
+                    return ChatResult(
+                        f"Proposed {self.action_id}. Confirm using that exact action ID.",
+                        (), 20, 8,
+                    )
+                return ChatResult("Safe action processed.", (), 20, 5)
+            return ChatResult("Safe action request was rejected.", (), 20, 5)
         if "retry task:failed" in str(last_user).lower() and self.action_id is None:
             return ChatResult(
                 None,
@@ -323,18 +338,6 @@ class ActionTransport:
                 20,
                 3,
             )
-        if messages and messages[-1].get("role") == "tool":
-            tool_result = json.loads(messages[-1]["content"])
-            if "action" in tool_result and tool_result["action"].get("action_id"):
-                action = tool_result["action"]
-                self.action_id = action["action_id"]
-                if action.get("status") == "PROPOSED":
-                    return ChatResult(
-                        f"Proposed {self.action_id}. Confirm using that exact action ID.",
-                        (), 20, 8,
-                    )
-                return ChatResult("Safe action processed.", (), 20, 5)
-            return ChatResult("Safe action request was rejected.", (), 20, 5)
         if self.action_id and self.action_id in str(last_user) and "confirm" in str(last_user).lower():
             return ChatResult(
                 None,
