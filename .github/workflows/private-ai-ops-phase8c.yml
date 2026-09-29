@@ -234,6 +234,27 @@ jobs:
           assert authority['production_mutation'] is False
           assert authority['flight_decision_authority'] is False
 
+          status, raw = request('/api/tasks?limit=200')
+          assert status == 200
+          tasks = json.loads(raw)
+          choice = next((item for item in tasks if item.get('status') == 'FAILED'), None)
+          action = 'retry_failed_task'
+          if choice is None:
+              choice = next((item for item in tasks if item.get('status') == 'PAUSED'), None)
+              action = 'resume_job'
+          if choice is None:
+              choice = next(
+                  (item for item in tasks if item.get('status') in {'PENDING', 'RETRY', 'RUNNING'}),
+                  None,
+              )
+              action = 'pause_job'
+          if choice is None:
+              raise AssertionError('No durable task is available for the proposal-only live canary')
+
+          target_id = str(choice['id'])
+          original_status = choice.get('status')
+          original_priority = choice.get('priority')
+
           status, raw = request(
               '/api/supervisor/conversations', method='POST', body={}, csrf=csrf,
           )
@@ -245,8 +266,9 @@ jobs:
               body={
                   'conversation_id': conversation_id,
                   'message': (
-                      'Use propose_safe_action now to propose pause_job for '
-                      'task:phase8c-canary-missing. Do not confirm or execute it.'
+                      f'Use propose_safe_action now with action {action} and target_id {target_id}. '
+                      'This is a proposal-only live canary. Do not confirm or execute it. '
+                      'Return the durable action id for owner confirmation.'
                   ),
               },
               timeout=35,
@@ -257,6 +279,8 @@ jobs:
               item for item in proposal.get('safe_actions', [])
               if item.get('conversation_id') == conversation_id
               and item.get('status') == 'PROPOSED'
+              and item.get('target_id') == target_id
+              and item.get('action') == action
           ]
           assert rows, proposal
           action_id = rows[0]['action_id']
@@ -275,9 +299,22 @@ jobs:
               item for item in cancelled.get('safe_actions', [])
               if item.get('action_id') == action_id
           ]
-          assert matching and matching[0]['status'] == 'CANCELLED'
+          assert matching and matching[0]['status'] == 'CANCELLED', cancelled
           assert cancelled.get('provider') in {'cloudflare', 'groq', 'gemini', 'openrouter'}
-          print('PHASE8C_LIVE_SAFE_ACTION_CANARY_OK action=' + action_id)
+
+          status, raw = request('/api/tasks?limit=200')
+          assert status == 200
+          after = next(
+              (item for item in json.loads(raw) if str(item.get('id')) == target_id),
+              None,
+          )
+          assert after is not None
+          assert after.get('status') == original_status
+          assert after.get('priority') == original_priority
+          print(
+              'PHASE8C_LIVE_SAFE_ACTION_CANARY_OK '
+              f'action={action_id} target={target_id} unchanged={original_status}'
+          )
           PY
 
   checkpoint:
