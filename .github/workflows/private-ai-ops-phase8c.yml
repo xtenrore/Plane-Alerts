@@ -1,0 +1,296 @@
+name: Private Operations Phase 8C safe-actions gate
+
+on:
+  pull_request:
+    branches: [feature/private-ai-operations]
+    paths:
+      - 'app/private_ops/supervisor_actions.py'
+      - 'app/private_ops/service_actions.py'
+      - 'deploy/private-ai-ops/Dockerfile'
+      - 'tests/test_private_ops_supervisor_actions.py'
+      - '.github/workflows/private-ai-ops-phase8c.yml'
+  push:
+    branches: [feature/private-ai-operations]
+    paths:
+      - 'app/private_ops/supervisor_actions.py'
+      - 'app/private_ops/service_actions.py'
+      - 'deploy/private-ai-ops/Dockerfile'
+      - 'tests/test_private_ops_supervisor_actions.py'
+      - '.github/workflows/private-ai-ops-phase8c.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase8c
+  cancel-in-progress: false
+
+jobs:
+  safe-actions-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Compile safe-action control plane
+        run: >-
+          python -m py_compile
+          app/private_ops/supervisor_actions.py
+          app/private_ops/service_actions.py
+          tests/test_private_ops_supervisor_actions.py
+      - name: Run Phase 8C acceptance and adjacent safety tests
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+        run: >-
+          pytest -q
+          tests/test_private_ops_supervisor_actions.py
+          tests/test_private_ops_supervisor.py
+          tests/test_private_ops_supervisor_web.py
+          tests/test_private_ops_tool_gateway.py
+          tests/test_private_ops_store.py
+          tests/test_private_ops_phase6.py
+      - name: Secret and retired-runtime residue checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RniE '(mongodb\+srv://[^[:space:]]+:[^[:space:]]+@|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{12,}|CLOUDFLARE_API_TOKEN=.+|GROQ_KEY=.+|GEMINI_API_KEY=.+)' \
+            app/private_ops/supervisor_actions.py app/private_ops/service_actions.py \
+            tests/test_private_ops_supervisor_actions.py
+          pytest -q tests/test_no_retired_agent_runtime_v543.py tests/test_retired_external_agent_absent.py
+      - name: Verify dependency consistency
+        run: pip check
+
+  full-repository-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Compile application and Vercel runtime
+        run: python -m compileall -q app vercel_runtime worker.py
+      - name: Build pinned global airport database
+        run: python scripts/build_airport_database.py
+      - name: Verify global airport database coverage and overrides
+        run: python scripts/verify_airport_database.py
+      - name: Run full repository test suite
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+          OPENSKY_CREDENTIALS_JSON: ''
+          LOCAL_ADSB_URL: ''
+        run: pytest -q
+      - name: Verify dependency consistency
+        run: pip check
+
+  deploy-safe-actions:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/private-ai-operations'
+    needs: [safe-actions-tests, full-repository-tests]
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      DEPLOY_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Resolve Railway authentication
+        shell: sh
+        run: |
+          set -eu
+          if [ -n "${RAILWAY_TOKEN:-}" ]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Refuse stale checkpoint deployment
+        shell: sh
+        run: |
+          set -eu
+          REF_JSON="$(wget -qO- "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations")"
+          CURRENT="$(printf '%s' "$REF_JSON" | grep -oE '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' | head -1 | grep -oE '[0-9a-f]{40}')"
+          test -n "$CURRENT"
+          test "$CURRENT" = "$DEPLOY_SHA"
+      - name: Pin safe actions to the exact tested source commit
+        shell: sh
+        run: |
+          set -eu
+          railway variable set \
+            "AI_OPS_SOURCE_COMMIT=$DEPLOY_SHA" \
+            "AI_OPS_PAID_USAGE_ALLOWED=false" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+      - name: Deploy exact tested Phase 8C checkpoint
+        shell: sh
+        run: |
+          set -eu
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            --ci --message "Private Ops Phase 8C ${DEPLOY_SHA}"
+
+  live-safe-actions-canary:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/private-ai-operations'
+    needs: deploy-safe-actions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+      GUI_URL: https://plane-alerts-ai-ops-production.up.railway.app
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli >/dev/null
+      - name: Resolve Railway authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RAILWAY_TOKEN:-}" ]]; then exit 0; fi
+          test -n "${RAILWAY_API_TOKEN:-}"
+          if railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID" --workspace "$WORKSPACE_ID"; then exit 0; fi
+          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
+          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+      - name: Verify live proposal, owner cancellation, and fail-closed authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          railway run --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --no-local python - <<'PY'
+          import http.cookiejar
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          base = os.environ['GUI_URL'].rstrip('/')
+          password = os.environ.get('ADMIN_PASSWORD', '')
+          assert password
+          jar = http.cookiejar.CookieJar()
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+          def request(path, *, method='GET', body=None, csrf=None, timeout=20):
+              raw = None if body is None else json.dumps(body).encode()
+              headers = {'Accept': 'application/json'}
+              if raw is not None:
+                  headers['Content-Type'] = 'application/json'
+              if csrf:
+                  headers['X-CSRF-Token'] = csrf
+              req = urllib.request.Request(base + path, data=raw, headers=headers, method=method)
+              try:
+                  resp = opener.open(req, timeout=timeout)
+                  return resp.status, resp.read()
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.read()
+
+          status, raw = request('/ready')
+          assert status == 200 and json.loads(raw) == {'status': 'ready'}
+          status, _ = request('/api/supervisor/status')
+          assert status == 401
+
+          status, raw = request('/api/auth/bootstrap')
+          assert status == 200
+          login_csrf = json.loads(raw)['csrf']
+          status, raw = request(
+              '/api/auth/login', method='POST',
+              body={'password': password}, csrf=login_csrf,
+          )
+          assert status == 200
+          session = json.loads(raw)
+          csrf = session['csrf']
+
+          status, raw = request('/api/supervisor/status')
+          assert status == 200
+          authority = json.loads(raw)
+          assert authority['authority'] == 'confirmation_gated_safe_actions'
+          assert authority['production_mutation'] is False
+          assert authority['flight_decision_authority'] is False
+
+          status, raw = request(
+              '/api/supervisor/conversations', method='POST', body={}, csrf=csrf,
+          )
+          assert status == 201
+          conversation_id = json.loads(raw)['conversation_id']
+
+          status, raw = request(
+              '/api/supervisor/chat', method='POST', csrf=csrf,
+              body={
+                  'conversation_id': conversation_id,
+                  'message': (
+                      'Use propose_safe_action now to propose pause_job for '
+                      'task:phase8c-canary-missing. Do not confirm or execute it.'
+                  ),
+              },
+              timeout=35,
+          )
+          assert status == 200
+          proposal = json.loads(raw)
+          rows = [
+              item for item in proposal.get('safe_actions', [])
+              if item.get('conversation_id') == conversation_id
+              and item.get('status') == 'PROPOSED'
+          ]
+          assert rows, proposal
+          action_id = rows[0]['action_id']
+
+          status, raw = request(
+              '/api/supervisor/chat', method='POST', csrf=csrf,
+              body={
+                  'conversation_id': conversation_id,
+                  'message': 'Cancel ' + action_id,
+              },
+              timeout=35,
+          )
+          assert status == 200
+          cancelled = json.loads(raw)
+          matching = [
+              item for item in cancelled.get('safe_actions', [])
+              if item.get('action_id') == action_id
+          ]
+          assert matching and matching[0]['status'] == 'CANCELLED'
+          assert cancelled.get('provider') in {'cloudflare', 'groq', 'gemini', 'openrouter'}
+          print('PHASE8C_LIVE_SAFE_ACTION_CANARY_OK action=' + action_id)
+          PY
+
+  checkpoint:
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/feature/private-ai-operations'
+    needs: [safe-actions-tests, full-repository-tests, deploy-safe-actions, live-safe-actions-canary]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Phase 8C gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.safe-actions-tests.result }}" = "success"
+          test "${{ needs.full-repository-tests.result }}" = "success"
+          test "${{ needs.deploy-safe-actions.result }}" = "success"
+          test "${{ needs.live-safe-actions-canary.result }}" = "success"
+          echo "PHASE8C_SAFE_ACTIONS_VERIFIED sha=${GITHUB_SHA}"
