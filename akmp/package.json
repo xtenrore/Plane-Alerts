@@ -1,0 +1,15 @@
+{
+  "name": "akmp",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "npm run build -w @akmp/shared && npm run build -w @akmp/control && npm run build -w @akmp/web",
+    "test": "npm run test -w @akmp/shared && npm run test -w @akmp/control && npm run test -w @akmp/web",
+    "lint": "npm run lint -w @akmp/control && npm run lint -w @akmp/web",
+    "typecheck": "npm run typecheck -w @akmp/shared && npm run build -w @akmp/shared && npm run typecheck -w @akmp/control && npm run typecheck -w @akmp/web",
+    "security:leak-test": "node scripts/client-leak-test.mjs",
+    "check": "npm run typecheck && npm test && npm run build && npm run security:leak-test"
+  },
+  "engines": {"node": ">=22"}
+}

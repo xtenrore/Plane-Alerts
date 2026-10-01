@@ -1,0 +1,18 @@
+version: 1
+models:
+  gemini:
+    - id: gemini-2.5-flash
+      approved: true
+      free_only: true
+  groq:
+    - id: llama-3.3-70b-versatile
+      approved: true
+      free_only: true
+  mistral:
+    - id: mistral-small-latest
+      approved: true
+      free_only: true
+  cloudflare:
+    - id: "@cf/meta/llama-3.1-8b-instruct"
+      approved: true
+      free_only: true
