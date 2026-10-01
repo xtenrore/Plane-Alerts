@@ -1,0 +1,276 @@
+"""Disabled-by-default, free-only provider adapters for AI analysis tasks."""
+from __future__ import annotations
+
+import json
+import re
+import urllib.parse
+from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from typing import Mapping, Protocol
+
+PROVIDERS = ("groq", "mistral", "gemini", "cloudflare", "openrouter")
+SLOT_NAMES = {
+    "groq": tuple(["GROQ_KEY"] + [f"GROQ_KEY_{i}" for i in range(2, 6)]),
+    "mistral": tuple(["MISTRAL_API"] + [f"MISTRAL_API_{i}" for i in range(2, 6)]),
+    "gemini": tuple(["GEMINI_API_KEY"] + [f"GEMINI_API_KEY_{i}" for i in range(2, 6)]),
+    "cloudflare": ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_TOKEN_2"),
+    "openrouter": ("OPENROUTER_API",),
+}
+ACCOUNT_NAMES = ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_ACCOUNT_ID_2")
+
+
+@dataclass(frozen=True)
+class Slot:
+    provider: str
+    name: str
+    credential: str
+    account_id: str = ""
+    def __repr__(self) -> str:
+        return f"Slot(provider={self.provider!r},name={self.name!r},credential=<redacted>)"
+
+
+@dataclass(frozen=True)
+class AnalysisTask:
+    purpose: str
+    prompt: str
+    batch_id: str = ""
+    packet_id: str = ""
+    def __post_init__(self) -> None:
+        if self.purpose not in ("triage", "independent_review", "deep_investigation", "supervisor"):
+            raise ValueError("only analysis/control-plane tasks are permitted")
+        if not self.prompt or len(self.prompt.encode()) > 16384:
+            raise ValueError("bounded analysis prompt required")
+        if len(self.batch_id) > 128 or len(self.packet_id) > 128:
+            raise ValueError("bounded task identifiers required")
+
+
+@dataclass(frozen=True)
+class AnalysisResult:
+    provider: str
+    slot_name: str
+    model: str
+    analysis: dict
+    input_tokens: int
+    output_tokens: int
+
+
+class ProviderFailure(Exception):
+    def __init__(self, kind: str, *, status: int = 0, retry_after: int = 0, provider_wide: bool = False):
+        super().__init__(kind)
+        self.kind, self.status, self.retry_after, self.provider_wide = kind, status, retry_after, provider_wide
+
+
+class HTTPTransport(Protocol):
+    def post(self, url: str, headers: Mapping[str, str], body: bytes) -> tuple[int, Mapping[str, str], bytes]: ...
+
+
+class HttpxTransport:
+    def post(self, url: str, headers: Mapping[str, str], body: bytes) -> tuple[int, Mapping[str, str], bytes]:
+        try:
+            import httpx
+            with httpx.Client(timeout=httpx.Timeout(12.0), follow_redirects=False) as client:
+                with client.stream("POST", url, headers=dict(headers), content=body) as response:
+                    # Success bodies are bounded at the structured-response limit.
+                    # Error bodies are read only transiently, with a much smaller
+                    # bound, solely to recognize context-size failures. They are
+                    # never logged or persisted.
+                    limit = 131073 if response.status_code == 200 else 8192
+                    limited = bytearray()
+                    for part in response.iter_bytes():
+                        limited.extend(part[:max(0, limit - len(limited))])
+                        if len(limited) >= limit:
+                            break
+                    return response.status_code, dict(response.headers), bytes(limited)
+        except Exception as exc:
+            try:
+                import httpx
+                if isinstance(exc, httpx.TimeoutException):
+                    raise ProviderFailure("timeout") from None
+            except ImportError:
+                pass
+            raise ProviderFailure("network") from None
+
+    def get_status(self, url: str, headers: Mapping[str, str]) -> int:
+        try:
+            import httpx
+            with httpx.Client(timeout=httpx.Timeout(8.0), follow_redirects=False) as client:
+                return client.get(url, headers=dict(headers)).status_code
+        except Exception as exc:
+            try:
+                import httpx
+                if isinstance(exc, httpx.TimeoutException):
+                    raise ProviderFailure("timeout") from None
+            except ImportError:
+                pass
+            raise ProviderFailure("network") from None
+
+
+
+def _context_too_large(status: int, raw: bytes) -> bool:
+    if status == 413:
+        return True
+    if status not in (400, 422):
+        return False
+    # Provider error envelopes differ. Match only generic size/token markers and
+    # discard the body immediately; no provider text is logged or persisted.
+    text = raw[:8192].lower()
+    return any(marker in text for marker in (
+        b"context_length_exceeded", b"context length", b"maximum context",
+        b"too many tokens", b"prompt is too long", b"input too large",
+    ))
+
+def retry_after(headers: Mapping[str, str], *, now: float) -> int:
+    value = next((v for k, v in headers.items() if k.lower() == "retry-after"), "")
+    try:
+        seconds = int(value)
+    except (ValueError, TypeError):
+        try:
+            seconds = int(parsedate_to_datetime(value).timestamp() - now)
+        except (TypeError, ValueError, OverflowError, IndexError):
+            seconds = 60
+    return min(3600, max(1, seconds))
+
+
+def configured_slots(env: Mapping[str, str]) -> list[Slot]:
+    slots = []
+    for provider, names in SLOT_NAMES.items():
+        for i, name in enumerate(names):
+            credential = env.get(name, "")
+            if not credential:
+                continue
+            account = env.get(ACCOUNT_NAMES[i], "") if provider == "cloudflare" else ""
+            if provider == "cloudflare" and not re.fullmatch(r"[0-9a-fA-F]{32}", account):
+                continue
+            slots.append(Slot(provider, name, credential, account))
+    return slots
+
+
+def schema_test_mode(provider: str, model: str, response: bytes) -> dict:
+    if provider not in PROVIDERS or not re.fullmatch(r"[A-Za-z0-9@._/:-]{1,100}", model):
+        raise ValueError("invalid analysis capability")
+    if len(response) > 131072:
+        raise ProviderFailure("malformed")
+    try:
+        envelope = json.loads(response)
+        if provider == "gemini":
+            content = envelope["candidates"][0]["content"]["parts"][0]["text"]
+        elif provider == "cloudflare":
+            content = envelope["result"]["response"]
+        else:
+            content = envelope["choices"][0]["message"]["content"]
+        return _response_json(content)
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise ProviderFailure("malformed") from None
+
+
+def _response_json(content: str) -> dict:
+    if len(content.encode()) > 65536:
+        raise ProviderFailure("malformed")
+    try:
+        value = json.loads(content)
+    except (ValueError, TypeError):
+        raise ProviderFailure("malformed") from None
+    if not isinstance(value, dict) or not isinstance(value.get("summary"), str) or not isinstance(value.get("findings"), list):
+        raise ProviderFailure("schema")
+    if len(value["summary"]) > 4000 or len(value["findings"]) > 64:
+        raise ProviderFailure("schema")
+    return value
+
+
+class Adapter:
+    def __init__(self, transport: HTTPTransport | None = None):
+        self.transport = transport or HttpxTransport()
+
+    def probe(self, slot: Slot) -> str:
+        if slot.provider not in PROVIDERS or slot.name not in SLOT_NAMES[slot.provider] or not slot.credential:
+            raise ValueError("unconfigured provider slot")
+        if slot.provider == "cloudflare" and not re.fullmatch(r"[0-9a-fA-F]{32}", slot.account_id):
+            raise ValueError("paired Cloudflare account required")
+        urls = {"groq": "https://api.groq.com/openai/v1/models", "mistral": "https://api.mistral.ai/v1/models",
+                "gemini": "https://generativelanguage.googleapis.com/v1beta/models", "openrouter": "https://openrouter.ai/api/v1/models",
+                "cloudflare": f"https://api.cloudflare.com/client/v4/accounts/{slot.account_id}/ai/models/search"}
+        headers = ({"x-goog-api-key": slot.credential} if slot.provider == "gemini" else {"Authorization": "Bearer " + slot.credential})
+        status = self.transport.get_status(urls[slot.provider], headers)
+        if status == 401: return "unauthorized"
+        if status == 403: return "forbidden"
+        if status == 429: return "limited"
+        return "available" if status == 200 else "unavailable"
+
+    def execute(self, slot: Slot, task: AnalysisTask, model: str, *, now: float) -> AnalysisResult:
+        if slot.provider not in PROVIDERS or slot.name not in SLOT_NAMES[slot.provider] or not slot.credential:
+            raise ValueError("unconfigured provider slot")
+        if not re.fullmatch(r"[A-Za-z0-9@._/:-]{1,100}", model):
+            raise ValueError("invalid model identifier")
+        instruction = ("Return JSON with summary and findings for independent audit only. "
+                       "Never decide aircraft trajectory, CPA, ETA, pass/no-pass, alert qualification, cancellation, or timing.")
+        headers = {"Content-Type": "application/json"}
+        if slot.provider == "gemini" and model == "gemini-3.8-flash":
+            url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+            headers["x-goog-api-key"] = slot.credential
+            fields = {name: {"type": "array", "items": {"type": "string"}} for name in ("event_ids", "states")}
+            fields.update({name: {"type": "array", "items": {"type": "number"}} for name in ("cpa_km", "observed_km")})
+            fields.update({name: {"type": "string"} for name in (
+                "case_ref", "classification", "severity", "subsystem", "coverage", "rationale")})
+            fields["needs_review"] = {"type": "boolean"}
+            payload = {"model": model, "store": False, "input": instruction + "\n" + task.prompt,
+                       "generation_config": {"thinking_level": "low", "temperature": 0},
+                       "response_format": {"type": "text", "mime_type": "application/json",
+                                           "schema": {"type": "object", "properties": {
+                                               "summary": {"type": "string"},
+                                               "findings": {"type": "array", "items": {"type": "object",
+                                                  "properties": fields, "required": list(fields)}}},
+                                               "required": ["summary", "findings"]}}}
+        elif slot.provider == "gemini":
+            url = "https://generativelanguage.googleapis.com/v1beta/models/" + urllib.parse.quote(model, safe="") + ":generateContent"
+            headers["x-goog-api-key"] = slot.credential
+            payload = {"contents": [{"parts": [{"text": instruction + "\n" + task.prompt}]}],
+                       "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 1024}}
+        elif slot.provider == "cloudflare":
+            if not re.fullmatch(r"[0-9a-fA-F]{32}", slot.account_id) or not model.startswith("@cf/"):
+                raise ValueError("paired Cloudflare account and catalog model required")
+            url = f"https://api.cloudflare.com/client/v4/accounts/{slot.account_id}/ai/run/{model}"
+            headers["Authorization"] = "Bearer " + slot.credential
+            payload = {"messages": [{"role": "system", "content": instruction}, {"role": "user", "content": task.prompt}], "max_tokens": 1024}
+        else:
+            url = {"groq": "https://api.groq.com/openai/v1/chat/completions", "mistral": "https://api.mistral.ai/v1/chat/completions",
+                   "openrouter": "https://openrouter.ai/api/v1/chat/completions"}[slot.provider]
+            if slot.provider == "openrouter" and not (model.endswith(":free") or model == "openrouter/free"):
+                raise ValueError("paid OpenRouter route refused")
+            headers["Authorization"] = "Bearer " + slot.credential
+            payload = {"model": model, "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": task.prompt}], "max_tokens": 1024}
+            if slot.provider in ("mistral", "groq"):
+                payload["response_format"] = {"type": "json_object"}
+        status, response_headers, raw = self.transport.post(url, headers, json.dumps(payload, separators=(",", ":")).encode())
+        if status != 200:
+            scope = next((str(v).lower() for k, v in response_headers.items() if k.lower() == "x-ratelimit-scope"), "")
+            kind = "quota" if status == 429 else "auth" if status in (401, 403) else "context" if _context_too_large(status, raw) else "server" if status >= 500 else "request"
+            raise ProviderFailure(kind, status=status, retry_after=retry_after(response_headers, now=now) if status == 429 else 0,
+                                  provider_wide=status == 429 and scope not in ("key", "credential", "slot"))
+        if len(raw) > 131072:
+            raise ProviderFailure("malformed")
+        try:
+            envelope = json.loads(raw)
+            if slot.provider == "gemini" and model == "gemini-3.8-flash":
+                steps = envelope.get("steps", [])
+                texts = [part["text"] for step in steps if step.get("type") == "model_output"
+                         for part in step.get("content", []) if part.get("type") == "text"]
+                content = texts[-1]
+                usage = envelope.get("usage", {})
+                incoming, outgoing = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+            elif slot.provider == "gemini":
+                content = envelope["candidates"][0]["content"]["parts"][0]["text"]
+                usage = envelope.get("usageMetadata", {})
+                incoming, outgoing = usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
+            elif slot.provider == "cloudflare":
+                content = envelope["result"]["response"]
+                incoming, outgoing = 0, 0
+            else:
+                content = envelope["choices"][0]["message"]["content"]
+                usage = envelope.get("usage", {})
+                incoming, outgoing = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+            analysis = _response_json(content)
+            if any(not isinstance(v, int) or v < 0 or v > 100000 for v in (incoming, outgoing)):
+                raise ValueError("invalid usage")
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise ProviderFailure("malformed") from None
+        return AnalysisResult(slot.provider, slot.name, model, analysis, incoming, outgoing)

@@ -1,0 +1,81 @@
+name: Private Operations isolated validation
+# Historical Private Operations validation only. Phase 8B is the sole current live
+# deploy owner for the dedicated AI Ops Railway service.
+
+on:
+  push:
+    branches: [feature/private-ai-operations]
+    paths:
+      - 'app/private_ops/**'
+      - 'deploy/private-ai-ops/**'
+      - 'tests/test_private_ops*.py'
+      - 'scripts/private_ai_ops_*.py'
+      - '.github/workflows/private-ai-ops-phase1.yml'
+      - '.github/workflows/private-ai-ops-phase7-sandbox-probe.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase1-validation
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install locked validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Compile Private AI Ops and Phase 7 canary code
+        run: python -m py_compile app/private_ops/*.py scripts/private_ai_ops_*.py tests/test_private_ops*.py
+      - name: Run full Private AI Ops suite
+        env:
+          TELEGRAM_BOT_TOKEN: ''
+          GEMINI_API_KEY: ''
+          GROQ_API_KEY: ''
+        run: pytest -q tests/test_private_ops*.py
+      - name: Verify dependency integrity
+        run: pip check
+
+  provider-metadata-probes:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      GROQ_KEY: ${{ secrets.GROQ_KEY }}
+      GROQ_KEY_2: ${{ secrets.GROQ_KEY_2 }}
+      GROQ_KEY_3: ${{ secrets.GROQ_KEY_3 }}
+      GROQ_KEY_4: ${{ secrets.GROQ_KEY_4 }}
+      GROQ_KEY_5: ${{ secrets.GROQ_KEY_5 }}
+      MISTRAL_API: ${{ secrets.MISTRAL_API }}
+      MISTRAL_API_2: ${{ secrets.MISTRAL_API_2 }}
+      MISTRAL_API_3: ${{ secrets.MISTRAL_API_3 }}
+      MISTRAL_API_4: ${{ secrets.MISTRAL_API_4 }}
+      MISTRAL_API_5: ${{ secrets.MISTRAL_API_5 }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+      GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+      GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+      GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID_2: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_2 }}
+      CLOUDFLARE_API_TOKEN_2: ${{ secrets.CLOUDFLARE_API_TOKEN_2 }}
+      OPENROUTER_API: ${{ secrets.OPENROUTER_API }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'httpx>=0.27,<1'
+      - name: Check provider metadata only; never invoke inference
+        run: python -m app.private_ops.provider_probe
