@@ -1,0 +1,120 @@
+{
+  "phase": "FINAL_PHASE_8",
+  "umbrella_branch": "feature/private-ai-operations",
+  "draft_pr": 143,
+  "phase_7_verified_before_phase_8": true,
+  "subgates": {
+    "8A": {
+      "status": "COMPLETE",
+      "checkpoint_commit": "5fae311b2c16986abb57579f8f22481f704f6f4d",
+      "github_full_tests_run": 36428006613,
+      "github_phase8a_run": 36428000319,
+      "railway_deployment": "96e0bca8-450f-4719-bd29-2d3f937a79d7",
+      "production_url": "https://plane-alerts-ai-ops-production.up.railway.app",
+      "schema": 7,
+      "scheduler_enabled": false,
+      "paid_runtime_ai_enabled": false,
+      "acceptance": {
+        "authenticated_gui": "PASS",
+        "wrong_login": "PASS",
+        "login_throttling": "PASS",
+        "secure_http_only_same_site_cookie": "PASS",
+        "csrf": "PASS",
+        "logout": "PASS",
+        "session_expiry": "PASS",
+        "unauthorized_api": "PASS",
+        "public_readiness_only_no_operational_counts": "PASS",
+        "secret_and_private_coordinate_redaction": "PASS",
+        "bounded_large_task_list": "PASS",
+        "loading_empty_error_stale_states": "PASS",
+        "sse_cursor_resume": "PASS",
+        "live_sse_canary": "PASS",
+        "provider_failover_visual_state": "PASS",
+        "mobile_responsive_contract": "PASS"
+      },
+      "notes": [
+        "The GUI reads the durable AI Ops SQLite database through short-lived read-only connections; it does not create a second source of truth.",
+        "The owner password is referenced from the existing Railway service variable and is never copied into source, logs, browser storage, or API responses.",
+        "The production live canary resolved the owner secret only inside Railway and did not print it.",
+        "Direct external screenshot automation was unavailable from the execution environment; responsive/mobile behavior is covered by the committed layout contract and acceptance tests."
+      ]
+    },
+    "8B": {
+      "status": "COMPLETE",
+      "checkpoint_commit": "dad6b3f14f681c8a466eb9ae195fa6926c2563d5",
+      "github_phase8b_run": 36448111539,
+      "railway_deployment": "1bd836f8-3d2b-4c8d-8463-92e0b9934b8c",
+      "production_url": "https://plane-alerts-ai-ops-production.up.railway.app/supervisor",
+      "selected_primary_model": "@cf/nvidia/nemotron-3-120b-a12b",
+      "benchmark": {
+        "selected_score": 10,
+        "gemma_4_26b_a4b_it_score": 10,
+        "glm_4_7_flash_score": 9,
+        "estimated_total_neurons": 59,
+        "free_only": true
+      },
+      "scheduler_enabled": false,
+      "paid_runtime_ai_enabled": false,
+      "acceptance": {
+        "grounded_supervisor_tests": "PASS",
+        "full_repository_tests": "PASS",
+        "secret_and_retired_runtime_checks": "PASS",
+        "real_cloudflare_benchmark": "PASS",
+        "exact_tested_checkpoint_deploy": "PASS",
+        "owner_authenticated_supervisor": "PASS",
+        "unauthenticated_supervisor_api_rejected": "PASS",
+        "read_only_operations_authority": "PASS",
+        "real_grounded_chat": "PASS",
+        "cloudflare_slot_1_primary": "PASS",
+        "cloudflare_slot_1_to_slot_2_failover_history": "PASS",
+        "free_fallback_routes": "PASS",
+        "conversation_persistence": "PASS",
+        "model_affinity_persistence": "PASS",
+        "restart_redeploy_readback": "PASS",
+        "no_secret_exposure": "PASS",
+        "no_paid_runtime_ai": "PASS"
+      },
+      "notes": [
+        "The selected primary model was benchmark-selected from current approved Workers-Free candidates rather than chosen solely from a public benchmark.",
+        "Cloudflare reasoning-capable models use bounded reasoning controls so the Supervisor returns user-visible content inside the output budget.",
+        "The live canary used Cloudflare Slot 1 with @cf/nvidia/nemotron-3-120b-a12b and returned a grounded non-empty answer.",
+        "The same exact application checkpoint was redeployed and the existing Supervisor conversation, model affinity, and messages were read back successfully from the persistent volume.",
+        "The Supervisor remains read-only for operations: it has no merge, deploy, secret/config mutation, or flight-decision authority in 8B."
+      ]
+    },
+    "8C": {
+      "status": "IMPLEMENTED_LIVE_ACCEPTANCE_BLOCKED",
+      "code_checkpoint_commit": "bb51700269bbe08669d199dadcd10ea08bf2900d",
+      "final_code_commit_date": "2026-09-29",
+      "github_full_tests_run": 36563139074,
+      "github_phase8c_run": 36563135432,
+      "acceptance": {
+        "compile_and_targeted_safe_action_tests": "PASS",
+        "full_repository_tests": "PASS",
+        "exact_source_checkpoint_deployment_job": "PASS",
+        "live_authentication_and_fail_closed_authority": "PASS",
+        "live_proposal_and_cancel": "BLOCKED_NO_ELIGIBLE_DURABLE_TASK",
+        "complete_phase8c_gate": "BLOCKED"
+      },
+      "observed_live_blocker": "The authenticated /api/tasks?limit=200 endpoint had no FAILED, PAUSED, PENDING, RETRY, or RUNNING durable task on 2026-09-29. The proposal-only live canary therefore stopped before proposing and cancelling an action. This is not evidence that code failed or that a full Phase 8C acceptance completed.",
+      "safe_resolution": "Re-run the original live canary against a real existing eligible durable AI Ops task when one is available. Keep the proposal unconfirmed, cancel it by exact action ID, and verify that the target status and priority are unchanged. Do not fabricate a live task, make a terminal job executable, loosen assertions, or enable the disabled hourly scheduler merely to turn CI green.",
+      "safety": "Do not proceed to 8D deployment or enable paid providers, autonomous flight changes, or production mutation while this gate is blocked.",
+      "checked_at": "2026-10-09"
+    },
+    "8D": {
+      "status": "NOT_STARTED"
+    },
+    "8E": {
+      "status": "NOT_STARTED"
+    },
+    "8F": {
+      "status": "NOT_STARTED"
+    },
+    "8G": {
+      "status": "NOT_STARTED"
+    },
+    "8H": {
+      "status": "NOT_STARTED"
+    }
+  }
+}

@@ -1,0 +1,48 @@
+name: Private Operations Phase 4 read-only evidence replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      hour:
+        description: Closed UTC hour (YYYY-MM-DDTHH:00:00Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  shadow-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact engineering commit
+        uses: actions/checkout@v4
+        with:
+          path: engineering
+      - name: Checkout existing Prediction Lab evidence branch
+        uses: actions/checkout@v4
+        with:
+          ref: prediction-lab-data
+          path: evidence
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Replay a closed hour without providers or monitor access
+        env:
+          HOUR: ${{ inputs.hour }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd engineering
+          PYTHONPATH=. python scripts/private_ai_ops_hourly_replay.py \
+            --source ../evidence --hour "$HOUR" \
+            --source-commit "$SOURCE_COMMIT" --output /tmp/ai-ops-hour.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          record=json.loads(Path('/tmp/ai-ops-hour.json').read_text())
+          assert record['schema']==1 and record['snapshot_manifest']['evidence']==len(record['snapshot']['evidence'])
+          print('PHASE4_SHADOW_REPLAY_RESTORE_VERIFIED')
+          PY

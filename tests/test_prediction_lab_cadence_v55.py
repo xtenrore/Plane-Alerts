@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import time
+import threading
 
 import pytest
 
@@ -20,18 +20,22 @@ def test_audit_queue_is_bounded_and_optional():
 @pytest.mark.asyncio
 async def test_append_evidence_moves_filesystem_work_off_event_loop(monkeypatch, tmp_path):
     original = prediction_lab_files_v55.write_evidence
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
 
     def slow_write(doc, *, root=None):
-        time.sleep(0.05)
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=2), "filesystem writer was never released"
         return original(doc, root=root)
 
     monkeypatch.setattr(prediction_lab_files_v55, "write_evidence", slow_write)
-    started = time.perf_counter()
     task = asyncio.create_task(prediction_lab_files_v55.append_evidence({"kind": "cadence-test"}, root=tmp_path))
-    await asyncio.sleep(0.01)
-    elapsed = time.perf_counter() - started
-    assert elapsed < 0.04
-    assert not task.done()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert not task.done()
+    finally:
+        release.set()
     assert await task is not None
 
 
