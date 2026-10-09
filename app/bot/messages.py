@@ -6,8 +6,17 @@ without touching handler logic.
 
 from __future__ import annotations
 
+import html
+import math
+from datetime import datetime, timedelta, timezone
+
 from app.aircraft.categories import CATEGORY_EMOJIS, get_all_types_for_categories
-from app.worker.geo import heading_to_cardinal, metres_to_feet, ms_to_knots
+from app.worker.geo import (
+    heading_to_cardinal,
+    km_to_nautical_miles,
+    metres_to_feet,
+    ms_to_knots,
+)
 
 
 # ── Welcome & Disclaimer ────────────────────────────────────────────────────
@@ -192,47 +201,120 @@ def status_message(
 
 # ── Notifications ────────────────────────────────────────────────────────────
 
+def format_duration(seconds: float | int | None) -> str:
+    """Format duration into human-readable string (e.g., '45s', '2m 15s', '< 10s')."""
+    if seconds is None or not math.isfinite(seconds):
+        return ""
+    total_sec = max(0, int(round(seconds)))
+    if total_sec < 10:
+        return "< 10s"
+    if total_sec < 60:
+        return f"{total_sec}s"
+    minutes, sec = divmod(total_sec, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s" if sec > 0 else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m" if minutes > 0 else f"{hours}h"
+
+
+def format_eta_timestamp(seconds: float | int | None, ref_time: datetime | None = None) -> str:
+    """Format arrival clock time in UTC (e.g., '14:32 UTC')."""
+    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
+        return ""
+    base = ref_time or datetime.now(timezone.utc)
+    arrival = base + timedelta(seconds=seconds)
+    return arrival.strftime("%H:%M UTC")
+
+
 def aircraft_alert_message(
     aircraft_type: str,
     callsign: str,
     distance_km: float,
-    altitude_m: float | None,
-    velocity_ms: float | None,
-    heading: float | None,
-    icao24: str,
-    origin_country: str,
+    altitude_m: float | None = None,
+    velocity_ms: float | None = None,
+    heading: float | None = None,
+    icao24: str = "",
+    origin_country: str = "",
     eta_seconds: float | None = None,
+    cda_km: float | None = None,
+    trajectory_status: str | None = None,
+    bearing_from_user: float | None = None,
+    closure_rate_ms: float | None = None,
 ) -> str:
-    """Format an aircraft notification message."""
+    """Format an aircraft notification message with rich kinematics and HTML escaping.
+
+    Guarantees strict HTML escaping on dynamic strings (callsign, origin_country, aircraft_type)
+    and graceful degradation when fields are None.
+    """
+    safe_type = html.escape(aircraft_type or "Unknown", quote=True)
+    safe_callsign = html.escape(callsign.strip(), quote=True) if callsign else ""
+    safe_origin = html.escape(origin_country.strip(), quote=True) if origin_country else ""
+    safe_icao = html.escape(icao24.strip().lower(), quote=True) if icao24 else ""
+
+    lines: list[str] = []
+
+    # 1. Header & ETA
     if eta_seconds is not None and eta_seconds > 0:
-        lines = [f"🚀 <b>Early Warning Alert!</b> (Arriving in ~{int(eta_seconds)}s)\n"]
+        duration_str = html.escape(format_duration(eta_seconds), quote=True)
+        time_str = format_eta_timestamp(eta_seconds)
+        eta_desc = f"Arriving in ~{duration_str}"
+        if time_str:
+            eta_desc += f" ({time_str})"
+        lines.append(f"🚀 <b>Early Warning Alert!</b>\n⏱️ <b>ETA:</b> {eta_desc}\n")
     else:
-        lines = ["✈️ <b>Aircraft Alert!</b>\n"]
+        lines.append("✈️ <b>Aircraft Alert!</b>\n")
 
-    lines.append(f"<b>Type:</b> <code>{aircraft_type or 'Unknown'}</code>")
-    if callsign:
-        lines.append(f"<b>Callsign:</b> <code>{callsign}</code>")
-    lines.append(f"<b>Distance:</b> {distance_km:.1f} km away")
+    # 2. Identification
+    lines.append(f"<b>Type:</b> <code>{safe_type}</code>")
+    if safe_callsign:
+        lines.append(f"<b>Callsign:</b> <code>{safe_callsign}</code>")
+    if safe_origin:
+        lines.append(f"<b>Origin:</b> {safe_origin}")
 
+    # 3. Position & Kinematics
+    dist_nm = km_to_nautical_miles(distance_km)
+    lines.append(f"\n📍 <b>Distance:</b> {distance_km:.1f} km ({dist_nm:.1f} NM) away")
+
+    if bearing_from_user is not None:
+        cardinal = heading_to_cardinal(bearing_from_user)
+        lines.append(f"🧭 <b>Bearing from you:</b> {bearing_from_user:.0f}° ({cardinal})")
+
+    if cda_km is not None:
+        cda_nm = km_to_nautical_miles(cda_km)
+        if cda_km < 1.0:
+            lines.append(f"🎯 <b>Closest Pass (CDA):</b> {cda_km:.1f} km ({cda_nm:.1f} NM) [Direct Overhead!]")
+        else:
+            lines.append(f"🎯 <b>Closest Pass (CDA):</b> {cda_km:.1f} km ({cda_nm:.1f} NM)")
+
+    if trajectory_status:
+        lines.append(f"🧭 <b>Trajectory:</b> {html.escape(str(trajectory_status), quote=True)}")
+
+    if closure_rate_ms is not None:
+        closure_rate_kt = ms_to_knots(closure_rate_ms)
+        suffix = " closing" if closure_rate_ms > 1.0 else (" receding" if closure_rate_ms < -1.0 else "")
+        lines.append(f"⚡ <b>Closure Rate:</b> {closure_rate_ms:.0f} m/s (~{closure_rate_kt:.0f} kt){suffix}")
+
+    # 4. Telemetry
+    telemetry: list[str] = []
     if altitude_m is not None:
         alt_ft = metres_to_feet(altitude_m)
-        lines.append(f"<b>Altitude:</b> {altitude_m:,.0f} m ({alt_ft:,} ft)")
+        telemetry.append(f"<b>Altitude:</b> {alt_ft:,} ft ({altitude_m:,.0f} m)")
 
     if velocity_ms is not None:
         speed_kt = ms_to_knots(velocity_ms)
-        lines.append(f"<b>Speed:</b> {velocity_ms:.0f} m/s ({speed_kt} kt)")
+        speed_kmh = round(velocity_ms * 3.6)
+        telemetry.append(f"<b>Speed:</b> {speed_kt} kt ({speed_kmh} km/h)")
 
     if heading is not None:
-        cardinal = heading_to_cardinal(heading)
-        lines.append(f"<b>Heading:</b> {cardinal} ({heading:.0f}°)")
+        hdg_cardinal = heading_to_cardinal(heading)
+        telemetry.append(f"<b>Heading:</b> {hdg_cardinal} ({heading:.0f}°)")
 
-    if origin_country:
-        lines.append(f"\n<b>Origin:</b> {origin_country}")
+    if telemetry:
+        lines.append("\n" + "\n".join(telemetry))
 
-    # Tracking link
-    lines.append(
-        f"\n<a href=\"https://globe.adsb.fi/?icao={icao24}\">🌍 Track on ADSB.fi</a>"
-    )
+    # 5. Tracking Link
+    if safe_icao:
+        lines.append(f'\n<a href="https://globe.adsb.fi/?icao={safe_icao}">🌍 Track Live on ADSB.fi</a>')
 
     return "\n".join(lines)
 

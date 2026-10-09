@@ -153,6 +153,7 @@ async def _record_worker_heartbeat(active_count: int, notifications_sent: int) -
             {"_id": "monitor_worker"},
             {
                 "$set": {
+                    "type": "worker_heartbeat",
                     "last_cycle_time": _last_cycle_time,
                     "last_cycle_duration_ms": round(_last_cycle_duration * 1000, 1),
                     "total_cycles": _total_cycles,
@@ -304,6 +305,28 @@ async def _match_user_aircraft(
         eta_seconds = None
 
         if is_inside_direct:
+            # Kinematics evaluation for aircraft already inside radius to determine trajectory status
+            heading = getattr(ac, "track", None) or getattr(ac, "heading", None)
+            speed_kts = getattr(ac, "speed_kts", None)
+            if speed_kts is None and ac.velocity is not None:
+                speed_kts = ac.velocity / 0.5144444444444444
+            speed_kts = float(speed_kts or 0.0)
+            heading_deg = float(heading) if heading is not None else None
+            turn_rate = float(getattr(ac, "turn_rate", 0.0) or 0.0)
+
+            prediction = evaluate_early_warning(
+                start_lat=ac.latitude,
+                start_lon=ac.longitude,
+                speed_kts=speed_kts,
+                heading_deg=heading_deg,
+                turn_rate_deg_s=turn_rate,
+                user_lat=user_lat,
+                user_lon=user_lon,
+                radius_km=radius_km,
+                buffer_km=outer_buffer_km,
+                velocity_ms=ac.velocity,
+            )
+            setattr(ac, "_prediction", prediction)
             candidates.append((ac, distance, eta_seconds))
         else:
             # Check if within outer buffer for early warning prediction
@@ -311,39 +334,48 @@ async def _match_user_aircraft(
                 user_lat, user_lon, ac.latitude, ac.longitude, search_radius_km
             )
             if is_in_outer_buffer:
-                # Run trajectory prediction natively (0.1ms overhead)
-                heading = getattr(ac, "track", None) or getattr(ac, "heading", 0.0) or 0.0
-                speed_kts = getattr(ac, "ground_speed", None) or getattr(ac, "speed", 0.0) or 0.0
-                turn_rate = getattr(ac, "turn_rate", 0.0) or 0.0
-                
+                heading = getattr(ac, "track", None) or getattr(ac, "heading", None)
+                speed_kts = getattr(ac, "speed_kts", None)
+                if speed_kts is None and ac.velocity is not None:
+                    speed_kts = ac.velocity / 0.5144444444444444
+                speed_kts = float(speed_kts or 0.0)
+                heading_deg = float(heading) if heading is not None else None
+                turn_rate = float(getattr(ac, "turn_rate", 0.0) or 0.0)
+
                 prediction = evaluate_early_warning(
                     start_lat=ac.latitude,
                     start_lon=ac.longitude,
-                    speed_kts=float(speed_kts),
-                    heading_deg=float(heading),
-                    turn_rate_deg_s=float(turn_rate),
+                    speed_kts=speed_kts,
+                    heading_deg=heading_deg,
+                    turn_rate_deg_s=turn_rate,
                     user_lat=user_lat,
                     user_lon=user_lon,
                     radius_km=radius_km,
                     buffer_km=outer_buffer_km,
+                    velocity_ms=ac.velocity,
                 )
-                
+
                 if prediction and prediction.get("should_notify"):
                     eta_seconds = prediction.get("eta_seconds")
-                    pass_dist = prediction.get("closest_pass_km", outer_dist)
-                    candidates.append((ac, pass_dist, eta_seconds))
+                    setattr(ac, "_prediction", prediction)
+                    # Preserve actual current distance (outer_dist), NOT replacing with pass_dist
+                    candidates.append((ac, outer_dist, eta_seconds))
 
     if not candidates:
         return 0
 
     # Batch cooldown check: single MongoDB query instead of N queries
     candidate_icao24s = [ac.icao24 for ac, _, _ in candidates]
-    now = datetime.now(timezone.utc)
+    now_dt = datetime.now(timezone.utc)
+    now_ts = now_dt.timestamp()
     cooldown_cursor = notification_history_col().find(
         {
             "user_id": user_id,
             "aircraft_icao24": {"$in": candidate_icao24s},
-            "cooldown_until": {"$gt": now},
+            "$or": [
+                {"cooldown_until": {"$gt": now_dt}},
+                {"cooldown_until": {"$gt": now_ts}},
+            ],
         },
         {"aircraft_icao24": 1},
     )
@@ -363,13 +395,37 @@ async def _match_user_aircraft(
             if any(p.icao24 == ac.icao24 for p in plist)
         ]
 
-        success = await send_aircraft_notification(
-            user_id=user_id,
-            aircraft=ac,
-            distance_km=distance,
-            notification_id=notification_id,
-            eta_seconds=eta_seconds,
-        )
+        pred = getattr(ac, "_prediction", None) or {}
+        cda_km = pred.get("closest_pass_km") if pred else None
+        if cda_km is None and pred:
+            cda_km = pred.get("cda_km")
+        trajectory_status = (pred.get("pass_type") or pred.get("trajectory_status")) if pred else None
+        bearing_from_user = pred.get("bearing_from_user") if pred else None
+        closure_rate_ms = pred.get("closure_rate_ms") if pred else None
+
+        try:
+            success = await send_aircraft_notification(
+                user_id=user_id,
+                aircraft=ac,
+                distance_km=distance,
+                notification_id=notification_id,
+                eta_seconds=eta_seconds,
+                cda_km=cda_km,
+                trajectory_status=trajectory_status,
+                bearing_from_user=bearing_from_user,
+                closure_rate_ms=closure_rate_ms,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument" in str(exc):
+                success = await send_aircraft_notification(
+                    user_id=user_id,
+                    aircraft=ac,
+                    distance_km=distance,
+                    notification_id=notification_id,
+                    eta_seconds=eta_seconds,
+                )
+            else:
+                raise
 
         if success:
             await _set_cooldown(

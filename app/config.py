@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 
 class Settings(BaseSettings):
@@ -63,6 +66,13 @@ class Settings(BaseSettings):
     # ── Admin ───────────────────────────────────────────────────────────
     admin_telegram_id: int | None = None
     admin_password: str = ""  # Optional password for admin panel
+
+    @field_validator("admin_telegram_id", mode="before")
+    @classmethod
+    def parse_empty_admin_id(cls, v: Any) -> Any:
+        if v == "" or v is None:
+            return None
+        return v
 
     # ── Server ──────────────────────────────────────────────────────────
     host: str = "0.0.0.0"

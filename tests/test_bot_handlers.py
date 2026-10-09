@@ -87,3 +87,56 @@ def test_user_state_constants():
     assert UserState.WAITING_RADIUS == "waiting_radius"
     assert UserState.WAITING_AIRCRAFT_SELECTION == "waiting_aircraft"
     assert UserState.ADDING_CUSTOM_AIRCRAFT == "adding_custom"
+
+
+def test_messages_formatting_rich_kinematics():
+    """Verify rich kinematics formatting with CDA overhead badge, bearing, and closure rate."""
+    msg = aircraft_alert_message(
+        aircraft_type="B738",
+        callsign="UAL456",
+        distance_km=14.2,
+        altitude_m=3000.0,
+        velocity_ms=220.0,
+        heading=90.0,
+        icao24="a12345",
+        origin_country="Trinidad & Tobago",
+        eta_seconds=135.0,
+        cda_km=0.8,
+        trajectory_status="direct_hit",
+        bearing_from_user=180.0,
+        closure_rate_ms=210.0,
+    )
+    assert "Trinidad &amp; Tobago" in msg
+    assert "Arriving in ~2m 15s" in msg
+    assert "Closest Pass (CDA):" in msg
+    assert "0.8 km" in msg
+    assert "[Direct Overhead!]" in msg
+    assert "Bearing from you:" in msg
+    assert "180° (S)" in msg
+    assert "Closure Rate:" in msg
+    assert "closing" in msg
+
+
+def test_messages_formatting_graceful_missing_fields():
+    """Verify message renders cleanly without None text when fields are missing."""
+    msg = aircraft_alert_message(
+        aircraft_type="",
+        callsign="",
+        distance_km=10.0,
+        altitude_m=None,
+        velocity_ms=None,
+        heading=None,
+        icao24="",
+        origin_country="",
+        eta_seconds=None,
+        cda_km=None,
+        trajectory_status=None,
+        bearing_from_user=None,
+        closure_rate_ms=None,
+    )
+    assert "10.0 km" in msg
+    assert "None km" not in msg
+    assert "None ft" not in msg
+    assert "None m" not in msg
+    assert "Speed: None" not in msg
+    assert "Aircraft Alert!" in msg
