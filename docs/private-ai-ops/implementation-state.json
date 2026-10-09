@@ -2,7 +2,7 @@
   "roadmap": "Plane Alerts Private Operations phased roadmap",
   "roadmap_source": "Version_6.0",
   "state_schema_version": 2,
-  "generated_at": "2026-09-28T12:06:22Z",
+  "generated_at": "2026-10-09T11:44:05.120Z",
   "baseline_date": "2026-09-27",
   "baseline_main_commit": "639464f5a11f5b6690e41a6b80e1c3d9e9d7ee6b",
   "baseline_application_version": "5.8.7",
@@ -11,11 +11,11 @@
   "phase_7_development_branch": "investigate/phase7-sandbox",
   "phase_7_development_head": "5096d559ace9ecfc6bc7e522894f59afcc821253",
   "final_phase_7_code_checkpoint": "5468d273f71648d353cf46337fd3f7dcf2b4e2fd",
-  "last_completed_phase": 7,
-  "current_phase": 7,
-  "phase_status": "phase_7_complete_phase_8_not_started",
-  "next_phase": 8,
-  "next_phase_started": false,
+  "last_completed_phase": 9,
+  "current_phase": 10,
+  "phase_status": "phase_10_implemented_live_acceptance_blocked",
+  "next_phase": 10,
+  "next_phase_started": true,
   "phases": {
     "1": "COMPLETE",
     "2": "COMPLETE",
@@ -24,7 +24,13 @@
     "5": "COMPLETE",
     "6": "VERIFIED COMPLETE",
     "7": "COMPLETE",
-    "8": "NOT STARTED"
+    "8": "COMPLETE",
+    "9": "COMPLETE",
+    "10": "IMPLEMENTED_LIVE_ACCEPTANCE_BLOCKED",
+    "11": "NOT STARTED",
+    "12": "NOT STARTED",
+    "13": "NOT STARTED",
+    "14": "OPTIONAL_NOT STARTED"
   },
   "architecture_decision_record": "docs/private-ai-ops/phase-0-architecture-decision.md",
   "deployment_architecture": "separate_railway_service_with_dedicated_persistent_volume",
@@ -50,7 +56,7 @@
     "historical_fresh_monitor_after_restart": {
       "samples": 720,
       "p50_ms": 5000.2,
-      "p95_ms": 5001.0,
+      "p95_ms": 5001,
       "p99_ms": 5001.6,
       "max_ms": 5003.3,
       "intervals_above_10000_ms": 0
@@ -157,7 +163,23 @@
     "draft": true,
     "merged": false
   },
-  "open_blockers_for_next_phase": [],
+  "open_blockers_for_next_phase": [
+    "8C live canary: no eligible nonterminal durable task; do not fabricate one or weaken verification",
+    "Railway project unavailable to current connected Railway workspace for independent readback",
+    "11 encrypted Dropbox DR cannot be accepted until backend OAuth app/credentials and real encrypted upload, checksum, restore drills are proven"
+  ],
   "required_human_decisions": [],
-  "stop_condition": "Phase 7 complete. Phase 8 intentionally not started. Keep PR #143 unmerged, hourly AI scheduler disabled, paid runtime AI disabled, and final umbrella release undeployed."
+  "stop_condition": "Phase 10 (umbrella 8C) implementation exists but live canary remains blocked. Keep draft PR #143 unmerged; keep hourly AI scheduler and paid AI disabled; do not claim Phase 10 or full v6.0 accepted.",
+  "final_phase_8_progress": {
+    "checkpoint_file": "docs/private-ai-ops/phase-8-checkpoints.json",
+    "8A": "COMPLETE owner GUI; separately tracked checkpoint",
+    "8B": "COMPLETE read-only Supervisor; separately tracked checkpoint",
+    "8C": "implemented, targeted and full-repository CI passed, deployment job succeeded; live proposal/cancel acceptance blocked due to no eligible durable task",
+    "8C_code_checkpoint": "bb51700269bbe08669d199dadcd10ea08bf2900d",
+    "8C_workflow_run": 36563135432,
+    "8C_latest_full_tests": 36563139074,
+    "remaining": "Re-run legitimate live 8C canary, then proceed sequentially to encrypted independent Dropbox DR, feedback routing, automation handover, optional approval controls; no later gate is verified complete.",
+    "railway_connection_limitation": "The connected Railway workspace in this ChatGPT session does not list the Plane Alerts project; Railway deployment job status is visible through GitHub Actions, but independent Railway deployment health/volume readback is not available through this connection.",
+    "checked_at": "2026-10-09T11:44:05.120Z"
+  }
 }
