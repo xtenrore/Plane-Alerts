@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.7"
+VERSION = "5.8.8"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -81,6 +81,8 @@ VERSION = "5.8.7"
 # all observation rejection, trajectory and alert behavior.
 # v5.8.7 points the standalone Docker health check at monitoring readiness,
 # matching Docker Compose and Railway's already configured /ready endpoint.
+# v5.8.8 adds an authenticated, aggregate schema inventory of unsynced evidence
+# to diagnose the blocked Prediction Lab backlog without exposing record contents.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 
