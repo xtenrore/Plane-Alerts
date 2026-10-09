@@ -82,11 +82,39 @@
         "The Supervisor remains read-only for operations: it has no merge, deploy, secret/config mutation, or flight-decision authority in 8B."
       ]
     },
-    "8C": {"status": "NOT_STARTED"},
-    "8D": {"status": "NOT_STARTED"},
-    "8E": {"status": "NOT_STARTED"},
-    "8F": {"status": "NOT_STARTED"},
-    "8G": {"status": "NOT_STARTED"},
-    "8H": {"status": "NOT_STARTED"}
+    "8C": {
+      "status": "IMPLEMENTED_LIVE_ACCEPTANCE_BLOCKED",
+      "code_checkpoint_commit": "bb51700269bbe08669d199dadcd10ea08bf2900d",
+      "final_code_commit_date": "2026-09-29",
+      "github_full_tests_run": 36563139074,
+      "github_phase8c_run": 36563135432,
+      "acceptance": {
+        "compile_and_targeted_safe_action_tests": "PASS",
+        "full_repository_tests": "PASS",
+        "exact_source_checkpoint_deployment_job": "PASS",
+        "live_authentication_and_fail_closed_authority": "PASS",
+        "live_proposal_and_cancel": "BLOCKED_NO_ELIGIBLE_DURABLE_TASK",
+        "complete_phase8c_gate": "BLOCKED"
+      },
+      "observed_live_blocker": "The authenticated /api/tasks?limit=200 endpoint had no FAILED, PAUSED, PENDING, RETRY, or RUNNING durable task on 2026-09-29. The proposal-only live canary therefore stopped before proposing and cancelling an action. This is not evidence that code failed or that a full Phase 8C acceptance completed.",
+      "safe_resolution": "Re-run the original live canary against a real existing eligible durable AI Ops task when one is available. Keep the proposal unconfirmed, cancel it by exact action ID, and verify that the target status and priority are unchanged. Do not fabricate a live task, make a terminal job executable, loosen assertions, or enable the disabled hourly scheduler merely to turn CI green.",
+      "safety": "Do not proceed to 8D deployment or enable paid providers, autonomous flight changes, or production mutation while this gate is blocked.",
+      "checked_at": "2026-10-09"
+    },
+    "8D": {
+      "status": "NOT_STARTED"
+    },
+    "8E": {
+      "status": "NOT_STARTED"
+    },
+    "8F": {
+      "status": "NOT_STARTED"
+    },
+    "8G": {
+      "status": "NOT_STARTED"
+    },
+    "8H": {
+      "status": "NOT_STARTED"
+    }
   }
 }
