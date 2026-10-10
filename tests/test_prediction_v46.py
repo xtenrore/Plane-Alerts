@@ -210,3 +210,38 @@ def test_shadow_prediction_is_deterministic_and_does_not_change_production_geome
     assert one.time_to_cpa_s == pytest.approx(two.time_to_cpa_s)
     assert d1["linear_shadow"] == d2["linear_shadow"]
     assert d1["turn_shadow"] == d2["turn_shadow"]
+
+
+def test_rate1_turn_recognized_and_not_rejected():
+    """Civil aviation standard Rate-1 turn (3.0 deg/s) must be accepted as stable turn."""
+    # 5 samples spaced 5s apart with 15 deg heading change per 5s = 3.0 deg/s
+    hist = [
+        sample(41.28, 28.90, 100.0, t=NOW - 20),
+        sample(41.27, 28.92, 115.0, t=NOW - 15),
+        sample(41.25, 28.94, 130.0, t=NOW - 10),
+        sample(41.23, 28.96, 145.0, t=NOW - 5),
+        sample(41.21, 28.98, 160.0, t=NOW),
+    ]
+    evidence = turn_evidence(hist, now=NOW)
+    assert evidence.stable is True
+    assert evidence.rate_deg_s == pytest.approx(3.0, abs=0.2)
+    pred = predict_trajectory_v46(hist, *USER, 15, now=NOW)
+    diag = diagnostics_for(pred)
+    assert diag["turn_shadow"]["used_turn"] is True
+    assert diag["turn_shadow"]["turn_rate_deg_s"] == pytest.approx(3.0, abs=0.2)
+
+
+def test_latency_advancement_and_substep_interpolation():
+    """Observation latency advances position and parabolic fit refines CPA."""
+    hist = [
+        sample(41.30, 29.0, 180, speed=450, t=NOW - 25),
+        sample(41.28, 29.0, 180, speed=450, t=NOW - 20),
+        sample(41.26, 29.0, 180, speed=450, t=NOW - 15),
+        sample(41.24, 29.0, 180, speed=450, t=NOW - 10, age=10),
+    ]
+    pred = predict_trajectory_v46(hist, *USER, 15, now=NOW)
+    diag = diagnostics_for(pred)
+    linear = diag["linear_shadow"]
+    assert linear["cpa_km"] < 100.0
+    assert linear["eta_s"] is not None
+

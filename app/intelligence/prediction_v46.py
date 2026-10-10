@@ -26,7 +26,7 @@ _TURN_MIN_RATES = 3
 _TURN_MIN_SPAN_S = 10.0
 _TURN_MAX_GAP_S = 18.0
 _TURN_MIN_RATE_DEG_S = 0.06
-_TURN_MAX_RATE_DEG_S = 2.2
+_TURN_MAX_RATE_DEG_S = 3.6
 _TURN_MIN_SIGN_AGREEMENT = 0.75
 _TURN_MAX_RATE_SPREAD = 0.32
 _SHADOW_MAX_HORIZON_S = 600
@@ -198,7 +198,7 @@ def turn_evidence(samples: Iterable[t.HistorySample], *, now: float | None = Non
         return TurnEvidence(False, rate, len(meaningful), sign_agreement, spread, span, "turn direction is inconsistent")
     if spread > _TURN_MAX_RATE_SPREAD:
         return TurnEvidence(False, rate, len(meaningful), sign_agreement, spread, span, "turn rate is unstable")
-    return TurnEvidence(True, _clamp(rate, -1.8, 1.8), len(meaningful), sign_agreement, spread, span, "sustained consistent turn")
+    return TurnEvidence(True, _clamp(rate, -_TURN_MAX_RATE_DEG_S, _TURN_MAX_RATE_DEG_S), len(meaningful), sign_agreement, spread, span, "sustained consistent turn")
 
 
 def _motion_state(samples: list[t.HistorySample]) -> tuple[float | None, float | None]:
@@ -237,10 +237,20 @@ def _shadow_simulation(
     lat = float(ordered[-1].latitude)
     lon = float(ordered[-1].longitude)
     hdg = float(heading) % 360.0
-    closest = current
-    eta = 0.0
     turn_rate = evidence.rate_deg_s if use_turn and evidence.stable else 0.0
     used_turn = bool(use_turn and evidence.stable)
+
+    # Advance initial coordinates by observation latency
+    if age > 0.0:
+        if used_turn:
+            midpoint_heading = (hdg + turn_rate * age * 0.5) % 360.0
+            lat, lon = t.project_point(lat, lon, speed_km_s * age, midpoint_heading)
+            hdg = (hdg + turn_rate * age) % 360.0
+        else:
+            lat, lon = t.project_point(lat, lon, speed_km_s * age, hdg)
+        current = t.haversine_km(lat, lon, user_lat, user_lon)
+
+    traj: list[tuple[float, float]] = [(0.0, current)]
     for seconds in range(step_s, horizon + 1, step_s):
         # Candidate turn extrapolation is deliberately bounded: strong recent
         # curvature fades to straight flight instead of circling indefinitely.
@@ -252,16 +262,32 @@ def _shadow_simulation(
         else:
             lat, lon = t.project_point(lat, lon, speed_km_s * step_s, hdg)
         distance = t.haversine_km(lat, lon, user_lat, user_lon)
-        if distance < closest:
-            closest = distance
-            eta = float(seconds)
-    eta = max(0.0, eta - age)
+        traj.append((float(seconds), distance))
+
+    min_idx = min(range(len(traj)), key=lambda i: traj[i][1])
+    best_t, best_d = traj[min_idx]
+
+    # Parabolic vertex interpolation on d^2 around discrete minimum
+    if 0 < min_idx < len(traj) - 1:
+        y1 = traj[min_idx - 1][1] ** 2
+        y2 = traj[min_idx][1] ** 2
+        y3 = traj[min_idx + 1][1] ** 2
+        denom = y1 - 2.0 * y2 + y3
+        if denom > 1e-9:
+            offset = _clamp(0.5 * (y1 - y3) / denom, -1.0, 1.0)
+            best_t = max(0.0, traj[min_idx][0] + offset * step_s)
+            best_d = math.sqrt(max(0.0, y2 - (y1 - y3) ** 2 / (8.0 * denom)))
+
+    closest = best_d
+    eta = best_t
+    enters_radius = closest <= alert_radius_km and (eta > 0.0 or current <= alert_radius_km)
+
     return ShadowResult(
         SHADOW_MODEL_VERSION,
         "turn-aware" if use_turn else "linear",
         closest,
         eta,
-        closest <= alert_radius_km and eta > 0.0,
+        enters_radius,
         used_turn,
         turn_rate,
         horizon,

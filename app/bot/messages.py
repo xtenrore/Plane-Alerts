@@ -6,9 +6,12 @@ without touching handler logic.
 
 from __future__ import annotations
 
+import html
+from datetime import datetime, timedelta, timezone
+
 from app.aircraft.categories import CATEGORY_EMOJIS, get_all_types_for_categories
 from app.bot.flight_links import flightradar24_url
-from app.worker.geo import heading_to_cardinal, metres_to_feet, ms_to_knots
+from app.worker.geo import heading_to_cardinal, km_to_nautical_miles, metres_to_feet, ms_to_knots
 
 
 # ── Welcome & Disclaimer ────────────────────────────────────────────────────
@@ -185,27 +188,87 @@ def status_message(
 
 # ── Notifications ────────────────────────────────────────────────────────────
 
+def format_duration(seconds: float | int | None) -> str:
+    """Format duration in seconds into human-readable duration string."""
+    if seconds is None:
+        return ""
+    sec = float(seconds)
+    if sec < 10.0:
+        return "< 10s"
+    if sec < 60.0:
+        return f"{int(round(sec))}s"
+    if sec < 3600.0:
+        m, s = divmod(int(round(sec)), 60)
+        return f"{m}m" if s == 0 else f"{m}m {s}s"
+    h, rem = divmod(int(round(sec)), 3600)
+    m = rem // 60
+    return f"{h}h" if m == 0 else f"{h}h {m}m"
+
+
+def format_eta_timestamp(seconds: float | int | None, ref_time: datetime | None = None) -> str:
+    """Format ETA duration in seconds as UTC arrival clock timestamp (HH:MM UTC)."""
+    if seconds is None:
+        return ""
+    ref = ref_time if ref_time is not None else datetime.now(timezone.utc)
+    target = ref + timedelta(seconds=max(0.0, float(seconds)))
+    return target.strftime("%H:%M UTC")
+
+
 def aircraft_alert_message(
     aircraft_type: str,
     callsign: str,
     distance_km: float,
-    altitude_m: float | None,
-    velocity_ms: float | None,
-    heading: float | None,
-    icao24: str,
-    origin_country: str,
+    altitude_m: float | None = None,
+    velocity_ms: float | None = None,
+    heading: float | None = None,
+    icao24: str = "",
+    origin_country: str = "",
     eta_seconds: float | None = None,
+    cda_km: float | None = None,
+    trajectory_status: str | None = None,
+    bearing_from_user: float | None = None,
+    closure_rate_ms: float | None = None,
 ) -> str:
-    """Format an aircraft notification message."""
-    if eta_seconds is not None and eta_seconds > 0:
-        lines = [f"🚀 <b>Early Warning Alert!</b> (Arriving in ~{int(eta_seconds)}s)\n"]
-    else:
-        lines = ["✈️ <b>Aircraft Alert!</b>\n"]
+    """Format a rich, HTML-escaped aircraft notification message."""
+    safe_type = html.escape(aircraft_type or "Unknown", quote=True)
+    safe_callsign = html.escape(callsign.strip(), quote=True) if callsign else ""
+    safe_origin = html.escape(origin_country.strip(), quote=True) if origin_country else ""
+    safe_icao = html.escape(icao24.strip().lower(), quote=True) if icao24 else ""
 
-    lines.append(f"<b>Type:</b> <code>{aircraft_type or 'Unknown'}</code>")
-    if callsign:
-        lines.append(f"<b>Callsign:</b> <code>{callsign}</code>")
+    lines: list[str] = []
+
+    if eta_seconds is not None and eta_seconds > 0:
+        duration_raw = format_duration(eta_seconds)
+        time_raw = format_eta_timestamp(eta_seconds)
+        safe_duration = html.escape(duration_raw, quote=True)
+        safe_time = html.escape(time_raw, quote=True) if time_raw else ""
+        time_suffix = f" ({safe_time})" if safe_time else ""
+        lines.append(f"🚀 <b>Early Warning Alert!</b> (Arriving in ~{safe_duration}{time_suffix})\n")
+    else:
+        lines.append("✈️ <b>Aircraft Alert!</b>\n")
+
+    lines.append(f"<b>Type:</b> <code>{safe_type}</code>")
+    if safe_callsign:
+        lines.append(f"<b>Callsign:</b> <code>{safe_callsign}</code>")
     lines.append(f"<b>Distance:</b> {distance_km:.1f} km away")
+
+    if cda_km is not None:
+        cda_nm = km_to_nautical_miles(cda_km)
+        badge = " [Direct Overhead!]" if cda_km < 1.0 else ""
+        lines.append(f"🎯 <b>Closest Pass (CDA):</b> {cda_km:.1f} km ({cda_nm:.1f} NM){badge}")
+
+    if bearing_from_user is not None:
+        cardinal_dir = heading_to_cardinal(bearing_from_user)
+        lines.append(f"👁️ <b>Bearing:</b> {cardinal_dir} ({bearing_from_user:.0f}° from you)")
+
+    if closure_rate_ms is not None:
+        closure_kt = ms_to_knots(abs(closure_rate_ms))
+        direction = " closing" if closure_rate_ms > 1.0 else (" receding" if closure_rate_ms < -1.0 else "")
+        lines.append(f"⚡ <b>Closure Rate:</b> {abs(closure_rate_ms):.0f} m/s ({closure_kt} kt){direction}")
+
+    if trajectory_status:
+        safe_traj = html.escape(str(trajectory_status), quote=True)
+        lines.append(f"🧭 <b>Trajectory:</b> {safe_traj}")
 
     if altitude_m is not None:
         alt_ft = metres_to_feet(altitude_m)
@@ -219,8 +282,8 @@ def aircraft_alert_message(
         cardinal = heading_to_cardinal(heading)
         lines.append(f"<b>Heading:</b> {cardinal} ({heading:.0f}°)")
 
-    if origin_country:
-        lines.append(f"\n<b>Origin:</b> {origin_country}")
+    if safe_origin:
+        lines.append(f"\n<b>Origin:</b> {safe_origin}")
 
     tracker_url = flightradar24_url(callsign=callsign, icao24=icao24)
     if tracker_url:
