@@ -13,9 +13,11 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 
 from app.aircraft.models import NormalizedAircraft
+from app.bot.messages import format_duration, format_eta_timestamp
 from app.config import settings
 from app.database import get_db, locations_col, users_col
 from app.photography.keyboards import notification_actions_keyboard
+from app.worker.geo import heading_to_cardinal, km_to_nautical_miles, ms_to_knots
 from app.worker.notification_telemetry import enqueue_auxiliary, enqueue_notification_event
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,15 @@ def _flight_status_line(ac: NormalizedAircraft, pred) -> str:
         parts.append(f"{int(round(ac.altitude * 3.28084)):,} ft")
     if ac.ground_speed is not None:
         parts.append(f"{int(round(ac.ground_speed))} kt")
+    if ac.heading is not None:
+        cardinal = heading_to_cardinal(ac.heading)
+        parts.append(f"{cardinal} ({int(round(ac.heading))}°)")
+    if getattr(pred, "distance_trend_km_s", None) is not None:
+        rate_ms = -float(pred.distance_trend_km_s) * 1000.0
+        if abs(rate_ms) >= 1.0:
+            rate_kt = ms_to_knots(abs(rate_ms))
+            dir_str = " closing" if rate_ms > 1.0 else " receding"
+            parts.append(f"⚡ {abs(rate_ms):.0f} m/s ({rate_kt} kt){dir_str}")
     return " · ".join(parts)
 
 
@@ -137,9 +148,24 @@ def _approach_text(
         return "\n".join(lines)
 
     countdown = camera.best_window_start_s if camera and camera.best_window_start_s is not None else pred.time_to_cpa_s
+    time_parts = [f"⏱ <b>{_clock(countdown)}</b>"]
+    if countdown is not None and countdown > 0:
+        clock_ts = format_eta_timestamp(countdown)
+        if clock_ts:
+            time_parts.append(f"({clock_ts})")
+
+    cpa_km = float(pred.projected_closest_km)
+    cpa_nm = km_to_nautical_miles(cpa_km)
+    badge = " [Direct Overhead!]" if cpa_km < 1.0 else ""
+    cpa_part = f"CPA <b>{cpa_km:.1f} km</b> ({cpa_nm:.1f} NM){badge}"
     lines.append(
-        f"⏱ <b>{_clock(countdown)}</b> · CPA <b>{pred.projected_closest_km:.1f} km</b> · {pred.current_distance_km:.1f} km now"
+        f"{' '.join(time_parts)} · {cpa_part} · {pred.current_distance_km:.1f} km now"
     )
+    if stage == "prepare" and getattr(pred, "radius_entry_s", None) is not None and 0 < float(pred.radius_entry_s) < (float(countdown) if countdown is not None else 9999.0):
+        entry_dur = format_duration(pred.radius_entry_s)
+        entry_clock = format_eta_timestamp(pred.radius_entry_s)
+        entry_suffix = f" ({entry_clock})" if entry_clock else ""
+        lines.append(f"🎯 Perimeter entry in ~{entry_dur}{entry_suffix}")
     lines.append(_flight_status_line(ac, pred))
 
     camera_text = _camera_line(camera)
@@ -178,7 +204,12 @@ def _basic_alert_text(
     lines = [title, _identity(aircraft)]
     details = [f"{distance_km:.1f} km away"]
     if eta_seconds is not None and eta_seconds > 0:
-        details.insert(0, f"~{_clock(eta_seconds)}")
+        dur_str = format_duration(eta_seconds)
+        clock_str = format_eta_timestamp(eta_seconds)
+        time_text = f"~{dur_str}"
+        if clock_str:
+            time_text += f" ({clock_str})"
+        details.insert(0, time_text)
     if aircraft.altitude is not None:
         details.append(f"{int(round(aircraft.altitude * 3.28084)):,} ft")
     if aircraft.ground_speed is not None:

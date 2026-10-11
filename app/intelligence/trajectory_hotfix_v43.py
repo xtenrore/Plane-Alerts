@@ -158,6 +158,37 @@ def predict_trajectory_v43(
                 max(0.0, float(cpa_altitude if cpa_altitude is not None else legacy_observer_altitude_m) - legacy_observer_altitude_m) / 1000.0,
             )
 
+    # Deterministic Napier spherical geodesy integration for linear flight:
+    # Analytical O(1) continuous Great-Circle Closest Distance of Approach (CDA)
+    # and perimeter entry ETA demonstrably remove discrete Euler step errors.
+    if abs(base.turn_rate_deg_s) < 0.05 and abs(base.acceleration_kts_s) < 0.01:
+        from app.worker.kinematics import calculate_cda_and_eta
+
+        napier = calculate_cda_and_eta(
+            aircraft_lat=latest.latitude,
+            aircraft_lon=latest.longitude,
+            speed_kts=float(speed),
+            heading_deg=float(heading),
+            user_lat=user_lat,
+            user_lon=user_lon,
+            alert_radius_km=alert_radius_km,
+            lookahead_seconds=max_horizon_s,
+        )
+        if napier["time_to_cda_seconds"] is not None and 0.0 <= napier["time_to_cda_seconds"] <= float(horizon):
+            closest_h = float(napier["closest_pass_km"])
+            cpa_t = float(napier["time_to_cda_seconds"])
+            if napier["eta_seconds"] is not None:
+                entry_t = float(napier["eta_seconds"])
+            elif base.current_distance_km <= alert_radius_km:
+                entry_t = 0.0
+            else:
+                entry_t = None
+            cpa_alt = path[idx].altitude_m if (path and idx < len(path) and path[idx].altitude_m is not None) else latest.altitude_m
+            closest_slant = math.hypot(
+                closest_h,
+                max(0.0, float(cpa_alt if cpa_alt is not None else legacy_observer_altitude_m) - legacy_observer_altitude_m) / 1000.0,
+            )
+
     # Match the authoritative base predictor: provider-reported position age is
     # real observation latency even when the local timestamp is current. Using
     # wall-clock age alone made midpoint ETA systematically late on delayed

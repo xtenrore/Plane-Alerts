@@ -189,9 +189,9 @@ def calculate_cda_and_eta(
     # Advance initial position by observation latency if specified
     lat_curr = aircraft_lat
     lon_curr = aircraft_lon
-    hdg = (float(heading_deg) % 360.0) if heading_deg is not None else 0.0
+    hdg = (float(heading_deg) % 360.0) if heading_deg is not None else None
 
-    if latency_s > 0.0 and v_km_s > 1e-6:
+    if latency_s > 0.0 and v_km_s > 1e-6 and hdg is not None:
         if abs(turn_rate_deg_s) > 0.05:
             mid_hdg = (hdg + turn_rate_deg_s * latency_s * 0.5) % 360.0
             lat_curr, lon_curr = project_point(lat_curr, lon_curr, v_km_s * latency_s, mid_hdg)

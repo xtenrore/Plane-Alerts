@@ -281,3 +281,112 @@ def test_safe_math_domain_bounds():
     )
     assert isinstance(res["should_notify"], bool)
     assert isinstance(res["closest_pass_km"], float)
+
+
+def test_missing_heading_latency_extrapolation_does_not_corrupt_coordinates():
+    """Missing heading telemetry must NOT extrapolate position along 0 deg or distort distance."""
+    ulat, ulon = 50.0, 10.0
+    # Aircraft 12 km West of user
+    alat, alon = project_point(ulat, ulon, 12.0, 270.0)
+    expected_dist = haversine_distance_km(alat, alon, ulat, ulon)
+
+    # Calling with latency_s=15.0 and heading_deg=None:
+    # Must NOT advance coordinates along 0 deg (North)
+    res = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=400.0,
+        heading_deg=None,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=8.0,
+        latency_s=15.0,
+    )
+    assert res["should_notify"] is False
+    assert res["closest_pass_km"] == pytest.approx(expected_dist, abs=0.01)
+    assert res["time_to_cda_seconds"] is None
+    assert res["eta_seconds"] is None
+    assert "Missing heading" in res["reason"]
+
+
+def test_turning_aircraft_initially_heading_toward_user_then_turning_away():
+    """Aircraft initially pointing at observer that turns away must not trigger false alert."""
+    ulat, ulon = 41.00, 29.00
+    # Aircraft 14 km North of observer, initial heading 180 (directly toward observer)
+    # Target radius 8.0 km.
+    # At 250 kts (~0.1286 km/s), with a Rate-1 turn of +3.0 deg/s to the right (heading turns 180 -> 270 West).
+    alat, alon = project_point(ulat, ulon, 14.0, 0.0)
+
+    # 1. Linear flight without turn would falsely alert (direct hit in ~108s, entry in ~46s)
+    linear_res = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=250.0,
+        heading_deg=180.0,
+        turn_rate_deg_s=0.0,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=8.0,
+        lookahead_seconds=180,
+    )
+    assert linear_res["should_notify"] is True
+    assert linear_res["closest_pass_km"] < 0.1
+
+    # 2. With Rate-1 turn (+3.0 deg/s), aircraft curves West away before entering 8 km radius
+    turning_res = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=250.0,
+        heading_deg=180.0,
+        turn_rate_deg_s=3.0,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=8.0,
+        lookahead_seconds=180,
+    )
+    # The curve carries it away so closest pass is > 8.0 km and it does NOT enter radius
+    assert turning_res["should_notify"] is False
+    assert turning_res["closest_pass_km"] > 8.0
+    assert turning_res["eta_seconds"] is None
+    assert turning_res["pass_type"] == "outside"
+
+
+def test_turning_aircraft_inside_radius_turning_away():
+    """Aircraft inside radius performing turn is correctly recognized."""
+    ulat, ulon = 41.00, 29.00
+    # Aircraft at 6.0 km North (inside 10 km radius), heading 0 deg (North)
+    # turning right at +2.0 deg/s.
+    alat, alon = project_point(ulat, ulon, 6.0, 0.0)
+
+    # 1. Short lookahead (30s): aircraft turns from 0° to 60° while moving away from observer.
+    # Distance strictly increases, so closest pass is initial distance (6.0 km) at t=0.
+    res_short = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=200.0,
+        heading_deg=0.0,
+        turn_rate_deg_s=2.0,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=10.0,
+        lookahead_seconds=30,
+    )
+    assert res_short["should_notify"] is True  # inside radius
+    assert res_short["closest_pass_km"] == pytest.approx(6.0, abs=0.1)
+
+    # 2. Long lookahead (180s): aircraft completes a full turn circle of radius R ~ 2.95 km.
+    # The turn loops back south, reaching a closest pass of ~3.83 km.
+    res_loop = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=200.0,
+        heading_deg=0.0,
+        turn_rate_deg_s=2.0,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=10.0,
+        lookahead_seconds=180,
+    )
+    assert res_loop["should_notify"] is True
+    assert res_loop["closest_pass_km"] == pytest.approx(3.83, abs=0.1)
+
