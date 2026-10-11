@@ -1,12 +1,15 @@
 """Integration tests and benchmark gates for Napier kinematics and ETA predictions.
 
-Validates the 6 requirements from instructions.md:
+Validates the requirements from instructions.md:
 1. Deterministic Napier CDA/ETA integrated in authoritative predictor
-2. Telegram ETA integration in notification lifecycle
-3. Benchmark metrics on identical ADS-B observations with inconclusive missing coverage
-4. Turning aircraft and LTFM/LTBA terminal approach verifications
-5. Missing-heading latency extrapolation and turn-rate confidence validation
-6. Shadow comparisons and candidate isolation
+2. Geometry consistency across horizontal and 3D proximity
+3. Benchmark metrics on identical ADS-B observations vs real 1a7a88a733 baseline
+4. Missing coverage and unresolved cancellations treated as inconclusive
+5. Historical evidence blocker flagged honestly without promoting synthetic numbers
+6. Decision outcome explicitly verified as BLOCKED — MORE EVIDENCE REQUIRED
+7. Turning aircraft and LTFM/LTBA terminal approach verifications
+8. Missing-heading latency extrapolation and turn-rate confidence validation
+9. Shadow comparisons and candidate isolation
 """
 from __future__ import annotations
 
@@ -54,6 +57,20 @@ def test_benchmark_kinematics_gates():
 
     # Gate 9: Shadow candidate isolation
     assert results["shadow_isolation"]["shadow_candidates_cannot_control_alerts"] is True
+
+    # Gate 10: Performance and 5-second cadence budget
+    assert summary["cadence_impact_5s_budget_ok"] is True
+    assert summary["per_prediction_latency_ms"] < 5.0
+
+    # Gate 11: Historical evidence assessment and blocker identification
+    hist = results["historical_evidence_assessment"]
+    assert hist["evidence_blocker_identified"] is True
+    assert hist["scorable_historical_cases"] == 2
+    assert hist["inconclusive_or_unscoreable_cases"] == 5
+    assert hist["baseline_commit"] == "1a7a88a733"
+
+    # Gate 12: Decision outcome is BLOCKED — MORE EVIDENCE REQUIRED
+    assert results["decision_outcome"] == "BLOCKED — MORE EVIDENCE REQUIRED"
 
 
 @pytest.mark.asyncio

@@ -60,3 +60,7 @@ backup/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Agents workspace data
+.agents/
+

@@ -171,12 +171,29 @@ def calculate_cda_and_eta(
       - closure_rate_ms: float (rate of range closure in m/s)
       - reason: str
     """
+    # Guard against NaN/infinite coordinates or speed
+    for coord in (aircraft_lat, aircraft_lon, user_lat, user_lon):
+        if not math.isfinite(coord):
+            return {
+                "should_notify": False,
+                "eta_seconds": None,
+                "time_to_cda_seconds": None,
+                "closest_pass_km": 999.0,
+                "raw_closest_pass_km": 999.0,
+                "raw_time_to_cda_seconds": None,
+                "raw_eta_seconds": None,
+                "pass_type": "outside",
+                "bearing_from_user": 0.0,
+                "closure_rate_ms": 0.0,
+                "reason": "Invalid non-finite coordinates.",
+            }
+
     # Resolve speed in km/s
-    if speed_km_s is not None:
+    if speed_km_s is not None and math.isfinite(speed_km_s):
         v_km_s = float(speed_km_s)
-    elif speed_kts is not None:
+    elif speed_kts is not None and math.isfinite(speed_kts):
         v_km_s = float(speed_kts) * KNOTS_TO_KM_PER_SEC
-    elif velocity_ms is not None:
+    elif velocity_ms is not None and math.isfinite(velocity_ms):
         v_km_s = float(velocity_ms) / 1000.0
     else:
         v_km_s = 0.0
@@ -189,7 +206,7 @@ def calculate_cda_and_eta(
     # Advance initial position by observation latency if specified
     lat_curr = aircraft_lat
     lon_curr = aircraft_lon
-    hdg = (float(heading_deg) % 360.0) if heading_deg is not None else None
+    hdg = (float(heading_deg) % 360.0) if (heading_deg is not None and math.isfinite(heading_deg)) else None
 
     if latency_s > 0.0 and v_km_s > 1e-6 and hdg is not None:
         if abs(turn_rate_deg_s) > 0.05:
@@ -217,6 +234,9 @@ def calculate_cda_and_eta(
             "eta_seconds": None,
             "time_to_cda_seconds": 0.0,
             "closest_pass_km": 0.0,
+            "raw_closest_pass_km": float(initial_dist),
+            "raw_time_to_cda_seconds": 0.0,
+            "raw_eta_seconds": None,
             "pass_type": "direct_hit",
             "bearing_from_user": 0.0,
             "closure_rate_ms": 0.0,
@@ -231,6 +251,9 @@ def calculate_cda_and_eta(
             "eta_seconds": None,
             "time_to_cda_seconds": None,
             "closest_pass_km": round(initial_dist, 2),
+            "raw_closest_pass_km": float(initial_dist),
+            "raw_time_to_cda_seconds": None,
+            "raw_eta_seconds": None,
             "pass_type": pass_type,
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": 0.0,
@@ -244,6 +267,9 @@ def calculate_cda_and_eta(
             "eta_seconds": None,
             "time_to_cda_seconds": None,
             "closest_pass_km": round(initial_dist, 2),
+            "raw_closest_pass_km": float(initial_dist),
+            "raw_time_to_cda_seconds": None,
+            "raw_eta_seconds": None,
             "pass_type": "direct_hit" if initial_dist <= 1.0 else ("near_miss" if is_inside else "outside"),
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": 0.0,
@@ -293,6 +319,9 @@ def calculate_cda_and_eta(
             "eta_seconds": entry_eta,
             "time_to_cda_seconds": round(time_to_cda, 1) if (time_to_cda > 0 or is_inside) else None,
             "closest_pass_km": round(cda_refined, 2),
+            "raw_closest_pass_km": float(cda_refined),
+            "raw_time_to_cda_seconds": float(time_to_cda) if (time_to_cda > 0 or is_inside) else None,
+            "raw_eta_seconds": float(entry_eta) if entry_eta is not None else None,
             "pass_type": pass_type,
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": round(closure_rate_ms, 1),
@@ -373,6 +402,9 @@ def calculate_cda_and_eta(
             "eta_seconds": None,
             "time_to_cda_seconds": round(time_to_cda, 1) if time_to_cda is not None else None,
             "closest_pass_km": round(pass_cda, 2),
+            "raw_closest_pass_km": float(pass_cda),
+            "raw_time_to_cda_seconds": float(time_to_cda) if time_to_cda is not None else None,
+            "raw_eta_seconds": None,
             "pass_type": pass_type,
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": round(closure_rate_ms, 1),
@@ -387,6 +419,9 @@ def calculate_cda_and_eta(
             "eta_seconds": None,
             "time_to_cda_seconds": None,
             "closest_pass_km": round(initial_dist, 2),
+            "raw_closest_pass_km": float(initial_dist),
+            "raw_time_to_cda_seconds": None,
+            "raw_eta_seconds": None,
             "pass_type": "receding",
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": round(closure_rate_ms, 1),
@@ -400,6 +435,9 @@ def calculate_cda_and_eta(
             "eta_seconds": None,
             "time_to_cda_seconds": None,
             "closest_pass_km": round(initial_dist, 2),
+            "raw_closest_pass_km": float(initial_dist),
+            "raw_time_to_cda_seconds": None,
+            "raw_eta_seconds": None,
             "pass_type": "parallel",
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": round(closure_rate_ms, 1),
@@ -425,6 +463,9 @@ def calculate_cda_and_eta(
             "eta_seconds": round(eta_entry, 1),
             "time_to_cda_seconds": round(time_to_cda, 1),
             "closest_pass_km": round(cda_km, 2),
+            "raw_closest_pass_km": float(cda_km),
+            "raw_time_to_cda_seconds": float(time_to_cda),
+            "raw_eta_seconds": float(eta_entry),
             "pass_type": pass_type,
             "bearing_from_user": round(bearing_from_user, 1),
             "closure_rate_ms": round(closure_rate_ms, 1),
@@ -441,6 +482,9 @@ def calculate_cda_and_eta(
         "eta_seconds": None,
         "time_to_cda_seconds": round(time_to_cda, 1),
         "closest_pass_km": round(cda_km, 2),
+        "raw_closest_pass_km": float(cda_km),
+        "raw_time_to_cda_seconds": float(time_to_cda),
+        "raw_eta_seconds": None,
         "pass_type": "outside",
         "bearing_from_user": round(bearing_from_user, 1),
         "closure_rate_ms": round(closure_rate_ms, 1),

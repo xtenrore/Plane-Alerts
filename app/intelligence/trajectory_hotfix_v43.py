@@ -161,7 +161,9 @@ def predict_trajectory_v43(
     # Deterministic Napier spherical geodesy integration for linear flight:
     # Analytical O(1) continuous Great-Circle Closest Distance of Approach (CDA)
     # and perimeter entry ETA demonstrably remove discrete Euler step errors.
-    if abs(base.turn_rate_deg_s) < 0.05 and abs(base.acceleration_kts_s) < 0.01:
+    is_linear_flight = abs(base.turn_rate_deg_s) < 0.05 and abs(base.acceleration_kts_s) < 0.01
+    napier_applied = False
+    if is_linear_flight:
         from app.worker.kinematics import calculate_cda_and_eta
 
         napier = calculate_cda_and_eta(
@@ -174,15 +176,20 @@ def predict_trajectory_v43(
             alert_radius_km=alert_radius_km,
             lookahead_seconds=max_horizon_s,
         )
-        if napier["time_to_cda_seconds"] is not None and 0.0 <= napier["time_to_cda_seconds"] <= float(horizon):
-            closest_h = float(napier["closest_pass_km"])
-            cpa_t = float(napier["time_to_cda_seconds"])
-            if napier["eta_seconds"] is not None:
-                entry_t = float(napier["eta_seconds"])
+        time_to_cda_val = napier.get("raw_time_to_cda_seconds", napier["time_to_cda_seconds"])
+        cda_km_val = napier.get("raw_closest_pass_km", napier["closest_pass_km"])
+        eta_val = napier.get("raw_eta_seconds", napier["eta_seconds"])
+
+        if time_to_cda_val is not None and 0.0 <= time_to_cda_val <= float(horizon):
+            closest_h = float(cda_km_val)
+            cpa_t = float(time_to_cda_val)
+            if eta_val is not None:
+                entry_t = float(eta_val)
             elif base.current_distance_km <= alert_radius_km:
                 entry_t = 0.0
             else:
                 entry_t = None
+            napier_applied = True
             cpa_alt = path[idx].altitude_m if (path and idx < len(path) and path[idx].altitude_m is not None) else latest.altitude_m
             closest_slant = math.hypot(
                 closest_h,
@@ -233,10 +240,69 @@ def predict_trajectory_v43(
         observer_altitude_m=user_altitude_m,
         step_s=float(step_s),
     )
+
+    # When analytical Napier geodesy is authoritative, align 3D proximity quantities
+    # continuously so horizontal and 3D CPA maintain mathematical and physical consistency.
+    proj_3d = proximity3d.projected_closest_3d_km
+    lower_3d = proximity3d.projected_closest_3d_lower_bound_km
+    time_3d = proximity3d.time_to_3d_cpa_s
+    horiz_3d = proximity3d.horizontal_at_3d_cpa_km
+    vert_3d = proximity3d.vertical_at_3d_cpa_m
+    relevance_reason = proximity3d.reason
+    suppress_3d = proximity3d.suppress_horizontal_entry
+
+    if napier_applied and proximity3d.available and latest.altitude_m is not None:
+        vr_mps = float(latest.vertical_rate_mps or 0.0)
+        alt_at_cpa_m = float(latest.altitude_m) + vr_mps * (cpa_t + age)
+        v_km_s = float(speed) * t.KNOTS_TO_KM_S
+        v_mps = v_km_s * 1000.0
+
+        if proximity3d.observer_altitude_known and user_altitude_m is not None:
+            obs_alt = float(user_altitude_m)
+            delta_z = alt_at_cpa_m - obs_alt
+            if abs(vr_mps) < 0.1:
+                t_3d = cpa_t
+                h_3d = closest_h
+                v_3d = abs(delta_z)
+                c_3d = math.hypot(closest_h, v_3d / 1000.0)
+            else:
+                denom_v = v_mps ** 2 + vr_mps ** 2
+                tau_s = -(delta_z * vr_mps) / denom_v if denom_v > 1e-6 else 0.0
+                t_3d = max(0.0, cpa_t + tau_s)
+                h_3d = math.hypot(closest_h, v_km_s * tau_s)
+                v_3d = abs(delta_z + vr_mps * tau_s)
+                c_3d = math.hypot(h_3d, v_3d / 1000.0)
+
+            closest_slant = c_3d
+            proj_3d = c_3d
+            time_3d = t_3d
+            horiz_3d = h_3d
+            vert_3d = v_3d
+            lower_v = max(0.0, abs(delta_z) - (proximity3d.altitude_uncertainty_m or 0.0))
+            lower_3d = math.hypot(closest_h, lower_v / 1000.0)
+        else:
+            proj_3d = None
+            time_3d = None
+            horiz_3d = None
+            vert_3d = None
+            from app.intelligence.proximity3d_v51 import _vertical_lower_bound_m
+            lower_v = _vertical_lower_bound_m(alt_at_cpa_m, None, proximity3d.altitude_uncertainty_m or 0.0)
+            lower_3d = math.hypot(closest_h, lower_v / 1000.0)
+
+        suppress_3d = bool(
+            proximity3d.altitude_confidence in {"High", "Medium"}
+            and lower_3d > float(alert_radius_km) + 0.05
+        )
+        if suppress_3d:
+            relevance_reason = (
+                f"conservative 3D CPA lower bound {lower_3d:.2f} km remains outside "
+                f"the {float(alert_radius_km):.2f} km alert radius despite altitude uncertainty"
+            )
+
     altitude_suppressed = bool(
         altitude_relevance
         and horizontal_enters
-        and proximity3d.suppress_horizontal_entry
+        and suppress_3d
     )
     enters = horizontal_enters and not altitude_suppressed
 
@@ -249,7 +315,7 @@ def predict_trajectory_v43(
         state = "Turning away"
         reason = "sustained recent turn and distance trend move the aircraft away from the observer"
     elif altitude_suppressed:
-        state, reason = "Will not approach", proximity3d.reason
+        state, reason = "Will not approach", relevance_reason
     elif directly_inside and enters:
         state = "Passing nearby"
         reason = "fresh ADS-B position is directly inside the configured alert radius"
@@ -279,17 +345,17 @@ def predict_trajectory_v43(
         reason=reason,
         path=path,
         current_vertical_separation_m=proximity3d.current_vertical_separation_m,
-        projected_closest_3d_km=proximity3d.projected_closest_3d_km,
-        projected_closest_3d_lower_bound_km=proximity3d.projected_closest_3d_lower_bound_km,
-        time_to_3d_cpa_s=proximity3d.time_to_3d_cpa_s,
-        horizontal_at_3d_cpa_km=proximity3d.horizontal_at_3d_cpa_km,
-        vertical_at_3d_cpa_m=proximity3d.vertical_at_3d_cpa_m,
+        projected_closest_3d_km=proj_3d,
+        projected_closest_3d_lower_bound_km=lower_3d,
+        time_to_3d_cpa_s=time_3d,
+        horizontal_at_3d_cpa_km=horiz_3d,
+        vertical_at_3d_cpa_m=vert_3d,
         three_d_available=proximity3d.available,
         observer_altitude_known=proximity3d.observer_altitude_known,
         altitude_confidence=proximity3d.altitude_confidence,
         altitude_uncertainty_m=proximity3d.altitude_uncertainty_m,
         altitude_relevance_applied=altitude_suppressed,
-        altitude_relevance_reason=proximity3d.reason,
+        altitude_relevance_reason=relevance_reason,
     )
 
 
