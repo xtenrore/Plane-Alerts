@@ -124,3 +124,38 @@ def test_approach_text_adversarial_escaping():
     assert "A&lt;B&gt;&amp;C" in text
     assert "&lt;B&gt;JET&lt;/B&gt;" in text
     StrictTelegramHTMLValidator().validate(text)
+
+
+def test_approach_and_basic_sub_ten_second_html_escaping():
+    """Durations under 10 seconds return '< 10s' which must be escaped as '&lt; 10s'."""
+    ac = _make_ac(callsign="AFR101")
+    pred = _make_pred(entry=6.0, t_cpa=40.0)
+    text = _approach_text(ac, pred, stage="prepare")
+    assert "&lt; 10s" in text
+    assert "< 10s" not in text
+    StrictTelegramHTMLValidator().validate(text)
+
+    basic = _basic_alert_text(ac, distance_km=12.0, eta_seconds=5.0)
+    assert "&lt; 10s" in basic
+    assert "< 10s" not in basic
+    StrictTelegramHTMLValidator().validate(basic)
+
+
+def test_duck_typed_aircraft_without_ground_speed():
+    """Duck-typed aircraft with only velocity (no ground_speed property) format cleanly."""
+    ac = SimpleNamespace(
+        icao24="4b9999",
+        callsign="MOCK1",
+        aircraft_type="B738",
+        altitude=3000.0,
+        velocity=200.0,
+        heading=180.0,
+    )
+    pred = _make_pred(cpa=1.5, current=8.0, t_cpa=35.0)
+    text = _approach_text(ac, pred, stage="prepare")
+    assert "389 kt" in text
+    StrictTelegramHTMLValidator().validate(text)
+
+    basic = _basic_alert_text(ac, distance_km=8.0, eta_seconds=30.0)
+    assert "389 kt" in basic
+    StrictTelegramHTMLValidator().validate(basic)

@@ -27,6 +27,7 @@ from app.aircraft.models import NormalizedAircraft
 from app.intelligence import airport_terminal_v47 as v47
 from app.intelligence import route_history as route_mod
 from app.intelligence import trajectory as t_core
+unpatched_baseline_predict = t_core.predict_trajectory
 from app.intelligence.prediction_v46 import predict_trajectory_v46, turn_evidence
 from app.intelligence.route_guard import (
     CacheEntry,
@@ -349,7 +350,7 @@ def run_benchmark() -> dict:
         elapsed = now - straight_samples[0].timestamp
         expected_remaining_eta = max(0.0, straight_gt_time - elapsed)
 
-        base_pred = t_core.predict_trajectory(
+        base_pred = unpatched_baseline_predict(
             history_window, user_lat, user_lon, alert_radius_km, now=now
         )
         prop_pred = predict_trajectory_v43(
@@ -376,7 +377,7 @@ def run_benchmark() -> dict:
         elapsed = now - angled_samples[0].timestamp
         expected_remaining_eta = max(0.0, angled_gt_time - elapsed)
 
-        base_pred = t_core.predict_trajectory(
+        base_pred = unpatched_baseline_predict(
             history_window, user_lat, user_lon, alert_radius_km, now=now
         )
         prop_pred = predict_trajectory_v43(
@@ -393,15 +394,15 @@ def run_benchmark() -> dict:
 
     # Overhead pass evaluation
     oh_prop = predict_trajectory_v43(overhead_samples[:4], user_lat, user_lon, alert_radius_km)
-    oh_base = t_core.predict_trajectory(overhead_samples[:4], user_lat, user_lon, alert_radius_km)
+    oh_base = unpatched_baseline_predict(overhead_samples[:4], user_lat, user_lon, alert_radius_km)
 
     # Receding flight evaluation: should NOT notify
     rec_prop = predict_trajectory_v43(receding_samples[:4], user_lat, user_lon, alert_radius_km)
-    rec_base = t_core.predict_trajectory(receding_samples[:4], user_lat, user_lon, alert_radius_km)
+    rec_base = unpatched_baseline_predict(receding_samples[:4], user_lat, user_lon, alert_radius_km)
 
     # Turning flight evaluation: turning away before entering alert perimeter (radius 8.0 km)
     turn_prop = predict_trajectory_v43(turning_away_samples, user_lat, user_lon, 8.0)
-    turn_base = t_core.predict_trajectory(turning_away_samples, user_lat, user_lon, 8.0)
+    turn_base = unpatched_baseline_predict(turning_away_samples, user_lat, user_lon, 8.0)
 
     # Missing heading latency extrapolation validation (Item 5)
     ac_dist_12km = 12.0

@@ -61,14 +61,23 @@ def _identity(ac: NormalizedAircraft) -> str:
 
 
 def _flight_status_line(ac: NormalizedAircraft, pred) -> str:
-    parts = [f"<b>{escape(pred.state)}</b>", escape(pred.confidence)]
-    if ac.altitude is not None:
-        parts.append(f"{int(round(ac.altitude * 3.28084)):,} ft")
-    if ac.ground_speed is not None:
-        parts.append(f"{int(round(ac.ground_speed))} kt")
-    if ac.heading is not None:
-        cardinal = heading_to_cardinal(ac.heading)
-        parts.append(f"{cardinal} ({int(round(ac.heading))}°)")
+    state_str = escape(str(getattr(pred, "state", "Unknown") or "Unknown"))
+    conf_str = escape(str(getattr(pred, "confidence", "") or ""))
+    parts = [f"<b>{state_str}</b>"]
+    if conf_str:
+        parts.append(conf_str)
+    alt = getattr(ac, "altitude", None)
+    if alt is not None:
+        parts.append(f"{int(round(alt * 3.28084)):,} ft")
+    gs = getattr(ac, "ground_speed", None)
+    if gs is not None:
+        parts.append(f"{int(round(gs))} kt")
+    elif getattr(ac, "velocity", None) is not None:
+        parts.append(f"{int(round(ms_to_knots(ac.velocity)))} kt")
+    hdg = getattr(ac, "heading", None)
+    if hdg is not None:
+        cardinal = heading_to_cardinal(hdg)
+        parts.append(f"{cardinal} ({int(round(hdg))}°)")
     if getattr(pred, "distance_trend_km_s", None) is not None:
         rate_ms = -float(pred.distance_trend_km_s) * 1000.0
         if abs(rate_ms) >= 1.0:
@@ -164,8 +173,10 @@ def _approach_text(
     if stage == "prepare" and getattr(pred, "radius_entry_s", None) is not None and 0 < float(pred.radius_entry_s) < (float(countdown) if countdown is not None else 9999.0):
         entry_dur = format_duration(pred.radius_entry_s)
         entry_clock = format_eta_timestamp(pred.radius_entry_s)
-        entry_suffix = f" ({entry_clock})" if entry_clock else ""
-        lines.append(f"🎯 Perimeter entry in ~{entry_dur}{entry_suffix}")
+        safe_dur = escape(entry_dur)
+        safe_clock = escape(entry_clock) if entry_clock else ""
+        entry_suffix = f" ({safe_clock})" if safe_clock else ""
+        lines.append(f"🎯 Perimeter entry in ~{safe_dur}{entry_suffix}")
     lines.append(_flight_status_line(ac, pred))
 
     camera_text = _camera_line(camera)
@@ -206,14 +217,20 @@ def _basic_alert_text(
     if eta_seconds is not None and eta_seconds > 0:
         dur_str = format_duration(eta_seconds)
         clock_str = format_eta_timestamp(eta_seconds)
-        time_text = f"~{dur_str}"
-        if clock_str:
-            time_text += f" ({clock_str})"
+        safe_dur = escape(dur_str)
+        safe_clock = escape(clock_str) if clock_str else ""
+        time_text = f"~{safe_dur}"
+        if safe_clock:
+            time_text += f" ({safe_clock})"
         details.insert(0, time_text)
-    if aircraft.altitude is not None:
-        details.append(f"{int(round(aircraft.altitude * 3.28084)):,} ft")
-    if aircraft.ground_speed is not None:
-        details.append(f"{int(round(aircraft.ground_speed))} kt")
+    alt = getattr(aircraft, "altitude", None)
+    if alt is not None:
+        details.append(f"{int(round(alt * 3.28084)):,} ft")
+    gs = getattr(aircraft, "ground_speed", None)
+    if gs is not None:
+        details.append(f"{int(round(gs))} kt")
+    elif getattr(aircraft, "velocity", None) is not None:
+        details.append(f"{int(round(ms_to_knots(aircraft.velocity)))} kt")
     lines.append(" · ".join(details))
     return "\n".join(lines)
 

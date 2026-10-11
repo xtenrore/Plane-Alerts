@@ -22,13 +22,15 @@ def test_benchmark_kinematics_gates():
     results = run_benchmark()
     summary = results["benchmark_summary"]
 
-    # Gate 1: CPA error bound
-    assert summary["cpa_mae_proposed_km"] <= summary["cpa_mae_baseline_km"] + 1e-4
+    # Gate 1: CPA error bound and error reduction
+    assert summary["cpa_mae_proposed_km"] < summary["cpa_mae_baseline_km"]
     assert summary["cpa_mae_proposed_km"] < 0.1  # less than 100 meters MAE
+    assert summary["cpa_error_reduction_pct"] > 30.0  # > 30% error reduction
 
-    # Gate 2: ETA error bound
-    assert summary["eta_mae_proposed_s"] <= summary["eta_mae_baseline_s"] + 1e-4
+    # Gate 2: ETA error bound and error reduction
+    assert summary["eta_mae_proposed_s"] < summary["eta_mae_baseline_s"]
     assert summary["eta_mae_proposed_s"] < 1.0  # less than 1 second MAE
+    assert summary["eta_error_reduction_pct"] > 30.0  # > 30% error reduction
 
     # Gate 3: Zero false positives on receding tracks
     assert summary["false_positives_proposed"] == 0

@@ -417,7 +417,7 @@ def calculate_cda_and_eta(
     else:
         pass_type = "outside"
 
-    if intersects_radius and d_entry is not None and d_entry > 0.0:
+    if intersects_radius and d_entry is not None and (d_exit is None or d_exit > 0.0):
         eta_entry = max(0.0, d_entry / v_km_s)
         in_lookahead = eta_entry <= float(lookahead_seconds)
         return {
