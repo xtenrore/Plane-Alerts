@@ -183,6 +183,7 @@ def predict_trajectory_v43(
         if time_to_cda_val is not None and 0.0 <= time_to_cda_val <= float(horizon):
             closest_h = float(cda_km_val)
             cpa_t = float(time_to_cda_val)
+            tau_cpa_from_obs = float(time_to_cda_val)
             if eta_val is not None:
                 entry_t = float(eta_val)
             elif base.current_distance_km <= alert_radius_km:
@@ -253,7 +254,7 @@ def predict_trajectory_v43(
 
     if napier_applied and proximity3d.available and latest.altitude_m is not None:
         vr_mps = float(latest.vertical_rate_mps or 0.0)
-        alt_at_cpa_m = float(latest.altitude_m) + vr_mps * (cpa_t + age)
+        alt_at_cpa_m = float(latest.altitude_m) + vr_mps * tau_cpa_from_obs
         v_km_s = float(speed) * t.KNOTS_TO_KM_S
         v_mps = v_km_s * 1000.0
 
@@ -278,7 +279,7 @@ def predict_trajectory_v43(
             time_3d = t_3d
             horiz_3d = h_3d
             vert_3d = v_3d
-            lower_v = max(0.0, abs(delta_z) - (proximity3d.altitude_uncertainty_m or 0.0))
+            lower_v = max(0.0, v_3d - (proximity3d.altitude_uncertainty_m or 0.0))
             lower_3d = math.hypot(closest_h, lower_v / 1000.0)
         else:
             proj_3d = None

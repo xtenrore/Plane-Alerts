@@ -87,6 +87,13 @@ def test_approach_text_photo_now_direct_overhead():
     assert "CPA <b>0.4 km</b> (0.2 NM)" in text
     StrictTelegramHTMLValidator().validate(text)
 
+    # Uncertain prediction suppresses [Direct Overhead!] badge
+    pred_uncertain = _make_pred(cpa=0.4, current=1.2, t_cpa=10.0)
+    pred_uncertain.confidence = "Uncertain"
+    text_unc = _approach_text(ac, pred_uncertain, stage="photo_now")
+    assert "[Direct Overhead!]" not in text_unc
+    StrictTelegramHTMLValidator().validate(text_unc)
+
 
 def test_approach_text_passed_and_cancelled_stages():
     """PASSED and CANCELLED stages format cleanly."""
@@ -111,7 +118,14 @@ def test_basic_alert_text_formatted_duration_and_timestamp():
     assert "~2m 15s" in text
     assert "UTC)" in text
     assert "14.5 km away" in text
+    assert "E (90°)" in text
     StrictTelegramHTMLValidator().validate(text)
+
+    # Under 30s suppresses clock timestamp
+    text_short = _basic_alert_text(ac, distance_km=5.0, eta_seconds=20.0)
+    assert "~20s" in text_short
+    assert "UTC)" not in text_short
+    StrictTelegramHTMLValidator().validate(text_short)
 
 
 def test_approach_text_adversarial_escaping():

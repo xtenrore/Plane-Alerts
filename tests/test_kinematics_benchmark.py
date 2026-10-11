@@ -72,6 +72,14 @@ def test_benchmark_kinematics_gates():
     # Gate 12: Decision outcome is BLOCKED — MORE EVIDENCE REQUIRED
     assert results["decision_outcome"] == "BLOCKED — MORE EVIDENCE REQUIRED"
 
+    # Gate 13: Radius-entry timing error reduction and breakdown
+    assert summary["radius_entry_mae_proposed_s"] < summary["radius_entry_mae_baseline_s"]
+    assert summary["radius_entry_error_reduction_pct"] > 30.0
+    assert "error_breakdown" in results
+    assert "by_horizon" in results["error_breakdown"]
+    assert "by_behavior" in results["error_breakdown"]
+    assert "by_freshness" in results["error_breakdown"]
+
 
 @pytest.mark.asyncio
 async def test_benchmark_terminal_approaches():

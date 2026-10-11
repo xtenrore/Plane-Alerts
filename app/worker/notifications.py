@@ -158,21 +158,23 @@ def _approach_text(
 
     countdown = camera.best_window_start_s if camera and camera.best_window_start_s is not None else pred.time_to_cpa_s
     time_parts = [f"⏱ <b>{_clock(countdown)}</b>"]
-    if countdown is not None and countdown > 0:
+    is_confident = getattr(pred, "confidence", "") in {"High", "Medium"} and getattr(pred, "state", "") != "Prediction uncertain"
+    if countdown is not None and countdown >= 30.0 and is_confident:
         clock_ts = format_eta_timestamp(countdown)
         if clock_ts:
             time_parts.append(f"({clock_ts})")
 
     cpa_km = float(pred.projected_closest_km)
     cpa_nm = km_to_nautical_miles(cpa_km)
-    badge = " [Direct Overhead!]" if cpa_km < 1.0 else ""
+    badge = " [Direct Overhead!]" if (cpa_km < 1.0 and is_confident) else ""
     cpa_part = f"CPA <b>{cpa_km:.1f} km</b> ({cpa_nm:.1f} NM){badge}"
     lines.append(
         f"{' '.join(time_parts)} · {cpa_part} · {pred.current_distance_km:.1f} km now"
     )
-    if stage == "prepare" and getattr(pred, "radius_entry_s", None) is not None and 0 < float(pred.radius_entry_s) < (float(countdown) if countdown is not None else 9999.0):
-        entry_dur = format_duration(pred.radius_entry_s)
-        entry_clock = format_eta_timestamp(pred.radius_entry_s)
+    entry_val = float(pred.radius_entry_s) if getattr(pred, "radius_entry_s", None) is not None else None
+    if stage == "prepare" and entry_val is not None and 0 < entry_val < (float(countdown) if countdown is not None else 9999.0):
+        entry_dur = format_duration(entry_val)
+        entry_clock = format_eta_timestamp(entry_val) if (entry_val >= 30.0 and is_confident) else ""
         safe_dur = escape(entry_dur)
         safe_clock = escape(entry_clock) if entry_clock else ""
         entry_suffix = f" ({safe_clock})" if safe_clock else ""
@@ -216,7 +218,7 @@ def _basic_alert_text(
     details = [f"{distance_km:.1f} km away"]
     if eta_seconds is not None and eta_seconds > 0:
         dur_str = format_duration(eta_seconds)
-        clock_str = format_eta_timestamp(eta_seconds)
+        clock_str = format_eta_timestamp(eta_seconds) if eta_seconds >= 30.0 else ""
         safe_dur = escape(dur_str)
         safe_clock = escape(clock_str) if clock_str else ""
         time_text = f"~{safe_dur}"
@@ -231,6 +233,10 @@ def _basic_alert_text(
         details.append(f"{int(round(gs))} kt")
     elif getattr(aircraft, "velocity", None) is not None:
         details.append(f"{int(round(ms_to_knots(aircraft.velocity)))} kt")
+    hdg = getattr(aircraft, "heading", None)
+    if hdg is not None:
+        cardinal = heading_to_cardinal(hdg)
+        details.append(f"{cardinal} ({int(round(hdg))}°)")
     lines.append(" · ".join(details))
     return "\n".join(lines)
 

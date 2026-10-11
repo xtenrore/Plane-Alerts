@@ -125,7 +125,33 @@ def test_aircraft_alert_message_cda_direct_overhead_badge():
     )
     assert "Closest Pass (CDA):</b> 0.4 km" in msg_overhead
     assert "[Direct Overhead!]" in msg_overhead
+    assert "UTC)" in msg_overhead
     StrictTelegramHTMLValidator().validate(msg_overhead)
+
+    # Uncertain trajectory suppresses [Direct Overhead!] badge and UTC timestamp
+    msg_overhead_uncertain = aircraft_alert_message(
+        aircraft_type="A359",
+        callsign="AFR789",
+        distance_km=12.0,
+        cda_km=0.4,
+        eta_seconds=60.0,
+        trajectory_status="uncertain_maneuver",
+    )
+    assert "[Direct Overhead!]" not in msg_overhead_uncertain
+    assert "UTC)" not in msg_overhead_uncertain
+    StrictTelegramHTMLValidator().validate(msg_overhead_uncertain)
+
+    # ETA < 30s suppresses clock timestamp
+    msg_short_eta = aircraft_alert_message(
+        aircraft_type="A359",
+        callsign="AFR789",
+        distance_km=12.0,
+        cda_km=0.4,
+        eta_seconds=20.0,
+    )
+    assert "[Direct Overhead!]" in msg_short_eta
+    assert "UTC)" not in msg_short_eta
+    StrictTelegramHTMLValidator().validate(msg_short_eta)
 
     msg_distant = aircraft_alert_message(
         aircraft_type="A359",

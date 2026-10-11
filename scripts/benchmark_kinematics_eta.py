@@ -493,11 +493,13 @@ def find_ground_truth(
     user_lat: float,
     user_lon: float,
     max_t: float = 300.0,
-) -> tuple[float, float]:
-    """Find continuous ground-truth CPA distance and time along physical trajectory."""
+    radius_km: float | None = None,
+) -> tuple[float, float, float | None]:
+    """Find continuous ground-truth CPA distance, time, and perimeter entry time."""
     v_km_s = speed_kts * t_core.KNOTS_TO_KM_S
     best_d = 999.0
     best_t = 0.0
+    entry_t: float | None = None
     for step in range(int(max_t * 100)):
         t_sec = step * 0.01
         lat, lon = project_point(start_lat, start_lon, v_km_s * t_sec, heading_deg)
@@ -505,7 +507,9 @@ def find_ground_truth(
         if d < best_d:
             best_d = d
             best_t = t_sec
-    return round(best_d, 4), round(best_t, 3)
+        if radius_km is not None and entry_t is None and d <= radius_km:
+            entry_t = t_sec
+    return round(best_d, 4), round(best_t, 3), (round(entry_t, 3) if entry_t is not None else None)
 
 
 def run_benchmark() -> dict:
@@ -523,8 +527,8 @@ def run_benchmark() -> dict:
         num_steps=12,
         step_s=5.0,
     )
-    straight_gt_cpa, straight_gt_time = find_ground_truth(
-        start_lat, start_lon, 400.0, 0.0, user_lat, user_lon
+    straight_gt_cpa, straight_gt_time, straight_gt_entry = find_ground_truth(
+        start_lat, start_lon, 400.0, 0.0, user_lat, user_lon, radius_km=alert_radius_km
     )
 
     # 2. Angled linear encounter heading 035°
@@ -538,8 +542,8 @@ def run_benchmark() -> dict:
         num_steps=12,
         step_s=5.0,
     )
-    angled_gt_cpa, angled_gt_time = find_ground_truth(
-        start_ang_lat, start_ang_lon, 380.0, 35.0, user_lat, user_lon
+    angled_gt_cpa, angled_gt_time, angled_gt_entry = find_ground_truth(
+        start_ang_lat, start_ang_lon, 380.0, 35.0, user_lat, user_lon, radius_km=alert_radius_km
     )
 
     # 3. Direct overhead encounter (Analytical CPA = 0.0 km)
@@ -586,6 +590,23 @@ def run_benchmark() -> dict:
     cpa_err_proposed = []
     eta_err_baseline = []
     eta_err_proposed = []
+    entry_err_baseline = []
+    entry_err_proposed = []
+
+    straight_cpa_err_base = []
+    straight_cpa_err_prop = []
+    straight_eta_err_base = []
+    straight_eta_err_prop = []
+
+    angled_cpa_err_base = []
+    angled_cpa_err_prop = []
+    angled_eta_err_base = []
+    angled_eta_err_prop = []
+
+    short_cpa_err_prop = []
+    short_eta_err_prop = []
+    med_cpa_err_prop = []
+    med_eta_err_prop = []
 
     for step_idx in range(2, len(straight_samples)):
         history_window = straight_samples[: step_idx + 1]
@@ -606,12 +627,29 @@ def run_benchmark() -> dict:
         if base_pred.time_to_cpa_s is not None:
             baseline_etas.append(base_pred.time_to_cpa_s)
             eta_err_baseline.append(abs(base_pred.time_to_cpa_s - expected_remaining_eta))
+            straight_eta_err_base.append(abs(base_pred.time_to_cpa_s - expected_remaining_eta))
         if prop_pred.time_to_cpa_s is not None:
             proposed_etas.append(prop_pred.time_to_cpa_s)
             eta_err_proposed.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+            straight_eta_err_prop.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+            if expected_remaining_eta < 60.0:
+                short_cpa_err_prop.append(abs(prop_pred.projected_closest_km - straight_gt_cpa))
+                short_eta_err_prop.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+            else:
+                med_cpa_err_prop.append(abs(prop_pred.projected_closest_km - straight_gt_cpa))
+                med_eta_err_prop.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
 
         cpa_err_baseline.append(abs(base_pred.projected_closest_km - straight_gt_cpa))
         cpa_err_proposed.append(abs(prop_pred.projected_closest_km - straight_gt_cpa))
+        straight_cpa_err_base.append(abs(base_pred.projected_closest_km - straight_gt_cpa))
+        straight_cpa_err_prop.append(abs(prop_pred.projected_closest_km - straight_gt_cpa))
+
+        if straight_gt_entry is not None and elapsed <= straight_gt_entry:
+            expected_remaining_entry = max(0.0, straight_gt_entry - elapsed)
+            if base_pred.radius_entry_s is not None:
+                entry_err_baseline.append(abs(base_pred.radius_entry_s - expected_remaining_entry))
+            if prop_pred.radius_entry_s is not None:
+                entry_err_proposed.append(abs(prop_pred.radius_entry_s - expected_remaining_entry))
 
     # Evaluate angled track error
     for step_idx in range(2, len(angled_samples)):
@@ -629,11 +667,28 @@ def run_benchmark() -> dict:
 
         cpa_err_baseline.append(abs(base_pred.projected_closest_km - angled_gt_cpa))
         cpa_err_proposed.append(abs(prop_pred.projected_closest_km - angled_gt_cpa))
+        angled_cpa_err_base.append(abs(base_pred.projected_closest_km - angled_gt_cpa))
+        angled_cpa_err_prop.append(abs(prop_pred.projected_closest_km - angled_gt_cpa))
 
         if base_pred.time_to_cpa_s is not None:
             eta_err_baseline.append(abs(base_pred.time_to_cpa_s - expected_remaining_eta))
+            angled_eta_err_base.append(abs(base_pred.time_to_cpa_s - expected_remaining_eta))
         if prop_pred.time_to_cpa_s is not None:
             eta_err_proposed.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+            angled_eta_err_prop.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+            if expected_remaining_eta < 60.0:
+                short_cpa_err_prop.append(abs(prop_pred.projected_closest_km - angled_gt_cpa))
+                short_eta_err_prop.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+            else:
+                med_cpa_err_prop.append(abs(prop_pred.projected_closest_km - angled_gt_cpa))
+                med_eta_err_prop.append(abs(prop_pred.time_to_cpa_s - expected_remaining_eta))
+
+        if angled_gt_entry is not None and elapsed <= angled_gt_entry:
+            expected_remaining_entry = max(0.0, angled_gt_entry - elapsed)
+            if base_pred.radius_entry_s is not None:
+                entry_err_baseline.append(abs(base_pred.radius_entry_s - expected_remaining_entry))
+            if prop_pred.radius_entry_s is not None:
+                entry_err_proposed.append(abs(prop_pred.radius_entry_s - expected_remaining_entry))
 
     # Overhead pass evaluation
     oh_prop = candidate_production_predict(overhead_samples[:4], user_lat, user_lon, alert_radius_km)
@@ -700,6 +755,12 @@ def run_benchmark() -> dict:
     eta_med_base = statistics.median(eta_err_baseline) if eta_err_baseline else 0.0
     eta_med_prop = statistics.median(eta_err_proposed) if eta_err_proposed else 0.0
 
+    entry_mae_base = statistics.mean(entry_err_baseline) if entry_err_baseline else 0.0
+    entry_mae_prop = statistics.mean(entry_err_proposed) if entry_err_proposed else 0.0
+    entry_med_base = statistics.median(entry_err_baseline) if entry_err_baseline else 0.0
+    entry_med_prop = statistics.median(entry_err_proposed) if entry_err_proposed else 0.0
+    entry_reduc_pct = round((1.0 - entry_mae_prop / max(1e-6, entry_mae_base)) * 100.0, 2)
+
     cpa_std_base = statistics.stdev(baseline_cpas[:10]) if len(baseline_cpas) >= 10 else 0.0
     cpa_std_prop = statistics.stdev(proposed_cpas[:10]) if len(proposed_cpas) >= 10 else 0.0
 
@@ -741,6 +802,11 @@ def run_benchmark() -> dict:
             "eta_median_error_baseline_s": round(eta_med_base, 4),
             "eta_median_error_proposed_s": round(eta_med_prop, 4),
             "eta_error_reduction_pct": round((1.0 - eta_mae_prop / max(1e-6, eta_mae_base)) * 100.0, 2),
+            "radius_entry_mae_baseline_s": round(entry_mae_base, 4),
+            "radius_entry_mae_proposed_s": round(entry_mae_prop, 4),
+            "radius_entry_median_error_baseline_s": round(entry_med_base, 4),
+            "radius_entry_median_error_proposed_s": round(entry_med_prop, 4),
+            "radius_entry_error_reduction_pct": entry_reduc_pct,
             "cpa_forecast_stability_std_baseline_km": round(cpa_std_base, 6),
             "cpa_forecast_stability_std_proposed_km": round(cpa_std_prop, 6),
             "false_positives_baseline": fp_base,
@@ -751,6 +817,52 @@ def run_benchmark() -> dict:
             "cancellation_oscillation_proposed": flips_prop,
             "per_prediction_latency_ms": per_pred_ms,
             "cadence_impact_5s_budget_ok": per_pred_ms < 5.0,
+        },
+        "error_breakdown": {
+            "by_horizon": {
+                "short_horizon_under_60s": {
+                    "count": len(short_cpa_err_prop),
+                    "cpa_mae_proposed_km": round(statistics.mean(short_cpa_err_prop), 6) if short_cpa_err_prop else 0.0,
+                    "eta_mae_proposed_s": round(statistics.mean(short_eta_err_prop), 4) if short_eta_err_prop else 0.0,
+                },
+                "medium_horizon_60s_plus": {
+                    "count": len(med_cpa_err_prop),
+                    "cpa_mae_proposed_km": round(statistics.mean(med_cpa_err_prop), 6) if med_cpa_err_prop else 0.0,
+                    "eta_mae_proposed_s": round(statistics.mean(med_eta_err_prop), 4) if med_eta_err_prop else 0.0,
+                },
+            },
+            "by_behavior": {
+                "straight_approach": {
+                    "count": len(straight_cpa_err_prop),
+                    "cpa_mae_baseline_km": round(statistics.mean(straight_cpa_err_base), 6) if straight_cpa_err_base else 0.0,
+                    "cpa_mae_proposed_km": round(statistics.mean(straight_cpa_err_prop), 6) if straight_cpa_err_prop else 0.0,
+                    "eta_mae_baseline_s": round(statistics.mean(straight_eta_err_base), 4) if straight_eta_err_base else 0.0,
+                    "eta_mae_proposed_s": round(statistics.mean(straight_eta_err_prop), 4) if straight_eta_err_prop else 0.0,
+                },
+                "angled_approach": {
+                    "count": len(angled_cpa_err_prop),
+                    "cpa_mae_baseline_km": round(statistics.mean(angled_cpa_err_base), 6) if angled_cpa_err_base else 0.0,
+                    "cpa_mae_proposed_km": round(statistics.mean(angled_cpa_err_prop), 6) if angled_cpa_err_prop else 0.0,
+                    "eta_mae_baseline_s": round(statistics.mean(angled_eta_err_base), 4) if angled_eta_err_base else 0.0,
+                    "eta_mae_proposed_s": round(statistics.mean(angled_eta_err_prop), 4) if angled_eta_err_prop else 0.0,
+                },
+                "turning_maneuver": {
+                    "count": len(turning_away_samples),
+                    "turning_away_recognized": turn_prop.turning_away or not turn_prop.enters_alert_radius,
+                    "false_alert_avoided": not turn_prop.enters_alert_radius,
+                },
+            },
+            "by_freshness": {
+                "fresh_observations_under_5s": {
+                    "description": "Standard 3.0s cadence ADS-B samples evaluated across straight and angled encounters",
+                    "cpa_mae_proposed_km": round(cpa_mae_prop, 6),
+                    "eta_mae_proposed_s": round(eta_mae_prop, 4),
+                },
+                "stale_latency_15s": {
+                    "description": "Missing heading and 15s latency extrapolation test without coordinates drift",
+                    "extrapolation_stable": abs(napier_hdg_none["closest_pass_km"] - ac_dist_12km) < 0.1,
+                },
+            },
         },
         "historical_evidence_assessment": {
             "baseline_commit": "1a7a88a733",
@@ -840,6 +952,10 @@ def main() -> int:
     assert results["historical_evidence_assessment"]["evidence_blocker_identified"], "Evidence blocker not identified"
     # Gate 12: Decision outcome is BLOCKED — MORE EVIDENCE REQUIRED
     assert results["decision_outcome"] == "BLOCKED — MORE EVIDENCE REQUIRED", "Decision outcome incorrect"
+    # Gate 13: Radius-entry timing error reduction & error breakdown (Section 2)
+    assert summary["radius_entry_mae_proposed_s"] <= summary["radius_entry_mae_baseline_s"] + 1e-4, "Radius entry MAE regressed"
+    assert summary["radius_entry_error_reduction_pct"] > 30.0, "Radius entry error reduction insufficient"
+    assert "error_breakdown" in results, "Metric 9 error breakdown missing"
 
     print("All benchmark kinematics, safety, and evidence gates passed successfully!")
     return 0

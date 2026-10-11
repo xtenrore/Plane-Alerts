@@ -108,10 +108,12 @@ def simulate_trajectory(
     user_lon: float,
     lookahead_seconds: int = 180,
     time_step_s: int = 2,
+    turn_decay_s: float | None = 45.0,
 ) -> list[TrajectoryPoint]:
     """Simulate aircraft trajectory path over lookahead_seconds.
 
-    Applies turn_rate_deg_s to simulate banking curves or straight lines.
+    Applies turn_rate_deg_s with bounded decay (turn_decay_s) and second-order
+    midpoint heading integration to prevent unbounded circular extrapolations.
     Returns list of TrajectoryPoint entries sampled every time_step_s.
     """
     points: list[TrajectoryPoint] = []
@@ -129,12 +131,19 @@ def simulate_trajectory(
         # Step distance in km
         step_dist_km = speed_km_s * time_step_s
 
-        # Project position using current heading
-        curr_lat, curr_lon = project_point(curr_lat, curr_lon, step_dist_km, curr_heading)
-
-        # Update heading if turning
+        # Bounded turn decay and second-order midpoint heading integration
         if abs(turn_rate_deg_s) > 0.001:
-            curr_heading = (curr_heading + turn_rate_deg_s * time_step_s) % 360.0
+            turn_factor = (
+                max(0.0, 1.0 - (float(t - time_step_s) / float(turn_decay_s)))
+                if (turn_decay_s is not None and turn_decay_s > 0)
+                else 1.0
+            )
+            step_turn = turn_rate_deg_s * turn_factor
+            midpoint_heading = (curr_heading + step_turn * time_step_s * 0.5) % 360.0
+            curr_lat, curr_lon = project_point(curr_lat, curr_lon, step_dist_km, midpoint_heading)
+            curr_heading = (curr_heading + step_turn * time_step_s) % 360.0
+        else:
+            curr_lat, curr_lon = project_point(curr_lat, curr_lon, step_dist_km, curr_heading)
 
         # Calculate distance to user
         dist = haversine_distance_km(curr_lat, curr_lon, user_lat, user_lon)
@@ -158,6 +167,7 @@ def calculate_cda_and_eta(
     velocity_ms: float | None = None,
     radius_km: float | None = None,
     lookahead_seconds: int = 180,
+    turn_decay_s: float | None = 45.0,
 ) -> dict[str, Any]:
     """Analytical O(1) Napier spherical geodesy CDA and ETA engine.
 
@@ -171,7 +181,7 @@ def calculate_cda_and_eta(
       - closure_rate_ms: float (rate of range closure in m/s)
       - reason: str
     """
-    # Guard against NaN/infinite coordinates or speed
+    # Guard against NaN/infinite coordinates
     for coord in (aircraft_lat, aircraft_lon, user_lat, user_lon):
         if not math.isfinite(coord):
             return {
@@ -188,6 +198,36 @@ def calculate_cda_and_eta(
                 "reason": "Invalid non-finite coordinates.",
             }
 
+    # Resolve radius safely
+    raw_radius = alert_radius_km if alert_radius_km is not None else radius_km
+    if raw_radius is not None and math.isfinite(raw_radius) and raw_radius > 0:
+        r_km = max(0.1, float(raw_radius))
+    else:
+        r_km = 10.0
+
+    # Sanitize latency, turn rate, and lookahead
+    latency_s = float(latency_s) if (latency_s is not None and math.isfinite(latency_s) and latency_s >= 0) else 0.0
+    turn_rate_deg_s = float(turn_rate_deg_s) if (turn_rate_deg_s is not None and math.isfinite(turn_rate_deg_s)) else 0.0
+    lookahead = int(lookahead_seconds) if (lookahead_seconds is not None and math.isfinite(lookahead_seconds) and lookahead_seconds > 0) else 180
+
+    # Stale observation guard: > 30s latency cannot produce reliable prediction
+    if latency_s > 30.0:
+        initial_dist = haversine_distance_km(aircraft_lat, aircraft_lon, user_lat, user_lon)
+        b_user = initial_bearing(user_lat, user_lon, aircraft_lat, aircraft_lon) if initial_dist >= 1e-4 else 0.0
+        return {
+            "should_notify": False,
+            "eta_seconds": None,
+            "time_to_cda_seconds": None,
+            "closest_pass_km": round(initial_dist, 2),
+            "raw_closest_pass_km": float(initial_dist),
+            "raw_time_to_cda_seconds": None,
+            "raw_eta_seconds": None,
+            "pass_type": "outside",
+            "bearing_from_user": round(b_user, 1),
+            "closure_rate_ms": 0.0,
+            "reason": f"Observation is stale ({latency_s:.1f}s latency > 30s threshold); prediction uncertain.",
+        }
+
     # Resolve speed in km/s
     if speed_km_s is not None and math.isfinite(speed_km_s):
         v_km_s = float(speed_km_s)
@@ -198,10 +238,6 @@ def calculate_cda_and_eta(
     else:
         v_km_s = 0.0
     v_km_s = max(0.0, v_km_s)
-
-    # Resolve radius
-    r_km = alert_radius_km if alert_radius_km is not None else (radius_km if radius_km is not None else 10.0)
-    r_km = max(0.1, float(r_km))
 
     # Advance initial position by observation latency if specified
     lat_curr = aircraft_lat
@@ -287,8 +323,9 @@ def calculate_cda_and_eta(
             turn_rate_deg_s=turn_rate_deg_s,
             user_lat=user_lat,
             user_lon=user_lon,
-            lookahead_seconds=lookahead_seconds,
+            lookahead_seconds=lookahead,
             time_step_s=2,
+            turn_decay_s=turn_decay_s,
         )
         min_idx = min(range(len(points)), key=lambda i: points[i].distance_to_user_km)
         best_pt = points[min_idx]
@@ -503,6 +540,7 @@ def evaluate_early_warning(
     radius_km: float,
     lookahead_seconds: int = 180,
     buffer_km: float = 15.0,
+    turn_decay_s: float | None = 45.0,
 ) -> dict:
     """Evaluate aircraft trajectory against user target location.
 
@@ -537,6 +575,7 @@ def evaluate_early_warning(
         user_lon=user_lon,
         alert_radius_km=radius_km,
         lookahead_seconds=lookahead_seconds,
+        turn_decay_s=turn_decay_s,
     )
 
     # For aircraft already inside radius, maintain backward-compatible eta_seconds = 0.0

@@ -374,9 +374,10 @@ def test_turning_aircraft_inside_radius_turning_away():
     assert res_short["should_notify"] is True  # inside radius
     assert res_short["closest_pass_km"] == pytest.approx(6.0, abs=0.1)
 
-    # 2. Long lookahead (180s): aircraft completes a full turn circle of radius R ~ 2.95 km.
-    # The turn loops back south, reaching a closest pass of ~3.83 km.
-    res_loop = calculate_cda_and_eta(
+    # 2. Long lookahead (180s) with turn decay (default turn_decay_s=45.0):
+    # Turn rate decays exponentially (heading rolls out eastward at ~90 deg), so aircraft
+    # never loops indefinitely back south towards user. Distance remains monotonically increasing.
+    res_decay = calculate_cda_and_eta(
         alat,
         alon,
         speed_kts=200.0,
@@ -387,6 +388,65 @@ def test_turning_aircraft_inside_radius_turning_away():
         radius_km=10.0,
         lookahead_seconds=180,
     )
+    assert res_decay["should_notify"] is True
+    assert res_decay["closest_pass_km"] == pytest.approx(6.0, abs=0.1)
+
+    # 3. Unconstrained infinite circular extrapolation (turn_decay_s=None):
+    # Aircraft completes full turn circle of radius R ~ 2.95 km, looping back south to ~3.83 km.
+    res_loop = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=200.0,
+        heading_deg=0.0,
+        turn_rate_deg_s=2.0,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=10.0,
+        lookahead_seconds=180,
+        turn_decay_s=None,
+    )
     assert res_loop["should_notify"] is True
     assert res_loop["closest_pass_km"] == pytest.approx(3.83, abs=0.1)
+
+
+def test_stale_observation_latency_rejection():
+    """Observations older than 30s latency threshold must be flagged stale and unnotified."""
+    ulat, ulon = 41.00, 29.00
+    alat, alon = project_point(ulat, ulon, 5.0, 180.0)
+
+    res = calculate_cda_and_eta(
+        alat,
+        alon,
+        speed_kts=300.0,
+        heading_deg=0.0,
+        user_lat=ulat,
+        user_lon=ulon,
+        radius_km=10.0,
+        latency_s=35.0,  # Stale observation > 30.0s
+    )
+    assert res["should_notify"] is False
+    assert "uncertain" in res["reason"].lower()
+    assert res["pass_type"] == "outside"
+    assert res["eta_seconds"] is None
+
+
+def test_invalid_or_non_finite_radius_safeguard():
+    """Non-finite or negative alert radii must safely fall back to 10.0 km default."""
+    ulat, ulon = 41.00, 29.00
+    alat, alon = project_point(ulat, ulon, 5.0, 180.0)
+
+    # Negative radius: should fall back to 10.0 km default, detecting aircraft at 5 km inside radius
+    res_neg = calculate_cda_and_eta(
+        alat, alon, speed_kts=300.0, heading_deg=0.0, user_lat=ulat, user_lon=ulon, radius_km=-5.0
+    )
+    assert res_neg["should_notify"] is True
+    assert res_neg["closest_pass_km"] < 10.0
+
+    # NaN / Inf radius: safely defaults to 10.0 km
+    res_nan = calculate_cda_and_eta(
+        alat, alon, speed_kts=300.0, heading_deg=0.0, user_lat=ulat, user_lon=ulon, radius_km=float("nan")
+    )
+    assert res_nan["should_notify"] is True
+    assert res_nan["closest_pass_km"] < 10.0
+
 

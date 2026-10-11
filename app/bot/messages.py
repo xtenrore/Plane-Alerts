@@ -235,11 +235,12 @@ def aircraft_alert_message(
     safe_origin = html.escape(origin_country.strip(), quote=True) if origin_country else ""
     safe_icao = html.escape(icao24.strip().lower(), quote=True) if icao24 else ""
 
+    is_uncertain = bool(trajectory_status and any(w in str(trajectory_status).lower() for w in ["uncertain", "unstable", "stale"]))
     lines: list[str] = []
 
     if eta_seconds is not None and eta_seconds > 0:
         duration_raw = format_duration(eta_seconds)
-        time_raw = format_eta_timestamp(eta_seconds)
+        time_raw = format_eta_timestamp(eta_seconds) if (eta_seconds >= 30.0 and not is_uncertain) else ""
         safe_duration = html.escape(duration_raw, quote=True)
         safe_time = html.escape(time_raw, quote=True) if time_raw else ""
         time_suffix = f" ({safe_time})" if safe_time else ""
@@ -254,7 +255,7 @@ def aircraft_alert_message(
 
     if cda_km is not None:
         cda_nm = km_to_nautical_miles(cda_km)
-        badge = " [Direct Overhead!]" if cda_km < 1.0 else ""
+        badge = " [Direct Overhead!]" if (cda_km < 1.0 and not is_uncertain) else ""
         lines.append(f"🎯 <b>Closest Pass (CDA):</b> {cda_km:.1f} km ({cda_nm:.1f} NM){badge}")
 
     if bearing_from_user is not None:
