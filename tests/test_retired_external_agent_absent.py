@@ -8,6 +8,11 @@ FORBIDDEN = (
     "anti" + "gravity",
     "chatgpt_" + "handoff_json",
 )
+# The owner-added canonical private-AI-operations roadmap intentionally documents
+# the retired system by name in order to say it is permanently retired.  Keep the
+# runtime/source residue guard strict everywhere else rather than deleting or
+# rewriting that standing instruction document.
+RETIREMENT_DOCUMENTS = {"readthis.md"}
 
 
 def _repository_text_files():
@@ -32,6 +37,11 @@ def test_retired_external_agent_has_no_repository_residue():
     for path, text in _repository_text_files():
         rel = path.relative_to(ROOT)
         rel_text = str(rel).casefold()
+        if rel_text in RETIREMENT_DOCUMENTS:
+            # The exception is valid only while this file explicitly says the old
+            # integration is permanently retired; it is not a blanket docs bypass.
+            assert "permanently retired" in text
+            continue
         for needle in FORBIDDEN:
             if needle in rel_text or needle in text:
                 matches.append(f"{rel}: {needle}")
