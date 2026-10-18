@@ -2,6 +2,12 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.8 — Prediction Lab Spool Diagnosis
+
+- Added an authenticated, read-only schema inventory for unsynced raw evidence, reporting bounded aggregate file counts and bytes without record contents or paths.
+- Preserved the evidence writer, sync validator and acknowledgement behavior while diagnosing the blocked backlog.
+- No dependency, configuration, storage schema, installer or prediction behavior change; community checks remain in the weekly workflow.
+
 ## v5.8.7 — Docker Monitoring Readiness
 
 - Pointed the standalone Docker image health check at `/ready`, matching Compose and the existing Railway service configuration.

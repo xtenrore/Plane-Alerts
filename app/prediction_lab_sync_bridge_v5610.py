@@ -318,3 +318,48 @@ def status(*, root: Path | None = None) -> dict[str, Any]:
         "used_bytes": used_bytes,
         "free_bytes": free_bytes,
     }
+
+
+def raw_schema_inventory(*, root: Path | None = None) -> dict[str, Any]:
+    """Count spool schema classes without returning paths or evidence contents.
+
+    Inspect only the first incompatible row in a bundle. The bridge already
+    rejects the entire bundle at that point, so this diagnostic has the same
+    decision boundary while keeping the admin status response bounded.
+    """
+    files: Counter[str] = Counter()
+    sizes: Counter[str] = Counter()
+    scanned = 0
+    for path in _iter_candidates(_raw_root(root)):
+        if scanned >= MAX_SCAN_FILES:
+            break
+        scanned += 1
+        try:
+            size = path.stat().st_size
+            if path.suffix == ".json":
+                with path.open(encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                category = _schema_class(payload)
+            else:
+                category = "empty_bundle"
+                with path.open(encoding="utf-8") as handle:
+                    for line in handle:
+                        if line.strip():
+                            category = _schema_class(json.loads(line))
+                            if category != "expected":
+                                break
+        except (OSError, UnicodeError, ValueError):
+            category = "unreadable_or_invalid_json"
+            size = 0
+        files[category] += 1
+        sizes[category] += size
+    return {"scanned_files": scanned, "files_by_class": dict(sorted(files.items())),
+            "bytes_by_class": dict(sorted(sizes.items())), "scan_limit": MAX_SCAN_FILES}
+
+
+def _schema_class(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return "non_object"
+    if "schema" not in payload:
+        return "missing_schema"
+    return "expected" if payload["schema"] == SCHEMA_VERSION else "other_schema"

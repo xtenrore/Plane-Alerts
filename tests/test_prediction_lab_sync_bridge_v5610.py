@@ -14,10 +14,24 @@ from app.prediction_lab_sync_bridge_v5610 import (
     acknowledge,
     build_batch_zip,
     clear_sync_guard,
+    raw_schema_inventory,
     status,
 )
 
 SCHEMA = "plane-alerts-prediction-evidence-v1"
+
+
+def test_schema_inventory_counts_bundle_rejections_without_evidence_details(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "2026-09-25"
+    raw.mkdir(parents=True)
+    (raw / "a.json").write_bytes(_event("one"))
+    (raw / "b.json").write_text('{"event_id":"old"}\n', encoding="utf-8")
+    (raw / "c.ndjson").write_bytes(_event("two") + b'{"schema":"legacy","event_id":"three"}\n')
+    inventory = raw_schema_inventory(root=tmp_path)
+    assert inventory["scanned_files"] == 3
+    assert inventory["files_by_class"] == {"expected": 1, "missing_schema": 1, "other_schema": 1}
+    assert inventory["bytes_by_class"]["other_schema"] == (raw / "c.ndjson").stat().st_size
+    assert "event_id" not in str(inventory)
 
 
 def _event(event_id: str) -> bytes:

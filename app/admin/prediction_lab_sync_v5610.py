@@ -19,6 +19,7 @@ from app.prediction_lab_sync_bridge_v5610 import (
     acknowledge,
     build_batch_zip,
     clear_sync_guard,
+    raw_schema_inventory,
     status,
 )
 
@@ -46,6 +47,11 @@ def _cleanup_archive(path: Path) -> None:
 async def prediction_lab_sync_status(_: None = Depends(_check_auth)) -> dict[str, Any]:
     result = await asyncio.to_thread(status)
     return result
+
+
+@router.get("/api/prediction-lab/sync-inventory")
+async def prediction_lab_sync_inventory(_: None = Depends(_check_auth)) -> dict[str, Any]:
+    return await asyncio.to_thread(raw_schema_inventory)
 
 
 @router.get("/api/prediction-lab/sync-batch", response_class=FileResponse)
