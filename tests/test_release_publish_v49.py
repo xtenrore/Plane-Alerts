@@ -137,7 +137,7 @@ def test_railway_deploy_gate_skips_community_only_changes_and_targets_main_servi
     assert "container: ghcr.io/railwayapp/cli:latest" in deploy_block
     assert f"DEPLOY_SHA: {tested_sha}" in deploy_block
     assert f"ref: {tested_sha}" in deploy_block
-    assert '--message "Plane Alerts main $DEPLOY_SHA"' in deploy_block
+    assert '--message "Plane Alerts main ${DEPLOY_SHA}"' in deploy_block
     assert "MAIN_SERVICE_ID" in deploy_block
 
 
