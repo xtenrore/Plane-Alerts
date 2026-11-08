@@ -98,17 +98,22 @@ jobs:
           TEST_RUNS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$TEST_WORKFLOW_ID/runs?per_page=100")"
           TEST_RUN="$(jq -c --arg sha "$TESTED_SHA" '
             [.workflow_runs[]
-              | select(.status == "completed" and .conclusion == "success")
               | select(.event == "push" and .head_branch == "main" and .head_sha == $sha)
             ]
             | sort_by(.updated_at)
             | last // empty
           ' <<< "$TEST_RUNS")"
           [[ -n "$TEST_RUN" ]] || {
-            echo "No successful full application CI run exists for exact main SHA $TESTED_SHA." >&2
+            echo "No full application CI run exists for exact main SHA $TESTED_SHA." >&2
             exit 1
           }
           TEST_RUN_ID="$(jq -r '.id' <<< "$TEST_RUN")"
+          TEST_RUN_STATUS="$(jq -r '.status' <<< "$TEST_RUN")"
+          TEST_RUN_CONCLUSION="$(jq -r '.conclusion' <<< "$TEST_RUN")"
+          [[ "$TEST_RUN_STATUS" == "completed" && "$TEST_RUN_CONCLUSION" == "success" ]] || {
+            echo "Latest exact-SHA application CI run is not successful: status=$TEST_RUN_STATUS conclusion=$TEST_RUN_CONCLUSION" >&2
+            exit 1
+          }
           TEST_JOBS="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TEST_RUN_ID/jobs?per_page=100")"
           PYTEST_JOB="$(jq -c '[.jobs[] | select(.name == "pytest")] | first // empty' <<< "$TEST_JOBS")"
           [[ -n "$PYTEST_JOB" ]] || { echo "Missing pytest job in exact-SHA application CI." >&2; exit 1; }
