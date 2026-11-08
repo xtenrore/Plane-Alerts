@@ -22,24 +22,58 @@ jobs:
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     outputs:
-      deploy: ${{ steps.head.outputs.deploy }}
+      deploy: ${{ steps.runtime.outputs.deploy }}
     env:
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Confirm tested commit is still main head
-        id: head
+      - name: Checkout tested commit for path classification
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+
+      - name: Confirm current main and classify Railway runtime changes
+        id: runtime
         shell: bash
         run: |
           set -euo pipefail
           CURRENT_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')"
-          if [[ "${CURRENT_MAIN_SHA}" != "${DEPLOY_SHA}" ]]; then
-            echo "A newer main commit exists; refusing to deploy stale tested SHA ${DEPLOY_SHA}."
+          if [[ "$CURRENT_MAIN_SHA" != "$DEPLOY_SHA" ]]; then
+            echo "A newer main commit exists; refusing to deploy stale tested SHA $DEPLOY_SHA."
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          PARENT_SHA="$(git rev-parse "${DEPLOY_SHA}^1")"
+          CHANGED_FILES="$(git diff --name-only "$PARENT_SHA" "$DEPLOY_SHA")"
+          RUNTIME_CHANGED=false
+
+          while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            case "$file" in
+              app/*|worker.py|Dockerfile|requirements.txt|pyproject.toml|vercel_runtime/*|scripts/planealerts|scripts/railway-entrypoint.sh|scripts/build_airport_database.py|data/aviation/*)
+                RUNTIME_CHANGED=true
+                ;;
+              requirements.lock)
+                # Ignore header/comment-only maintenance. A real pinned package
+                # addition, removal or version change still requires Railway.
+                if git diff -U0 "$PARENT_SHA" "$DEPLOY_SHA" -- requirements.lock | grep -Eq '^[+-][^+-#[:space:]]'; then
+                  RUNTIME_CHANGED=true
+                fi
+                ;;
+            esac
+          done <<< "$CHANGED_FILES"
+
+          if [[ "$RUNTIME_CHANGED" != "true" ]]; then
+            echo "No Railway runtime-impacting files changed; this is a community/docs/installer-only commit."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Railway runtime-impacting changes detected."
           echo "deploy=true" >> "$GITHUB_OUTPUT"
 
   deploy:
@@ -106,4 +140,4 @@ jobs:
         shell: sh
         run: |
           set -eu
-          railway up --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Plane Alerts main ${DEPLOY_SHA}"
+          railway up --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Plane Alerts main $DEPLOY_SHA"
