@@ -35,7 +35,10 @@ def test_community_release_publish_requires_explicit_weekly_tested_sha():
 def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix():
     workflow = _workflow_text()
     tested_sha = "${{ steps.candidate.outputs.sha }}"
-    assert f"ref: {tested_sha}" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert 'git checkout --detach "$TESTED_SHA"' in workflow
+    assert "Publish trigger commit must be a direct child of the tested SHA" in workflow
+    assert "Publish trigger branch changed the tested source tree" in workflow
     assert f"TESTED_SHA: {tested_sha}" in workflow
     assert '[[ "$MAIN_SHA" == "$TESTED_SHA" ]]' in workflow
     assert "No successful exact-SHA community matrix run exists" in workflow
