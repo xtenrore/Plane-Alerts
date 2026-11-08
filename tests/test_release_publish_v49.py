@@ -52,7 +52,9 @@ def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix()
     assert "Publish trigger branch changed the tested source tree" in workflow
     assert f"TESTED_SHA: {tested_sha}" in workflow
     assert '[[ "$MAIN_SHA" == "$TESTED_SHA" ]]' in workflow
-    assert "No successful exact-SHA community matrix run exists" in workflow
+    assert "No exact-SHA community matrix run exists" in workflow
+    assert "sort_by(.updated_at)" in workflow
+    assert "Latest exact-SHA community matrix is not successful" in workflow
     assert "automation/community-matrix-" in workflow
     assert "community-validation-summary" in workflow
     assert "Verify exact release candidate checkout" in workflow
