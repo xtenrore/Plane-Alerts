@@ -140,4 +140,4 @@ jobs:
         shell: sh
         run: |
           set -eu
-          railway up --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Plane Alerts main $DEPLOY_SHA"
+          railway up --project "$PROJECT_ID" --service "$MAIN_SERVICE_ID" --environment "$ENVIRONMENT_ID" --ci --message "Plane Alerts main ${DEPLOY_SHA}"
