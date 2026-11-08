@@ -32,35 +32,38 @@ def test_community_release_publish_requires_explicit_weekly_tested_sha():
     assert "contents: write" in workflow
 
 
-def test_community_release_publish_uses_exact_tested_sha_and_main_ancestry():
+def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix():
     workflow = _workflow_text()
-    tested_sha = "${{ inputs.tested_sha }}"
+    tested_sha = "${{ steps.candidate.outputs.sha }}"
     assert f"ref: {tested_sha}" in workflow
     assert f"TESTED_SHA: {tested_sha}" in workflow
-    assert 'git merge-base --is-ancestor "${TESTED_SHA}" origin/main' in workflow
-    assert "Refusing community release: tested SHA is not part of main history" in workflow
-
-
-def test_release_publish_is_version_and_notes_driven():
+    assert '[[ "$MAIN_SHA" == "$TESTED_SHA" ]]' in workflow
+    assert "No successful exact-SHA community matrix run exists" in workflow
+    assert "automation/community-matrix-" in workflow
+    assert "community-validation-summary" in workflow
+    assert "Verify exact release candidate checkout" in workflow
+    assert "gh run download" in workflowdef test_release_publish_is_version_and_notes_driven():
     workflow = _workflow_text()
     assert "from app.version import VERSION" in workflow
-    assert 'TAG="v${VERSION}"' in workflow
-    assert 'NOTES="docs/releases/${TAG}.md"' in workflow
-    assert "Canonical VERSION is not a release semantic version" in workflow
-    assert 'if [[ ! -s "${NOTES}" ]]' in workflow
-
-
-def test_release_publish_never_moves_an_existing_tag():
+    assert 'TAG="v$VERSION"' in workflow
+    assert 'NOTES="docs/releases/$TAG.md"' in workflow
+    assert "Canonical VERSION is not semantic version" in workflow
+    assert '[[ -s "$NOTES" ]]' in workflow
+    assert "requirements.lock" in workflow
+    assert ".env.example" in workflow
+    assert "docs/self-hosting.md" in workflow
+    assert "weekly Community Release workflow" in workflowdef test_release_publish_never_moves_an_existing_tag():
     workflow = _workflow_text()
-    assert 'git rev-parse -q --verify "refs/tags/${TAG}^{commit}"' in workflow
-    assert 'if [[ "${TAG_SHA}" != "${TESTED_SHA}" ]]' in workflow
-    assert "Refusing to move existing ${TAG}" in workflow
+    assert 'git rev-parse --verify "refs/tags/$TAG^{commit}"' in workflow
+    assert '[[ "$TAG_SHA" == "$TESTED_SHA" ]]' in workflow
+    assert "Refusing to move existing $TAG" in workflow
     assert "--verify-tag" in workflow
-    assert '--target "${TESTED_SHA}"' in workflow
-    assert 'gh release view "${TAG}"' in workflow
-
-
-def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
+    assert '--target "$TESTED_SHA"' in workflow
+    assert 'gh release view "$TAG"' in workflow
+    assert "sha256sum -c SHA256SUMS.txt" in workflow
+    assert "cmp " in workflow
+    assert "latest stable channel" in workflow
+    assert "Potential embedded credentials in release assets" in workflowdef test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     workflow = _test_workflow_text()
     assert "  self-hosting:" not in workflow
     assert "docker/setup-qemu-action" not in workflow
@@ -69,20 +72,23 @@ def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     assert "Benchmark canonical non-blocking route guard" in workflow
 
 
-def test_community_matrix_is_manual_and_owned_by_chatgpt_weekly_task():
+def test_community_matrix_is_manual_and_automation-branch_only():
     workflow = _community_workflow_text()
     trigger_block = workflow.split("\npermissions:", 1)[0]
     assert "workflow_dispatch:" in trigger_block
+    assert "tested_sha:" in trigger_block
+    assert "push:" in trigger_block
+    assert '"automation/community-matrix-*"' in trigger_block
     assert "schedule:" not in trigger_block
-    assert "push:" not in trigger_block
     assert "pull_request:" not in trigger_block
-    assert "Weekly Community Release scheduled task" in trigger_block
+    assert "ordinary Railway pushes never trigger it" in trigger_block
+    assert "resolve:" in workflow
     assert "windows-arm64:" in workflow
     assert "linux-arm64:" in workflow
     assert "raspberry-pi-arm64-emulation:" in workflow
-
-
-def test_railway_deploy_runs_only_after_trusted_green_main_push():
+    assert "mongodb-upgrade:" in workflow
+    assert "community-validation-summary:" in workflow
+    assert workflow.count("Verify exact release candidate checkout") == 7def test_railway_deploy_runs_only_after_trusted_green_main_push():
     workflow = _deploy_workflow_text()
     assert "workflow_run:" in workflow
     assert "github.event.workflow_run.conclusion == 'success'" in workflow
