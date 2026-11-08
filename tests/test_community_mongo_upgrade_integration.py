@@ -9,16 +9,19 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 
 @pytest.mark.asyncio
-async def test_mongo_upgrade_exports_legacy_prediction_lab_and_preserves_user_data(tmp_path: Path) -> None:
-    # This is a real MongoDB service-container test, not a Motor mock. Environment
-    # is set before importing app.database so Settings and backend selection use
-    # the isolated community CI database.
-    uri = os.environ["MONGO_URI"]
-    database_name = os.environ["DATABASE_NAME"]
+async def test_mongo_upgrade_exports_legacy_prediction_lab_and_preserves_user_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This is a real MongoDB service-container test, not a Motor mock.
+    uri = os.getenv("MONGO_URI", "").strip()
+    database_name = os.getenv("DATABASE_NAME", "").strip()
+    if not uri or not database_name:
+        pytest.skip("MongoDB integration service is not configured for this test run")
+
     evidence_root = tmp_path / "prediction_lab"
-    os.environ["DATABASE_BACKEND"] = "mongodb"
-    os.environ["PLANE_STORAGE_MAINTENANCE_BACKGROUND"] = "false"
-    os.environ["PREDICTION_LAB_ROOT"] = str(evidence_root)
+    monkeypatch.setenv("DATABASE_BACKEND", "mongodb")
+    monkeypatch.setenv("PLANE_STORAGE_MAINTENANCE_BACKGROUND", "false")
+    monkeypatch.setenv("PREDICTION_LAB_ROOT", str(evidence_root))
 
     seed_client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
     seed_db = seed_client[database_name]
