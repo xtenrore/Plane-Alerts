@@ -38,7 +38,9 @@ def test_community_release_publish_requires_exact_sha_application_ci():
     assert 'head_branch == "main" and .head_sha == $sha' in workflow
     assert 'select(.name == "pytest")' in workflow
     assert 'select(.name == "Run full test suite")' in workflow
-    assert "No successful full application CI run exists for exact main SHA" in workflow
+    assert "No full application CI run exists for exact main SHA" in workflow
+    assert "sort_by(.updated_at)" in workflow
+    assert "Latest exact-SHA application CI run is not successful" in workflow
 
 
 def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix():
