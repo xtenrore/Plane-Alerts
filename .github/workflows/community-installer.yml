@@ -3,7 +3,7 @@ run-name: Community matrix for Plane Alerts ${{ inputs.tested_sha || github.ref_
 
 on:
   # Only the dedicated automation branch or an explicit manual dispatch may
-  # run the long community matrix. Ordinary Railway pushes never trigger it.
+  # run the long community matrix. ordinary Railway pushes never trigger it.
   push:
     branches:
       - "automation/community-matrix-*"
