@@ -202,6 +202,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     installer = _installer()
     root, old_commit, _new_commit = _make_local_release_repo(tmp_path)
     data_root = root / ".community"
+    data_root.mkdir(parents=True, exist_ok=True)
     database_path = root / "data" / "planealerts.db"
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database_path) as db:
