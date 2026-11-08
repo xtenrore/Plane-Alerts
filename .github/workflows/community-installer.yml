@@ -1,6 +1,10 @@
 name: community-installer
+run-name: Community matrix for Plane Alerts 13f6a3753104245cece489e00af50ddbe3c65925
 
 on:
+  push:
+    branches:
+      - automation/community-matrix-2026-11-08
   # The long community/self-host matrix is owned by the dedicated ChatGPT
   # Weekly Community Release scheduled task. It is intentionally manual here
   # so ordinary Railway releases do not run ARM64/Raspberry Pi/installer gates.
@@ -15,6 +19,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 13f6a3753104245cece489e00af50ddbe3c65925
+      - name: Verify exact release candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "13f6a3753104245cece489e00af50ddbe3c65925"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -46,6 +59,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 13f6a3753104245cece489e00af50ddbe3c65925
+      - name: Verify exact release candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "13f6a3753104245cece489e00af50ddbe3c65925"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -70,6 +92,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 13f6a3753104245cece489e00af50ddbe3c65925
+      - name: Verify exact release candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "13f6a3753104245cece489e00af50ddbe3c65925"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -99,6 +130,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 13f6a3753104245cece489e00af50ddbe3c65925
+      - name: Verify exact release candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "13f6a3753104245cece489e00af50ddbe3c65925"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -128,6 +168,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 13f6a3753104245cece489e00af50ddbe3c65925
+      - name: Verify exact release candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "13f6a3753104245cece489e00af50ddbe3c65925"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Exercise Raspberry Pi 5 64-bit platform guard under ARM64 QEMU
