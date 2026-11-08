@@ -140,7 +140,7 @@ def _make_local_release_repo(tmp_path: Path) -> tuple[Path, str, str]:
     subprocess.run(["git", "init", str(work)], check=True, text=True, capture_output=True)
     git(work, "config", "user.name", "Plane Alerts Community CI")
     git(work, "config", "user.email", "community-ci@example.invalid")
-    (work / "tracked.txt").write_text("old release\\n", encoding="utf-8")
+    (work / "tracked.txt").write_text("old release\n", encoding="utf-8")
     git(work, "add", "tracked.txt")
     git(work, "commit", "-m", "community v5.5.3 baseline")
     git(work, "branch", "-M", "main")
@@ -149,7 +149,7 @@ def _make_local_release_repo(tmp_path: Path) -> tuple[Path, str, str]:
     git(work, "remote", "add", "origin", str(remote))
     git(work, "push", "origin", "main", "--tags")
 
-    (work / "tracked.txt").write_text("new release\\n", encoding="utf-8")
+    (work / "tracked.txt").write_text("new release\n", encoding="utf-8")
     git(work, "add", "tracked.txt")
     git(work, "commit", "-m", "community v5.8.7 candidate")
     new_commit = git(work, "rev-parse", "HEAD")
@@ -172,7 +172,7 @@ def test_updater_success_records_exact_stable_tag_and_commit(tmp_path: Path, mon
     checkpoint_path = data_root / "setup-state.json"
     metadata_path.write_text(json.dumps({"format": 1, "community": True, "repository": installer.REPO, "installed_tag": "v5.5.3", "installed_commit": old_commit, "update_policy": "manual"}), encoding="utf-8")
     checkpoint_path.write_text(json.dumps({"step": "ready", "secrets": "not-stored"}), encoding="utf-8")
-    (root / ".env").write_text("DATABASE_BACKEND=mongodb\\nMONGO_URI=mongodb://127.0.0.1:27017\\n", encoding="utf-8")
+    (root / ".env").write_text("DATABASE_BACKEND=mongodb\nMONGO_URI=mongodb://127.0.0.1:27017\n", encoding="utf-8")
 
     monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.7", "draft": False, "prerelease": False})
     monkeypatch.setattr(installer, "install_dependencies", lambda _root: None)
@@ -207,7 +207,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
         db.execute("CREATE TABLE state (value TEXT NOT NULL)")
         db.execute("INSERT INTO state(value) VALUES ('before-update')")
 
-    original_env = f"DATABASE_BACKEND=sqlite\\nSQLITE_PATH={database_path}\\nTELEGRAM_BOT_TOKEN=old-token\\n"
+    original_env = f"DATABASE_BACKEND=sqlite\nSQLITE_PATH={database_path}\nTELEGRAM_BOT_TOKEN=old-token\n"
     (root / ".env").write_text(original_env, encoding="utf-8")
     metadata_path = data_root / "installation.json"
     checkpoint_path = data_root / "setup-state.json"
@@ -227,7 +227,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
         nonlocal install_calls
         install_calls += 1
         if install_calls == 1:
-            (target_root / ".env").write_text("DATABASE_BACKEND=sqlite\\nSQLITE_PATH=changed.db\\nTELEGRAM_BOT_TOKEN=new-token\\n", encoding="utf-8")
+            (target_root / ".env").write_text("DATABASE_BACKEND=sqlite\nSQLITE_PATH=changed.db\nTELEGRAM_BOT_TOKEN=new-token\n", encoding="utf-8")
             with sqlite3.connect(database_path) as db:
                 db.execute("UPDATE state SET value='during-failed-update'")
     monkeypatch.setattr(installer, "install_dependencies", mutate_only_during_target_install)
@@ -255,7 +255,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
 def test_updater_refuses_tracked_local_changes_before_fetching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     installer = _installer()
     root, _old_commit, _new_commit = _make_local_release_repo(tmp_path)
-    (root / "tracked.txt").write_text("user edit\\n", encoding="utf-8")
+    (root / "tracked.txt").write_text("user edit\n", encoding="utf-8")
     monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.7", "draft": False, "prerelease": False})
     with pytest.raises(RuntimeError, match="Local changes were detected"):
         installer.update(root)
@@ -294,7 +294,7 @@ def test_support_bundle_redacts_credentials_and_receiver_coordinates(tmp_path: P
     root = tmp_path / "install"
     root.mkdir()
     (root / ".env").write_text(
-        "TELEGRAM_BOT_TOKEN=123456:secret\\nLOCAL_ADSB_RECEIVER_LATITUDE=41.1\\nLOCAL_ADSB_RECEIVER_LONGITUDE=28.7\\n",
+        "TELEGRAM_BOT_TOKEN=123456:secret\nLOCAL_ADSB_RECEIVER_LATITUDE=41.1\nLOCAL_ADSB_RECEIVER_LONGITUDE=28.7\n",
         encoding="utf-8",
     )
     metadata_path = root / ".community" / "installation.json"
