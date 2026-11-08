@@ -1,10 +1,10 @@
 # Self-hosting Plane Alerts
 
-Plane Alerts v5.5.1 supports guided and manual self-hosting on Linux x86-64, Linux ARM64, Raspberry Pi 4/5 with a 64-bit OS, Windows x64 and Windows ARM64. The alert-critical prediction path remains the same deterministic/statistical code used in production.
+Plane Alerts v5.8.7 supports guided and manual self-hosting on Linux x86-64, Linux ARM64, Raspberry Pi 4/5 with a 64-bit OS, Windows x64 and Windows ARM64. The alert-critical prediction path remains the same deterministic/statistical code used in production.
 
 ## Recommended: guided stable-release installer
 
-Download the installer for your platform from the newest stable GitHub release. Stable v5.5.x releases publish six installer entry points plus `SHA256SUMS.txt`:
+Download the installer for your platform from the newest stable GitHub release. Community stable releases publish six installer entry points plus `SHA256SUMS.txt`:
 
 - `setup-windows.bat` — Windows x64/AMD64
 - `setup-windows-arm64.bat` — Windows ARM64
@@ -65,7 +65,7 @@ docker compose exec plane-alerts planealerts doctor --json
 
 ## Prediction Lab persistence
 
-v5.5.1 removes new high-volume Prediction Lab audit/evaluation writes from MongoDB. Evidence is written asynchronously to `PREDICTION_LAB_ROOT`, which is `/data/prediction_lab` in the supplied Compose configuration and a persistent community-data path for guided native installs.
+Since v5.5.1, new high-volume Prediction Lab audit/evaluation writes are stored outside MongoDB. Evidence is written asynchronously to `PREDICTION_LAB_ROOT`, which is `/data/prediction_lab` in the supplied Compose configuration and a persistent community-data path for guided native installs.
 
 For a single self-hosted instance, keeping that persistent path is sufficient for runtime durability. The repository's Railway-to-Git synchronization workflow is production-operations tooling and is not required for ordinary self-hosting.
 
@@ -162,7 +162,9 @@ Before a version upgrade, back up normal application storage and persistent loca
 
 For v5.5.1, keep the pre-upgrade Mongo backup until the Prediction Lab migration reports verified export counts and the application is production-healthy. The file archive is additive evidence; normal application data remains in the configured normal database.
 
-The guided updater discovers only the newest stable semantic GitHub release, refuses dirty tracked source changes, backs up persistent configuration/local SQLite state, validates the new release with doctor checks, and rolls back to the previous stable tag if the update gate fails. It never follows `main` as the installed stable version.
+The guided updater discovers only the newest stable semantic GitHub release, refuses dirty tracked source changes, and validates the target with offline and live doctor checks. Before changing code it backs up `.env`, installation metadata, setup checkpoint and (when SQLite is selected) the SQLite database. If validation or final state recording fails, it restores the previous code commit and those backed-up local files. It never follows `main` as the installed stable version.
+
+MongoDB is not snapshotted by the guided updater. MongoDB/Atlas users must create and verify an external database backup before upgrading, especially across storage migrations. The updater cannot reverse a completed Mongo collection retirement by checking out older code.
 
 Manual Compose upgrades should keep the previous verified tag/commit and both named volumes:
 
@@ -174,9 +176,7 @@ docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
 
-The immediate rollback code target for this architecture release is v5.4.3 commit `2546e0ff854ce32511b4c358ba162e842397ff66`.
-
-If the v5.5.1 migration has already retired the old Prediction Lab Mongo collections, v5.4.3 can still use normal application Mongo data, but migrated historical Lab evidence is not automatically imported back into MongoDB. Restore a pre-upgrade backup only if you specifically need the old Mongo-backed Lab storage while testing a rollback; do not overwrite newer normal user/configuration data casually.
+The previous published community stable before the v5.8.7 community candidate is v5.5.3. Do not assume that checking out an older code tag reverses a completed data migration. If rolling back across the v5.6.x operational-storage migrations, restore the matching pre-upgrade Mongo backup and preserve the persistent-volume route, notification and Prediction Lab data. Never overwrite newer normal user/configuration data casually.
 
 ## Reporting a problem
 
