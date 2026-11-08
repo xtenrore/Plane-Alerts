@@ -58,7 +58,7 @@ jobs:
   linux-x64:
     needs: resolve
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +107,16 @@ jobs:
             echo "Community Docker image healthcheck must target /ready: $HEALTHCHECK" >&2
             exit 1
           }
+
+      - name: Validate Docker Compose and run fresh self-host image doctor smoke
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=123456:community-ci-placeholder-token/' .env
+          trap 'docker compose down -v --remove-orphans' EXIT
+          docker compose config --quiet
+          docker compose build plane-alerts
+          docker compose run --rm plane-alerts planealerts doctor --offline
 
   linux-arm64:
     needs: resolve
