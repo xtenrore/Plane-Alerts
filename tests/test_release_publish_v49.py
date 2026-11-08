@@ -54,7 +54,7 @@ def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix()
     assert "docs/self-hosting.md" in workflow
     assert "weekly Community Release workflow" in workflowdef test_release_publish_never_moves_an_existing_tag():
     workflow = _workflow_text()
-    assert 'git rev-parse --verify "refs/tags/$TAG^{commit}"' in workflow
+    assert 'git rev-parse -q --verify "refs/tags/$TAG^{commit}"' in workflow
     assert '[[ "$TAG_SHA" == "$TESTED_SHA" ]]' in workflow
     assert "Refusing to move existing $TAG" in workflow
     assert "--verify-tag" in workflow
@@ -72,7 +72,7 @@ def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix()
     assert "Benchmark canonical non-blocking route guard" in workflow
 
 
-def test_community_matrix_is_manual_and_automation-branch_only():
+def test_community_matrix_is_manual_and_automation_branch_only():
     workflow = _community_workflow_text()
     trigger_block = workflow.split("\npermissions:", 1)[0]
     assert "workflow_dispatch:" in trigger_block
