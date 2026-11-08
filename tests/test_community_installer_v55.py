@@ -274,7 +274,11 @@ def test_updater_stops_service_before_snapshot_and_restarts_if_snapshot_fails(
     monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
     monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: True)
     monkeypatch.setattr(installer, "stop_service", lambda: calls.append("stop"))
-    monkeypatch.setattr(installer, "backup_for_update", lambda _root: (calls.append("backup"), (_ for _ in ()).throw(OSError("snapshot failed")))[1])
+    def fail_backup(_root: Path) -> Path:
+        calls.append("backup")
+        raise OSError("snapshot failed")
+
+    monkeypatch.setattr(installer, "backup_for_update", fail_backup)
     monkeypatch.setattr(installer, "restart_service", lambda: calls.append("restart"))
 
     with pytest.raises(OSError, match="snapshot failed"):
