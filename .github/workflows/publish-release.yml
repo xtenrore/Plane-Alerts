@@ -1,4 +1,5 @@
 name: Publish community-stable Plane Alerts release
+run-name: Publish community release for Plane Alerts ${{ inputs.tested_sha || github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -7,9 +8,16 @@ on:
         description: Exact main commit that passed the weekly community validation matrix
         required: true
         type: string
+  # The scheduled task can use a short-lived, no-tree-change branch when the
+  # connector cannot invoke workflow_dispatch. The exact-SHA matrix gate below
+  # remains mandatory for either trigger.
+  push:
+    branches:
+      - "automation/community-publish-*"
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: plane-alerts-community-release-publish
@@ -17,49 +25,258 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      TESTED_SHA: ${{ inputs.tested_sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Checkout exact community-tested commit
+      - name: Checkout publish trigger commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tested_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Confirm community-tested commit belongs to main
+      - name: Resolve and verify exact release candidate SHA
+        id: candidate
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TESTED_SHA: ${{ inputs.tested_sha }}
+          EVENT_KIND: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_KIND" == "workflow_dispatch" ]]; then
+            TESTED_SHA="$INPUT_TESTED_SHA"
+            [[ "$TRIGGER_SHA" == "$TESTED_SHA" ]] || {
+              echo "Manual publication must be dispatched from the exact tested main commit." >&2
+              exit 1
+            }
+          else
+            PREFIX="automation/community-publish-"
+            [[ "$REF_NAME" == "$PREFIX"* ]] || { echo "Unexpected community publish trigger branch." >&2; exit 1; }
+            TESTED_SHA="${REF_NAME#"$PREFIX"}"
+            PARENTS="$(git show -s --format=%P "$TRIGGER_SHA")"
+            [[ "$PARENTS" == "$TESTED_SHA" ]] || {
+              echo "Publish trigger commit must be a direct child of the tested SHA." >&2
+              exit 1
+            }
+            TRIGGER_TREE="$(git rev-parse "$TRIGGER_SHA^{tree}")"
+            TESTED_TREE="$(git rev-parse "$TESTED_SHA^{tree}")"
+            [[ "$TRIGGER_TREE" == "$TESTED_TREE" ]] || {
+              echo "Publish trigger branch changed the tested source tree." >&2
+              exit 1
+            }
+          fi
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "tested_sha must be a full 40-character commit SHA." >&2; exit 1; }
+          git checkout --detach "$TESTED_SHA"
+          ACTUAL="$(git rev-parse HEAD)"
+          [[ "$ACTUAL" == "$TESTED_SHA" ]]
+          echo "sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm candidate is the current exact main commit
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
         run: |
           set -euo pipefail
           git fetch origin main --no-tags
-          git cat-file -e "${TESTED_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "${TESTED_SHA}" origin/main; then
-            echo "Refusing community release: tested SHA is not part of main history." >&2
+          MAIN_SHA="$(git rev-parse origin/main)"
+          [[ "$MAIN_SHA" == "$TESTED_SHA" ]] || {
+            echo "Refusing stale community release: candidate=$TESTED_SHA current_main=$MAIN_SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$TESTED_SHA" ]]
+
+      - name: Verify successful Railway/application CI for this exact SHA
+        id: application_ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_WORKFLOW_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml" --jq '.id')"
+          TEST_RUNS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$TEST_WORKFLOW_ID/runs?per_page=100")"
+          TEST_RUN="$(jq -c --arg sha "$TESTED_SHA" '
+            [.workflow_runs[]
+              | select(.event == "push" and .head_branch == "main" and .head_sha == $sha)
+            ]
+            | sort_by(.updated_at)
+            | last // empty
+          ' <<< "$TEST_RUNS")"
+          [[ -n "$TEST_RUN" ]] || {
+            echo "No full application CI run exists for exact main SHA $TESTED_SHA." >&2
+            exit 1
+          }
+          TEST_RUN_ID="$(jq -r '.id' <<< "$TEST_RUN")"
+          TEST_RUN_STATUS="$(jq -r '.status' <<< "$TEST_RUN")"
+          TEST_RUN_CONCLUSION="$(jq -r '.conclusion' <<< "$TEST_RUN")"
+          [[ "$TEST_RUN_STATUS" == "completed" && "$TEST_RUN_CONCLUSION" == "success" ]] || {
+            echo "Latest exact-SHA application CI run is not successful: status=$TEST_RUN_STATUS conclusion=$TEST_RUN_CONCLUSION" >&2
+            exit 1
+          }
+          TEST_JOBS="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TEST_RUN_ID/jobs?per_page=100")"
+          PYTEST_JOB="$(jq -c '[.jobs[] | select(.name == "pytest")] | first // empty' <<< "$TEST_JOBS")"
+          [[ -n "$PYTEST_JOB" ]] || { echo "Missing pytest job in exact-SHA application CI." >&2; exit 1; }
+          [[ "$(jq -r '.conclusion' <<< "$PYTEST_JOB")" == "success" ]] || {
+            echo "Exact-SHA pytest job did not pass." >&2
+            exit 1
+          }
+          FULL_SUITE="$(jq -r '[.steps[] | select(.name == "Run full test suite") | .conclusion] | first // empty' <<< "$PYTEST_JOB")"
+          [[ "$FULL_SUITE" == "success" ]] || {
+            echo "Exact-SHA full application test suite did not pass." >&2
+            exit 1
+          }
+          echo "run_id=$TEST_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Verify successful community matrix for this exact SHA
+        id: matrix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+          EVENT_KIND: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/community-installer.yml" --jq '.id')"
+          RUNS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/runs?per_page=100")"
+
+          MATRIX_RUN="$(jq -c --arg sha "$TESTED_SHA" '
+            [.workflow_runs[]
+              | select(
+                  (.event == "workflow_dispatch"
+                    and .name == ("Community matrix for Plane Alerts " + $sha)
+                    and .head_sha == $sha)
+                  or
+                  (.event == "push"
+                    and .head_branch == ("automation/community-matrix-" + $sha)
+                    and .name == ("Community matrix for Plane Alerts automation/community-matrix-" + $sha))
+                )
+            ]
+            | sort_by(.updated_at)
+            | last // empty
+          ' <<< "$RUNS")"
+
+          [[ -n "$MATRIX_RUN" ]] || {
+            echo "No exact-SHA community matrix run exists for $TESTED_SHA." >&2
+            exit 1
+          }
+          MATRIX_STATUS="$(jq -r '.status' <<< "$MATRIX_RUN")"
+          MATRIX_CONCLUSION="$(jq -r '.conclusion' <<< "$MATRIX_RUN")"
+          [[ "$MATRIX_STATUS" == "completed" && "$MATRIX_CONCLUSION" == "success" ]] || {
+            echo "Latest exact-SHA community matrix is not successful: status=$MATRIX_STATUS conclusion=$MATRIX_CONCLUSION" >&2
+            exit 1
+          }
+
+          MATRIX_RUN_ID="$(jq -r '.id' <<< "$MATRIX_RUN")"
+          MATRIX_HEAD_SHA="$(jq -r '.head_sha' <<< "$MATRIX_RUN")"
+          MATRIX_EVENT="$(jq -r '.event' <<< "$MATRIX_RUN")"
+          MATRIX_BRANCH="$(jq -r '.head_branch' <<< "$MATRIX_RUN")"
+
+          if [[ "$MATRIX_EVENT" == "push" ]]; then
+            [[ "$MATRIX_BRANCH" == "automation/community-matrix-$TESTED_SHA" ]]
+            git fetch origin "$MATRIX_HEAD_SHA" --no-tags
+            PARENTS="$(git show -s --format=%P "$MATRIX_HEAD_SHA")"
+            [[ "$PARENTS" == "$TESTED_SHA" ]] || {
+              echo "Matrix trigger commit is not a direct child of the tested SHA." >&2
+              exit 1
+            }
+            MATRIX_TREE="$(git rev-parse "$MATRIX_HEAD_SHA^{tree}")"
+            TESTED_TREE="$(git rev-parse "$TESTED_SHA^{tree}")"
+            [[ "$MATRIX_TREE" == "$TESTED_TREE" ]] || {
+              echo "Matrix trigger branch changed the tested source tree." >&2
+              exit 1
+            }
+          elif [[ "$MATRIX_EVENT" == "workflow_dispatch" ]]; then
+            [[ "$MATRIX_HEAD_SHA" == "$TESTED_SHA" ]]
+          else
+            echo "Unexpected community matrix event: $MATRIX_EVENT" >&2
             exit 1
           fi
 
-      - name: Resolve canonical version and notes
+          JOBS="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$MATRIX_RUN_ID/jobs?per_page=100")"
+          REQUIRED_JOBS=(
+            resolve
+            linux-x64
+            linux-arm64
+            windows-x64
+            windows-arm64
+            raspberry-pi-arm64-emulation
+            mongodb-upgrade
+            community-validation-summary
+          )
+          for JOB_NAME in "${REQUIRED_JOBS[@]}"; do
+            JOB="$(jq -c --arg name "$JOB_NAME" '[.jobs[] | select(.name == $name)] | first // empty' <<< "$JOBS")"
+            [[ -n "$JOB" ]] || { echo "Missing required community matrix job: $JOB_NAME" >&2; exit 1; }
+            JOB_RESULT="$(jq -r '.conclusion' <<< "$JOB")"
+            [[ "$JOB_RESULT" == "success" ]] || {
+              echo "Community matrix job $JOB_NAME did not pass: $JOB_RESULT" >&2
+              exit 1
+            }
+            if [[ "$JOB_NAME" != "community-validation-summary" ]]; then
+              VERIFY_RESULT="$(jq -r '[.steps[] | select(.name == "Verify exact release candidate checkout") | .conclusion] | first // empty' <<< "$JOB")"
+              [[ "$VERIFY_RESULT" == "success" ]] || {
+                echo "Job $JOB_NAME did not verify the exact candidate checkout." >&2
+                exit 1
+              }
+            fi
+          done
+
+          gh run download "$MATRIX_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "community-validation-$TESTED_SHA" --dir matrix-evidence
+          python - "$TESTED_SHA" matrix-evidence/community-validation.txt <<'PY'
+          from pathlib import Path
+          import sys
+
+          expected = sys.argv[1]
+          path = Path(sys.argv[2])
+          values = {}
+          for line in path.read_text(encoding="utf-8").splitlines():
+              if "=" in line:
+                  key, value = line.split("=", 1)
+                  values[key.strip()] = value.strip()
+          required = {
+              "resolve", "linux-x64", "linux-arm64", "windows-x64",
+              "windows-arm64", "raspberry-pi-arm64-emulation", "mongodb-upgrade",
+          }
+          if values.get("tested_sha") != expected:
+              raise SystemExit("Community matrix artifact SHA does not match the release candidate")
+          missing = required - values.keys()
+          failed = {key: values.get(key) for key in required if values.get(key) != "success"}
+          if missing or failed:
+              raise SystemExit(f"Community matrix artifact incomplete: missing={sorted(missing)} failed={failed}")
+          print(f"Exact community matrix verified for {expected}")
+          PY
+
+          echo "run_id=$MATRIX_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve canonical version and verify documentation synchronization
         id: release_meta
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
         run: |
           set -euo pipefail
           VERSION="$(python -c 'from app.version import VERSION; print(VERSION)')"
-          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Canonical VERSION is not a release semantic version: ${VERSION}" >&2
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Canonical VERSION is not semantic version: $VERSION" >&2
             exit 1
-          fi
-          TAG="v${VERSION}"
-          NOTES="docs/releases/${TAG}.md"
-          if [[ ! -s "${NOTES}" ]]; then
-            echo "Missing non-empty release notes: ${NOTES}" >&2
-            exit 1
-          fi
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
-          echo "notes=${NOTES}" >> "${GITHUB_OUTPUT}"
+          }
+          TAG="v$VERSION"
+          NOTES="docs/releases/$TAG.md"
+          [[ -s "$NOTES" ]] || { echo "Missing release notes: $NOTES" >&2; exit 1; }
+          grep -Fq "Plane Alerts v$VERSION" README.md
+          grep -Fq "Plane Alerts v$VERSION" .env.example
+          grep -Fq "Plane Alerts v$VERSION" requirements.lock
+          grep -Fq "Plane Alerts v$VERSION" docs/self-hosting.md
+          grep -Fq "## v$VERSION" CHANGELOG.md
+          grep -Fq "Community self-hosting updater hardening" "$NOTES"
+          grep -Fq "weekly Community Release workflow" "$NOTES"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
 
-      - name: Validate guided installer assets
+      - name: Validate guided installer assets and scan for embedded secrets
+        shell: bash
         run: |
           set -euo pipefail
           python scripts/community_installer_v55.py --self-test
@@ -69,39 +286,83 @@ jobs:
           for asset in setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh; do
             [[ -s "$asset" ]] || { echo "Missing installer asset: $asset" >&2; exit 1; }
           done
+
           rm -rf release-assets
           mkdir release-assets
           cp setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh release-assets/
           chmod +x release-assets/*.sh
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          token = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
+          mongo = re.compile(r"mongodb(?:\+srv)?://[^/@\s:]+:[^/@\s]+@")
+          credential_assignment = re.compile(
+              r"(?im)^\s*(?:TELEGRAM_BOT_TOKEN|MONGO_URI|OPENSKY_[1-5]|"
+              r"OPENSKY_CREDENTIALS_JSON|GEMINI_API_KEY|GROQ_API_KEY|"
+              r"LOCAL_ADSB_AUTH_HEADER|ADMIN_PASSWORD)\s*=\s*(?!$|your_|placeholder|change_me|\*\*\*)\S+"
+          )
+          failures = []
+          for path in sorted(Path("release-assets").iterdir()):
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              text = data.decode("utf-8", errors="ignore")
+              if token.search(text) or mongo.search(text) or credential_assignment.search(text):
+                  failures.append(path.name)
+          if failures:
+              raise SystemExit(f"Potential embedded credentials in release assets: {failures}")
+          print("Installer asset secret scan passed")
+          PY
+
           (
             cd release-assets
             sha256sum setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh > SHA256SUMS.txt
             sha256sum -c SHA256SUMS.txt
           )
 
-      - name: Validate existing tag and release state
+      - name: Validate existing tag, latest stable version and release state
         id: existing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release_meta.outputs.tag }}
+          VERSION: ${{ steps.release_meta.outputs.version }}
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        shell: bash
         run: |
           set -euo pipefail
           git fetch --force --tags origin
-          if git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
-            TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-            if [[ "${TAG_SHA}" != "${TESTED_SHA}" ]]; then
-              echo "Refusing to move existing ${TAG}: ${TAG_SHA} != community-tested ${TESTED_SHA}" >&2
+          if git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+            TAG_SHA="$(git rev-parse "refs/tags/$TAG^{commit}")"
+            [[ "$TAG_SHA" == "$TESTED_SHA" ]] || {
+              echo "Refusing to move existing $TAG: $TAG_SHA != $TESTED_SHA" >&2
               exit 1
-            fi
-            echo "tag_exists=true" >> "${GITHUB_OUTPUT}"
+            }
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "tag_exists=false" >> "${GITHUB_OUTPUT}"
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "release_exists=true" >> "${GITHUB_OUTPUT}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "release_exists=false" >> "${GITHUB_OUTPUT}"
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
+          if [[ "$LATEST_TAG" != "$TAG" ]]; then
+            python - "$VERSION" "$LATEST_TAG" <<'PY'
+          import re
+          import sys
+          current = tuple(map(int, sys.argv[1].split(".")))
+          previous_text = sys.argv[2].removeprefix("v")
+          if not re.fullmatch(r"\d+\.\d+\.\d+", previous_text):
+              raise SystemExit(f"Latest stable tag is not semantic: {sys.argv[2]}")
+          previous = tuple(map(int, previous_text.split(".")))
+          if current <= previous:
+              raise SystemExit(f"Refusing non-increasing community version: {current} <= {previous}")
+          PY
           fi
 
       - name: Publish immutable GitHub community release
@@ -112,6 +373,8 @@ jobs:
           VERSION: ${{ steps.release_meta.outputs.version }}
           NOTES: ${{ steps.release_meta.outputs.notes }}
           TAG_EXISTS: ${{ steps.existing.outputs.tag_exists }}
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        shell: bash
         run: |
           set -euo pipefail
           assets=(
@@ -123,37 +386,57 @@ jobs:
             release-assets/setup-raspberry-pi.sh
             release-assets/SHA256SUMS.txt
           )
-          if [[ "${TAG_EXISTS}" == "true" ]]; then
-            gh release create "${TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
+          if [[ "$TAG_EXISTS" == "true" ]]; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "Plane Alerts v${VERSION}" \
-              --notes-file "${NOTES}" \
+              --title "Plane Alerts v$VERSION" \
+              --notes-file "$NOTES" \
               "${assets[@]}"
           else
-            gh release create "${TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --target "${TESTED_SHA}" \
-              --title "Plane Alerts v${VERSION}" \
-              --notes-file "${NOTES}" \
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$TESTED_SHA" \
+              --title "Plane Alerts v$VERSION" \
+              --notes-file "$NOTES" \
               "${assets[@]}"
           fi
 
-      - name: Verify published tag and installer assets
+      - name: Verify published tag, assets, checksums and latest stable channel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release_meta.outputs.tag }}
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        shell: bash
         run: |
           set -euo pipefail
           git fetch --force --tags origin
-          TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          if [[ "${TAG_SHA}" != "${TESTED_SHA}" ]]; then
-            echo "Published tag does not point to the community-tested commit." >&2
+          TAG_SHA="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          [[ "$TAG_SHA" == "$TESTED_SHA" ]] || {
+            echo "Published tag does not point to the exact community-tested commit." >&2
             exit 1
-          fi
-          release="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,targetCommitish,assets,url)"
+          }
+
+          release="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,targetCommitish,assets,url)"
           [[ "$(jq -r '.isDraft' <<<"$release")" == "false" ]]
           [[ "$(jq -r '.isPrerelease' <<<"$release")" == "false" ]]
           count="$(jq '[.assets[] | select(.name == "setup.bat" or .name == "setup-windows.bat" or .name == "setup-windows-arm64.bat" or .name == "setup-linux.sh" or .name == "setup-linux-arm64.sh" or .name == "setup-raspberry-pi.sh" or .name == "SHA256SUMS.txt")] | length' <<<"$release")"
           [[ "$count" -eq 7 ]] || { echo "Expected 7 installer assets, found $count" >&2; exit 1; }
+
+          rm -rf published-assets
+          mkdir published-assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir published-assets
+          (
+            cd published-assets
+            sha256sum -c SHA256SUMS.txt
+          )
+          for asset in setup.bat setup-windows.bat setup-windows-arm64.bat setup-linux.sh setup-linux-arm64.sh setup-raspberry-pi.sh SHA256SUMS.txt; do
+            cmp "release-assets/$asset" "published-assets/$asset"
+          done
+
+          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
+          [[ "$LATEST_TAG" == "$TAG" ]] || {
+            echo "Stable updater latest release is $LATEST_TAG, expected $TAG." >&2
+            exit 1
+          }
           echo "Community release verified: $(jq -r '.url' <<<"$release")"

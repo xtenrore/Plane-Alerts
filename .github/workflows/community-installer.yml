@@ -1,20 +1,77 @@
 name: community-installer
+run-name: Community matrix for Plane Alerts ${{ inputs.tested_sha || github.ref_name }}
 
 on:
-  # The long community/self-host matrix is owned by the dedicated ChatGPT
-  # Weekly Community Release scheduled task. It is intentionally manual here
-  # so ordinary Railway releases do not run ARM64/Raspberry Pi/installer gates.
+  # Only the dedicated automation branch or an explicit manual dispatch may
+  # run the long community matrix. ordinary Railway pushes never trigger it.
+  push:
+    branches:
+      - "automation/community-matrix-*"
   workflow_dispatch:
+    inputs:
+      tested_sha:
+        description: Exact commit to validate for community self-host release
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  linux-x64:
+  resolve:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      tested_sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - name: Resolve requested community candidate
+        id: candidate
+        shell: bash
+        env:
+          INPUT_TESTED_SHA: ${{ inputs.tested_sha }}
+          EVENT_KIND: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_KIND" == "workflow_dispatch" ]]; then
+            TARGET_SHA="$INPUT_TESTED_SHA"
+          else
+            PREFIX="automation/community-matrix-"
+            [[ "$REF_NAME" == "$PREFIX"* ]] || { echo "Unexpected matrix trigger branch." >&2; exit 1; }
+            TARGET_SHA="${REF_NAME#"$PREFIX"}"
+          fi
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Candidate must be a full 40-character commit SHA." >&2; exit 1; }
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
+
+  linux-x64:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tested_sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -41,11 +98,43 @@ jobs:
       - name: Verify dependency consistency
         run: pip check
 
+      - name: Build x64 community Docker image and verify readiness healthcheck
+        run: |
+          set -euo pipefail
+          docker build --tag plane-alerts-community:ci .
+          HEALTHCHECK="$(docker image inspect --format '{{json .Config.Healthcheck.Test}}' plane-alerts-community:ci)"
+          [[ "$HEALTHCHECK" == *"/ready"* ]] || {
+            echo "Community Docker image healthcheck must target /ready: $HEALTHCHECK" >&2
+            exit 1
+          }
+
+      - name: Validate Docker Compose and run fresh self-host image doctor smoke
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=123456:community-ci-placeholder-token/' .env
+          trap 'docker compose down -v --remove-orphans' EXIT
+          docker compose config --quiet
+          docker compose build plane-alerts
+          docker compose run --rm plane-alerts planealerts doctor --offline
+
   linux-arm64:
+    needs: resolve
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tested_sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -66,10 +155,22 @@ jobs:
         run: pip check
 
   windows-x64:
+    needs: resolve
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tested_sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -95,10 +196,22 @@ jobs:
         run: pip check
 
   windows-arm64:
+    needs: resolve
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tested_sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -124,10 +237,22 @@ jobs:
         run: pip check
 
   raspberry-pi-arm64-emulation:
+    needs: resolve
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tested_sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Exercise Raspberry Pi 5 64-bit platform guard under ARM64 QEMU
@@ -140,3 +265,99 @@ jobs:
             bash /src/setup-raspberry-pi.sh --check-platform
       - name: Build ARM64 Plane Alerts image
         run: docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 --output=type=cacheonly .
+
+  mongodb-upgrade:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mongo:
+        image: mongo:7.0.14
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MONGO_URI: mongodb://127.0.0.1:27017
+      DATABASE_NAME: plane_alerts_community_ci
+      DATABASE_BACKEND: mongodb
+      PLANE_STORAGE_MAINTENANCE_BACKGROUND: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tested_sha }}
+      - name: Verify exact release candidate checkout
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$TESTED_SHA"
+          echo "COMMUNITY_TESTED_SHA=$ACTUAL"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install locked runtime and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Run real MongoDB community upgrade and privacy integration
+        run: pytest -q tests/test_community_mongo_upgrade_integration.py
+      - name: Verify dependency consistency
+        run: pip check
+
+  community-validation-summary:
+    if: always()
+    needs:
+      - resolve
+      - linux-x64
+      - linux-arm64
+      - windows-x64
+      - windows-arm64
+      - raspberry-pi-arm64-emulation
+      - mongodb-upgrade
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every exact-commit community gate
+        shell: bash
+        env:
+          TESTED_SHA: ${{ needs.resolve.outputs.tested_sha }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          LINUX_X64_RESULT: ${{ needs.linux-x64.result }}
+          LINUX_ARM64_RESULT: ${{ needs.linux-arm64.result }}
+          WINDOWS_X64_RESULT: ${{ needs.windows-x64.result }}
+          WINDOWS_ARM64_RESULT: ${{ needs.windows-arm64.result }}
+          PI_EMULATION_RESULT: ${{ needs.raspberry-pi-arm64-emulation.result }}
+          MONGODB_RESULT: ${{ needs.mongodb-upgrade.result }}
+        run: |
+          set -euo pipefail
+          [[ "$RESOLVE_RESULT" == "success" ]]
+          [[ "$LINUX_X64_RESULT" == "success" ]]
+          [[ "$LINUX_ARM64_RESULT" == "success" ]]
+          [[ "$WINDOWS_X64_RESULT" == "success" ]]
+          [[ "$WINDOWS_ARM64_RESULT" == "success" ]]
+          [[ "$PI_EMULATION_RESULT" == "success" ]]
+          [[ "$MONGODB_RESULT" == "success" ]]
+          cat > community-validation.txt <<EOF
+          tested_sha=$TESTED_SHA
+          resolve=$RESOLVE_RESULT
+          linux-x64=$LINUX_X64_RESULT
+          linux-arm64=$LINUX_ARM64_RESULT
+          windows-x64=$WINDOWS_X64_RESULT
+          windows-arm64=$WINDOWS_ARM64_RESULT
+          raspberry-pi-arm64-emulation=$PI_EMULATION_RESULT
+          mongodb-upgrade=$MONGODB_RESULT
+          EOF
+          echo "COMMUNITY_MATRIX_TESTED_SHA=$TESTED_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: community-validation-${{ needs.resolve.outputs.tested_sha }}
+          path: community-validation.txt
+          if-no-files-found: error

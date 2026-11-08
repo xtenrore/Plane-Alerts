@@ -32,32 +32,60 @@ def test_community_release_publish_requires_explicit_weekly_tested_sha():
     assert "contents: write" in workflow
 
 
-def test_community_release_publish_uses_exact_tested_sha_and_main_ancestry():
+def test_community_release_publish_requires_exact_sha_application_ci():
     workflow = _workflow_text()
-    tested_sha = "${{ inputs.tested_sha }}"
-    assert f"ref: {tested_sha}" in workflow
+    assert "Verify successful Railway/application CI for this exact SHA" in workflow
+    assert 'head_branch == "main" and .head_sha == $sha' in workflow
+    assert 'select(.name == "pytest")' in workflow
+    assert 'select(.name == "Run full test suite")' in workflow
+    assert "No full application CI run exists for exact main SHA" in workflow
+    assert "sort_by(.updated_at)" in workflow
+    assert "Latest exact-SHA application CI run is not successful" in workflow
+
+
+def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix():
+    workflow = _workflow_text()
+    tested_sha = "${{ steps.candidate.outputs.sha }}"
+    assert "ref: ${{ github.sha }}" in workflow
+    assert 'git checkout --detach "$TESTED_SHA"' in workflow
+    assert "Publish trigger commit must be a direct child of the tested SHA" in workflow
+    assert "Publish trigger branch changed the tested source tree" in workflow
     assert f"TESTED_SHA: {tested_sha}" in workflow
-    assert 'git merge-base --is-ancestor "${TESTED_SHA}" origin/main' in workflow
-    assert "Refusing community release: tested SHA is not part of main history" in workflow
+    assert '[[ "$MAIN_SHA" == "$TESTED_SHA" ]]' in workflow
+    assert "No exact-SHA community matrix run exists" in workflow
+    assert "sort_by(.updated_at)" in workflow
+    assert "Latest exact-SHA community matrix is not successful" in workflow
+    assert "automation/community-matrix-" in workflow
+    assert "community-validation-summary" in workflow
+    assert "Verify exact release candidate checkout" in workflow
+    assert "gh run download" in workflow
 
 
 def test_release_publish_is_version_and_notes_driven():
     workflow = _workflow_text()
     assert "from app.version import VERSION" in workflow
-    assert 'TAG="v${VERSION}"' in workflow
-    assert 'NOTES="docs/releases/${TAG}.md"' in workflow
-    assert "Canonical VERSION is not a release semantic version" in workflow
-    assert 'if [[ ! -s "${NOTES}" ]]' in workflow
+    assert 'TAG="v$VERSION"' in workflow
+    assert 'NOTES="docs/releases/$TAG.md"' in workflow
+    assert "Canonical VERSION is not semantic version" in workflow
+    assert '[[ -s "$NOTES" ]]' in workflow
+    assert "requirements.lock" in workflow
+    assert ".env.example" in workflow
+    assert "docs/self-hosting.md" in workflow
+    assert "weekly Community Release workflow" in workflow
 
 
 def test_release_publish_never_moves_an_existing_tag():
     workflow = _workflow_text()
-    assert 'git rev-parse -q --verify "refs/tags/${TAG}^{commit}"' in workflow
-    assert 'if [[ "${TAG_SHA}" != "${TESTED_SHA}" ]]' in workflow
-    assert "Refusing to move existing ${TAG}" in workflow
+    assert 'git rev-parse -q --verify "refs/tags/$TAG^{commit}"' in workflow
+    assert '[[ "$TAG_SHA" == "$TESTED_SHA" ]]' in workflow
+    assert "Refusing to move existing $TAG" in workflow
     assert "--verify-tag" in workflow
-    assert '--target "${TESTED_SHA}"' in workflow
-    assert 'gh release view "${TAG}"' in workflow
+    assert '--target "$TESTED_SHA"' in workflow
+    assert 'gh release view "$TAG"' in workflow
+    assert "sha256sum -c SHA256SUMS.txt" in workflow
+    assert "cmp " in workflow
+    assert "latest stable channel" in workflow
+    assert "Potential embedded credentials in release assets" in workflow
 
 
 def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
@@ -69,17 +97,26 @@ def test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     assert "Benchmark canonical non-blocking route guard" in workflow
 
 
-def test_community_matrix_is_manual_and_owned_by_chatgpt_weekly_task():
+def test_community_matrix_is_manual_and_automation_branch_only():
     workflow = _community_workflow_text()
     trigger_block = workflow.split("\npermissions:", 1)[0]
     assert "workflow_dispatch:" in trigger_block
+    assert "tested_sha:" in trigger_block
+    assert "push:" in trigger_block
+    assert '"automation/community-matrix-*"' in trigger_block
     assert "schedule:" not in trigger_block
-    assert "push:" not in trigger_block
     assert "pull_request:" not in trigger_block
-    assert "Weekly Community Release scheduled task" in trigger_block
+    assert "ordinary Railway pushes never trigger it" in trigger_block
+    assert "resolve:" in workflow
     assert "windows-arm64:" in workflow
     assert "linux-arm64:" in workflow
     assert "raspberry-pi-arm64-emulation:" in workflow
+    assert "mongodb-upgrade:" in workflow
+    assert "community-validation-summary:" in workflow
+    assert "docker compose config --quiet" in workflow
+    assert "docker compose run --rm plane-alerts planealerts doctor --offline" in workflow
+    assert "Build x64 community Docker image and verify readiness healthcheck" in workflow
+    assert workflow.count("Verify exact release candidate checkout") == 7
 
 
 def test_railway_deploy_runs_only_after_trusted_green_main_push():
@@ -93,7 +130,7 @@ def test_railway_deploy_runs_only_after_trusted_green_main_push():
     assert "contents: read" in workflow
 
 
-def test_railway_deploy_gate_runs_outside_railway_container_and_targets_only_main_service():
+def test_railway_deploy_gate_skips_community_only_changes_and_targets_main_service():
     workflow = _deploy_workflow_text()
     tested_sha = "${{ github.event.workflow_run.head_sha }}"
     gate_block, deploy_block = workflow.split("\n  deploy:\n", 1)
@@ -102,10 +139,14 @@ def test_railway_deploy_gate_runs_outside_railway_container_and_targets_only_mai
     assert "container:" not in gate_block
     assert f"DEPLOY_SHA: {tested_sha}" in gate_block
     assert 'gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq' in gate_block
-    assert 'if [[ "${CURRENT_MAIN_SHA}" != "${DEPLOY_SHA}" ]]' in gate_block
+    assert 'if [[ "$CURRENT_MAIN_SHA" != "$DEPLOY_SHA" ]]' in gate_block
+    assert "git diff --name-only" in gate_block
+    assert "RUNTIME_CHANGED=false" in gate_block
+    assert "app/*|worker.py|Dockerfile|requirements.txt" in gate_block
+    assert "requirements.lock" in gate_block
+    assert "community/docs/installer-only commit" in gate_block
     assert 'echo "deploy=false" >> "$GITHUB_OUTPUT"' in gate_block
-    assert "git fetch" not in gate_block
-    assert "git rev-parse" not in gate_block
+    assert 'echo "deploy=true" >> "$GITHUB_OUTPUT"' in gate_block
 
     assert "needs: gate" in deploy_block
     assert "if: needs.gate.outputs.deploy == 'true'" in deploy_block

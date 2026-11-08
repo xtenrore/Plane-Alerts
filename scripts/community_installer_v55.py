@@ -408,16 +408,55 @@ def current_tag(root: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def sqlite_database_path(root: Path, values: dict[str, str]) -> Path | None:
+    raw = str(values.get("SQLITE_PATH", "") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path if path.is_absolute() else root / path
+
+
+def stop_service() -> None:
+    """Stop the community service before snapshotting local SQLite or replacing code."""
+    if os.name == "nt":
+        query = run(["schtasks", "/Query", "/TN", service_name(), "/FO", "LIST"], check=False, capture=True)
+        if query.returncode != 0 or "running" not in query.stdout.casefold():
+            return
+        stopped = run(["schtasks", "/End", "/TN", service_name()], check=False, capture=True)
+        if stopped.returncode != 0:
+            raise RuntimeError("Could not stop the Plane Alerts community scheduled task before update")
+        time.sleep(1)
+        verify = run(["schtasks", "/Query", "/TN", service_name(), "/FO", "LIST"], check=False, capture=True)
+        if verify.returncode == 0 and "running" in verify.stdout.casefold():
+            raise RuntimeError("Plane Alerts community scheduled task is still running; update refused")
+        return
+
+    active = run(["systemctl", "is-active", "plane-alerts-community.service"], check=False, capture=True)
+    if active.returncode != 0:
+        return
+    stopped = run(["systemctl", "stop", "plane-alerts-community.service"], check=False, capture=True)
+    if stopped.returncode != 0:
+        raise RuntimeError("Could not stop plane-alerts-community.service before update")
+    verify = run(["systemctl", "is-active", "plane-alerts-community.service"], check=False, capture=True)
+    if verify.returncode == 0:
+        raise RuntimeError("plane-alerts-community.service is still active; update refused")
+
+
 def backup_for_update(root: Path) -> Path:
-    env_path, metadata_path, _ = installation_paths(root)
-    backup_root = metadata_path.parent / "backups" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    env_path, metadata_path, checkpoint_path = installation_paths(root)
+    backup_root = metadata_path.parent / "backups" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup_root.mkdir(parents=True, exist_ok=True)
-    if env_path.exists():
-        shutil.copy2(env_path, backup_root / ".env")
+    for source_path, backup_name in (
+        (env_path, ".env"),
+        (metadata_path, "installation.json"),
+        (checkpoint_path, "setup-state.json"),
+    ):
+        if source_path.exists():
+            shutil.copy2(source_path, backup_root / backup_name)
     values = parse_env(env_path)
     if values.get("DATABASE_BACKEND", "").lower() == "sqlite":
-        db_path = Path(values.get("SQLITE_PATH", ""))
-        if db_path.exists():
+        db_path = sqlite_database_path(root, values)
+        if db_path and db_path.exists():
             target = backup_root / "planealerts.db"
             source = sqlite3.connect(str(db_path))
             destination = sqlite3.connect(str(target))
@@ -448,9 +487,14 @@ def update(root: Path) -> bool:
     if not run_doctor(root, offline=True):
         raise RuntimeError("Offline doctor failed; update refused before changing the installation")
 
-    backup = backup_for_update(root)
-    rollback = json.loads((backup / "rollback.json").read_text(encoding="utf-8"))
-    old_commit = str(rollback["commit"])
+    stop_service()
+    try:
+        backup = backup_for_update(root)
+        rollback = json.loads((backup / "rollback.json").read_text(encoding="utf-8"))
+        old_commit = str(rollback["commit"])
+    except Exception:
+        restart_service()
+        raise
     print(f"Updating from {installed or old_commit[:12]} to {tag}...")
     try:
         run(["git", "fetch", "--force", "origin", f"refs/tags/{tag}:refs/tags/{tag}"], cwd=root)
@@ -465,18 +509,50 @@ def update(root: Path) -> bool:
         time.sleep(3)
         if not run_doctor(root, offline=False):
             raise RuntimeError("Target release failed live doctor")
+        _, metadata_path, checkpoint_path = installation_paths(root)
+        metadata: dict[str, Any] = {}
+        if metadata_path.exists():
+            try:
+                existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    metadata = existing
+            except (OSError, ValueError, TypeError):
+                raise RuntimeError("Existing installation metadata is unreadable; update cannot be recorded safely")
+        metadata.setdefault("format", 1)
+        metadata.setdefault("community", True)
+        metadata.setdefault("repository", REPO)
+        metadata.update({"installed_tag": tag, "installed_commit": target_commit, "verified_at": now_iso()})
+        write_json_atomic(metadata_path, metadata)
+        write_json_atomic(checkpoint_path, {"step": "ready", "updated_at": now_iso(), "secrets": "not-stored"})
         print(f"Updated successfully to {tag} ({target_commit[:12]}).")
         return True
     except Exception:
         print("Update validation failed. Rolling back to the previously verified commit...")
-        run(["git", "checkout", "--detach", old_commit], cwd=root, check=False)
-        if (backup / ".env").exists():
-            shutil.copy2(backup / ".env", root / ".env")
+        run(["git", "checkout", "--detach", old_commit], cwd=root)
+        if git_head(root) != old_commit:
+            raise RuntimeError("Rollback could not restore the previously verified code commit")
+        _, metadata_path, checkpoint_path = installation_paths(root)
+        for backup_name, target_path in (
+            (".env", root / ".env"),
+            ("installation.json", metadata_path),
+            ("setup-state.json", checkpoint_path),
+        ):
+            backup_path = backup / backup_name
+            if backup_path.exists():
+                shutil.copy2(backup_path, target_path)
+            else:
+                target_path.unlink(missing_ok=True)
         values = parse_env(root / ".env")
-        db_path = Path(values.get("SQLITE_PATH", "")) if values.get("SQLITE_PATH") else None
-        if db_path and (backup / "planealerts.db").exists():
+        db_path = sqlite_database_path(root, values) if values.get("DATABASE_BACKEND", "").lower() == "sqlite" else None
+        if db_path:
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(backup / "planealerts.db", db_path)
+            for suffix in ("-wal", "-shm"):
+                Path(f"{db_path}{suffix}").unlink(missing_ok=True)
+            database_backup = backup / "planealerts.db"
+            if database_backup.exists():
+                shutil.copy2(database_backup, db_path)
+            else:
+                db_path.unlink(missing_ok=True)
         install_dependencies(root)
         restart_service()
         raise
