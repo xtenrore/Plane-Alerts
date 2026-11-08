@@ -2,6 +2,18 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v5.8.8 — Community Self-Host Reliability
+
+- Consolidated post-v5.8.7 trajectory/lifecycle/Next60/provider-handoff and terminal-arrival replay fixes into the next release identity.
+- Recovered Prediction Lab backlog while preserving unsynchronized evidence and the persistent-volume storage boundary.
+- Hardened the community stable updater to record exact installed tag/commit and restore code, `.env`, installation metadata, setup checkpoint and SQLite data after a failed update.
+- Added exact-SHA application CI and community-matrix publication gates, native x64/ARM64 installer checks, Raspberry Pi ARM64 emulation, Docker Compose smoke validation and a real MongoDB migration/privacy integration.
+- Kept optional GitHub maintenance and allowlisted Railway secret-sync workflows outside the self-host runtime and installer path.
+- No new trajectory model or database schema version is introduced by this release; the cumulative upgrade from v5.5.3 still includes the documented v5.6.x operational-storage migrations.
+
+
+Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
+
 ## v5.8.7 — Docker Monitoring Readiness
 
 - Pointed the standalone Docker image health check at `/ready`, matching Compose and the existing Railway service configuration.
