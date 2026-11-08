@@ -1,6 +1,6 @@
 # Self-hosting Plane Alerts
 
-Plane Alerts v5.8.7 supports guided and manual self-hosting on Linux x86-64, Linux ARM64, Raspberry Pi 4/5 with a 64-bit OS, Windows x64 and Windows ARM64. The alert-critical prediction path remains the same deterministic/statistical code used in production.
+Plane Alerts v5.8.8 supports guided and manual self-hosting on Linux x86-64, Linux ARM64, Raspberry Pi 4/5 with a 64-bit OS, Windows x64 and Windows ARM64. The alert-critical prediction path remains the same deterministic/statistical code used in production.
 
 ## Recommended: guided stable-release installer
 
@@ -176,7 +176,7 @@ docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
 
-The previous published community stable before the v5.8.7 community candidate is v5.5.3. Do not assume that checking out an older code tag reverses a completed data migration. If rolling back across the v5.6.x operational-storage migrations, restore the matching pre-upgrade Mongo backup and preserve the persistent-volume route, notification and Prediction Lab data. Never overwrite newer normal user/configuration data casually.
+The previous published community stable before the v5.8.8 community candidate is v5.5.3. Do not assume that checking out an older code tag reverses a completed data migration. If rolling back across the v5.6.x operational-storage migrations, restore the matching pre-upgrade Mongo backup and preserve the persistent-volume route, notification and Prediction Lab data. Never overwrite newer normal user/configuration data casually.
 
 ## Reporting a problem
 
