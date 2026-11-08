@@ -142,7 +142,6 @@ jobs:
 
           MATRIX_RUN="$(jq -c --arg sha "$TESTED_SHA" '
             [.workflow_runs[]
-              | select(.status == "completed" and .conclusion == "success")
               | select(
                   (.event == "workflow_dispatch"
                     and .name == ("Community matrix for Plane Alerts " + $sha)
@@ -158,7 +157,13 @@ jobs:
           ' <<< "$RUNS")"
 
           [[ -n "$MATRIX_RUN" ]] || {
-            echo "No successful exact-SHA community matrix run exists for $TESTED_SHA." >&2
+            echo "No exact-SHA community matrix run exists for $TESTED_SHA." >&2
+            exit 1
+          }
+          MATRIX_STATUS="$(jq -r '.status' <<< "$MATRIX_RUN")"
+          MATRIX_CONCLUSION="$(jq -r '.conclusion' <<< "$MATRIX_RUN")"
+          [[ "$MATRIX_STATUS" == "completed" && "$MATRIX_CONCLUSION" == "success" ]] || {
+            echo "Latest exact-SHA community matrix is not successful: status=$MATRIX_STATUS conclusion=$MATRIX_CONCLUSION" >&2
             exit 1
           }
 
