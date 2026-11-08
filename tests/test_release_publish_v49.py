@@ -99,7 +99,7 @@ def test_community_matrix_is_manual_and_automation_branch_only():
     assert "contents: read" in workflow
 
 
-def test_railway_deploy_gate_runs_outside_railway_container_and_targets_only_main_service():
+def test_railway_deploy_gate_skips_community_only_changes_and_targets_main_service():
     workflow = _deploy_workflow_text()
     tested_sha = "${{ github.event.workflow_run.head_sha }}"
     gate_block, deploy_block = workflow.split("\n  deploy:\n", 1)
@@ -108,21 +108,22 @@ def test_railway_deploy_gate_runs_outside_railway_container_and_targets_only_mai
     assert "container:" not in gate_block
     assert f"DEPLOY_SHA: {tested_sha}" in gate_block
     assert 'gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq' in gate_block
-    assert 'if [[ "${CURRENT_MAIN_SHA}" != "${DEPLOY_SHA}" ]]' in gate_block
+    assert 'if [[ "$CURRENT_MAIN_SHA" != "$DEPLOY_SHA" ]]' in gate_block
+    assert "git diff --name-only" in gate_block
+    assert "RUNTIME_CHANGED=false" in gate_block
+    assert "app/*|worker.py|Dockerfile|requirements.txt" in gate_block
+    assert "requirements.lock" in gate_block
+    assert "community/docs/installer-only commit" in gate_block
     assert 'echo "deploy=false" >> "$GITHUB_OUTPUT"' in gate_block
-    assert "git fetch" not in gate_block
-    assert "git rev-parse" not in gate_block
+    assert 'echo "deploy=true" >> "$GITHUB_OUTPUT"' in gate_block
 
     assert "needs: gate" in deploy_block
     assert "if: needs.gate.outputs.deploy == 'true'" in deploy_block
     assert "container: ghcr.io/railwayapp/cli:latest" in deploy_block
     assert f"DEPLOY_SHA: {tested_sha}" in deploy_block
     assert f"ref: {tested_sha}" in deploy_block
-    assert '--message "Plane Alerts main ${DEPLOY_SHA}"' in deploy_block
-    assert "MAIN_SERVICE_ID" in deploy_block
-
-
-def test_v490_release_notes_exist_for_automatic_publishing():
+    assert '--message "Plane Alerts main $DEPLOY_SHA"' in deploy_block
+    assert "MAIN_SERVICE_ID" in deploy_blockdef test_v490_release_notes_exist_for_automatic_publishing():
     notes = Path("docs/releases/v4.9.0.md")
     assert notes.exists()
     text = notes.read_text(encoding="utf-8")
