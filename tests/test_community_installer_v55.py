@@ -151,9 +151,9 @@ def _make_local_release_repo(tmp_path: Path) -> tuple[Path, str, str]:
 
     (work / "tracked.txt").write_text("new release\n", encoding="utf-8")
     git(work, "add", "tracked.txt")
-    git(work, "commit", "-m", "community v5.8.7 candidate")
+    git(work, "commit", "-m", "community v5.8.8 candidate")
     new_commit = git(work, "rev-parse", "HEAD")
-    git(work, "tag", "v5.8.7")
+    git(work, "tag", "v5.8.8")
     git(work, "push", "origin", "main", "--tags")
 
     subprocess.run(["git", "clone", str(remote), str(install)], check=True, text=True, capture_output=True)
@@ -174,7 +174,7 @@ def test_updater_success_records_exact_stable_tag_and_commit(tmp_path: Path, mon
     checkpoint_path.write_text(json.dumps({"step": "ready", "secrets": "not-stored"}), encoding="utf-8")
     (root / ".env").write_text("DATABASE_BACKEND=mongodb\nMONGO_URI=mongodb://127.0.0.1:27017\n", encoding="utf-8")
 
-    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.7", "draft": False, "prerelease": False})
+    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
     monkeypatch.setattr(installer, "install_dependencies", lambda _root: None)
     monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: True)
     monkeypatch.setattr(installer, "restart_service", lambda: None)
@@ -184,8 +184,8 @@ def test_updater_success_records_exact_stable_tag_and_commit(tmp_path: Path, mon
     saved = json.loads(metadata_path.read_text(encoding="utf-8"))
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert installer.git_head(root) == new_commit
-    assert installer.current_tag(root) == "v5.8.7"
-    assert saved["installed_tag"] == "v5.8.7"
+    assert installer.current_tag(root) == "v5.8.8"
+    assert saved["installed_tag"] == "v5.8.8"
     assert saved["installed_commit"] == new_commit
     assert saved["verified_at"]
     assert checkpoint["step"] == "ready"
@@ -216,7 +216,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     metadata_path.write_text(json.dumps(original_metadata), encoding="utf-8")
     checkpoint_path.write_text(json.dumps(original_checkpoint), encoding="utf-8")
 
-    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.7", "draft": False, "prerelease": False})
+    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
     doctor_results = iter([True, True, True])
     monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: next(doctor_results))
     monkeypatch.setattr(installer, "restart_service", lambda: None)
@@ -256,7 +256,7 @@ def test_updater_refuses_tracked_local_changes_before_fetching(tmp_path: Path, m
     installer = _installer()
     root, _old_commit, _new_commit = _make_local_release_repo(tmp_path)
     (root / "tracked.txt").write_text("user edit\n", encoding="utf-8")
-    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.7", "draft": False, "prerelease": False})
+    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
     with pytest.raises(RuntimeError, match="Local changes were detected"):
         installer.update(root)
 
@@ -301,7 +301,7 @@ def test_support_bundle_redacts_credentials_and_receiver_coordinates(tmp_path: P
     metadata_path.parent.mkdir(parents=True)
     metadata_path.write_text(json.dumps({"community": True, "update_policy": "manual"}), encoding="utf-8")
     monkeypatch.setattr(installer, "git_head", lambda _root: "a" * 40)
-    monkeypatch.setattr(installer, "current_tag", lambda _root: "v5.8.7")
+    monkeypatch.setattr(installer, "current_tag", lambda _root: "v5.8.8")
 
     bundle = installer.support_bundle(root)
     payload = json.loads(bundle.read_text(encoding="utf-8"))
@@ -337,7 +337,7 @@ def test_fresh_install_configures_sqlite_and_marks_ready(tmp_path: Path, monkeyp
         "install_service",
         lambda _root, metadata: calls.append(("service", metadata["database_backend"])),
     )
-    monkeypatch.setattr(installer, "current_tag", lambda _root: "v5.8.7")
+    monkeypatch.setattr(installer, "current_tag", lambda _root: "v5.8.8")
     monkeypatch.setattr(installer, "git_head", lambda _root: "a" * 40)
 
     installer.install(root)
@@ -348,7 +348,7 @@ def test_fresh_install_configures_sqlite_and_marks_ready(tmp_path: Path, monkeyp
     assert values["TELEGRAM_BOT_TOKEN"] == "123456:mock-community-token"
     metadata = json.loads((root / ".community" / "installation.json").read_text(encoding="utf-8"))
     checkpoint = json.loads((root / ".community" / "setup-state.json").read_text(encoding="utf-8"))
-    assert metadata["installed_tag"] == "v5.8.7"
+    assert metadata["installed_tag"] == "v5.8.8"
     assert metadata["installed_commit"] == "a" * 40
     assert metadata["database_backend"] == "sqlite"
     assert "mock-community-token" not in json.dumps(metadata)
