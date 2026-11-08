@@ -175,6 +175,7 @@ def test_updater_success_records_exact_stable_tag_and_commit(tmp_path: Path, mon
     (root / ".env").write_text("DATABASE_BACKEND=mongodb\nMONGO_URI=mongodb://127.0.0.1:27017\n", encoding="utf-8")
 
     monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
+    monkeypatch.setattr(installer, "stop_service", lambda: None)
     monkeypatch.setattr(installer, "install_dependencies", lambda _root: None)
     monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: True)
     monkeypatch.setattr(installer, "restart_service", lambda: None)
@@ -201,13 +202,13 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     installer = _installer()
     root, old_commit, _new_commit = _make_local_release_repo(tmp_path)
     data_root = root / ".community"
-    database_path = data_root / "data" / "planealerts.db"
+    database_path = root / "data" / "planealerts.db"
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database_path) as db:
         db.execute("CREATE TABLE state (value TEXT NOT NULL)")
         db.execute("INSERT INTO state(value) VALUES ('before-update')")
 
-    original_env = f"DATABASE_BACKEND=sqlite\nSQLITE_PATH={database_path}\nTELEGRAM_BOT_TOKEN=old-token\n"
+    original_env = "DATABASE_BACKEND=sqlite\nSQLITE_PATH=data/planealerts.db\nTELEGRAM_BOT_TOKEN=old-token\n"
     (root / ".env").write_text(original_env, encoding="utf-8")
     metadata_path = data_root / "installation.json"
     checkpoint_path = data_root / "setup-state.json"
@@ -217,6 +218,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     checkpoint_path.write_text(json.dumps(original_checkpoint), encoding="utf-8")
 
     monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
+    monkeypatch.setattr(installer, "stop_service", lambda: None)
     doctor_results = iter([True, True, True])
     monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: next(doctor_results))
     monkeypatch.setattr(installer, "restart_service", lambda: None)
@@ -250,6 +252,36 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     with sqlite3.connect(database_path) as db:
         assert db.execute("SELECT value FROM state").fetchone()[0] == "before-update"
     assert install_calls == 2
+
+
+def test_updater_stops_service_before_snapshot_and_restarts_if_snapshot_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer = _installer()
+    root, old_commit, _new_commit = _make_local_release_repo(tmp_path)
+    (root / ".env").write_text("DATABASE_BACKEND=sqlite\nSQLITE_PATH=data/planealerts.db\n", encoding="utf-8")
+    data_root = root / ".community"
+    data_root.mkdir(parents=True, exist_ok=True)
+    (data_root / "installation.json").write_text(
+        '{"format":1,"community":true,"repository":"xtenrore/Plane-Alerts","installed_tag":"v5.5.3","installed_commit":"'
+        + old_commit
+        + '","update_policy":"manual"}',
+        encoding="utf-8",
+    )
+    (data_root / "setup-state.json").write_text('{"step":"ready","secrets":"not-stored"}', encoding="utf-8")
+
+    calls: list[str] = []
+    monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
+    monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: True)
+    monkeypatch.setattr(installer, "stop_service", lambda: calls.append("stop"))
+    monkeypatch.setattr(installer, "backup_for_update", lambda _root: (calls.append("backup"), (_ for _ in ()).throw(OSError("snapshot failed")))[1])
+    monkeypatch.setattr(installer, "restart_service", lambda: calls.append("restart"))
+
+    with pytest.raises(OSError, match="snapshot failed"):
+        installer.update(root)
+
+    assert calls == ["stop", "backup", "restart"]
+    assert installer.git_head(root) == old_commit
 
 
 def test_updater_refuses_tracked_local_changes_before_fetching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
