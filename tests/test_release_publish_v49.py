@@ -32,6 +32,15 @@ def test_community_release_publish_requires_explicit_weekly_tested_sha():
     assert "contents: write" in workflow
 
 
+def test_community_release_publish_requires_exact_sha_application_ci():
+    workflow = _workflow_text()
+    assert "Verify successful Railway/application CI for this exact SHA" in workflow
+    assert 'head_branch == "main" and .head_sha == $sha' in workflow
+    assert 'select(.name == "pytest")' in workflow
+    assert 'select(.name == "Run full test suite")' in workflow
+    assert "No successful full application CI run exists for exact main SHA" in workflow
+
+
 def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix():
     workflow = _workflow_text()
     tested_sha = "${{ steps.candidate.outputs.sha }}"
