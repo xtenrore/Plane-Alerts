@@ -409,11 +409,16 @@ def current_tag(root: Path) -> str:
 
 
 def backup_for_update(root: Path) -> Path:
-    env_path, metadata_path, _ = installation_paths(root)
+    env_path, metadata_path, checkpoint_path = installation_paths(root)
     backup_root = metadata_path.parent / "backups" / datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_root.mkdir(parents=True, exist_ok=True)
-    if env_path.exists():
-        shutil.copy2(env_path, backup_root / ".env")
+    for source_path, backup_name in (
+        (env_path, ".env"),
+        (metadata_path, "installation.json"),
+        (checkpoint_path, "setup-state.json"),
+    ):
+        if source_path.exists():
+            shutil.copy2(source_path, backup_root / backup_name)
     values = parse_env(env_path)
     if values.get("DATABASE_BACKEND", "").lower() == "sqlite":
         db_path = Path(values.get("SQLITE_PATH", ""))
@@ -465,13 +470,37 @@ def update(root: Path) -> bool:
         time.sleep(3)
         if not run_doctor(root, offline=False):
             raise RuntimeError("Target release failed live doctor")
+        _, metadata_path, checkpoint_path = installation_paths(root)
+        metadata: dict[str, Any] = {}
+        if metadata_path.exists():
+            try:
+                existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    metadata = existing
+            except (OSError, ValueError, TypeError):
+                raise RuntimeError("Existing installation metadata is unreadable; update cannot be recorded safely")
+        metadata.setdefault("format", 1)
+        metadata.setdefault("community", True)
+        metadata.setdefault("repository", REPO)
+        metadata.update({"installed_tag": tag, "installed_commit": target_commit, "verified_at": now_iso()})
+        write_json_atomic(metadata_path, metadata)
+        write_json_atomic(checkpoint_path, {"step": "ready", "updated_at": now_iso(), "secrets": "not-stored"})
         print(f"Updated successfully to {tag} ({target_commit[:12]}).")
         return True
     except Exception:
         print("Update validation failed. Rolling back to the previously verified commit...")
         run(["git", "checkout", "--detach", old_commit], cwd=root, check=False)
-        if (backup / ".env").exists():
-            shutil.copy2(backup / ".env", root / ".env")
+        _, metadata_path, checkpoint_path = installation_paths(root)
+        for backup_name, target_path in (
+            (".env", root / ".env"),
+            ("installation.json", metadata_path),
+            ("setup-state.json", checkpoint_path),
+        ):
+            backup_path = backup / backup_name
+            if backup_path.exists():
+                shutil.copy2(backup_path, target_path)
+            else:
+                target_path.unlink(missing_ok=True)
         values = parse_env(root / ".env")
         db_path = Path(values.get("SQLITE_PATH", "")) if values.get("SQLITE_PATH") else None
         if db_path and (backup / "planealerts.db").exists():
