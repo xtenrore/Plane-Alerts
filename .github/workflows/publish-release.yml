@@ -28,30 +28,49 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Resolve exact release candidate SHA
+      - name: Checkout publish trigger commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve and verify exact release candidate SHA
         id: candidate
         shell: bash
         env:
           INPUT_TESTED_SHA: ${{ inputs.tested_sha }}
           EVENT_KIND: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          TRIGGER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_KIND" == "workflow_dispatch" ]]; then
             TESTED_SHA="$INPUT_TESTED_SHA"
+            [[ "$TRIGGER_SHA" == "$TESTED_SHA" ]] || {
+              echo "Manual publication must be dispatched from the exact tested main commit." >&2
+              exit 1
+            }
           else
             PREFIX="automation/community-publish-"
             [[ "$REF_NAME" == "$PREFIX"* ]] || { echo "Unexpected community publish trigger branch." >&2; exit 1; }
             TESTED_SHA="${REF_NAME#"$PREFIX"}"
+            PARENTS="$(git show -s --format=%P "$TRIGGER_SHA")"
+            [[ "$PARENTS" == "$TESTED_SHA" ]] || {
+              echo "Publish trigger commit must be a direct child of the tested SHA." >&2
+              exit 1
+            }
+            TRIGGER_TREE="$(git rev-parse "$TRIGGER_SHA^{tree}")"
+            TESTED_TREE="$(git rev-parse "$TESTED_SHA^{tree}")"
+            [[ "$TRIGGER_TREE" == "$TESTED_TREE" ]] || {
+              echo "Publish trigger branch changed the tested source tree." >&2
+              exit 1
+            }
           fi
           [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "tested_sha must be a full 40-character commit SHA." >&2; exit 1; }
+          git checkout --detach "$TESTED_SHA"
+          ACTUAL="$(git rev-parse HEAD)"
+          [[ "$ACTUAL" == "$TESTED_SHA" ]]
           echo "sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout exact community-tested commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.candidate.outputs.sha }}
-          fetch-depth: 0
 
       - name: Confirm candidate is the current exact main commit
         shell: bash
