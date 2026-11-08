@@ -6,7 +6,9 @@ Plane Alerts uses separate production releases. Detailed notes live under `docs/
 
 - Pointed the standalone Docker image health check at `/ready`, matching Compose and the existing Railway service configuration.
 - Added regression coverage for degraded and ready responses and both Docker health-check definitions.
-- No prediction, provider, storage-schema, dependency, configuration or installer change; full standalone Docker platform validation remains in the weekly Community Release workflow.
+- Hardened the community updater to record the exact installed stable tag/commit and restore `.env`, installation metadata, setup checkpoint and SQLite snapshot after a failed update.
+- Added installer regressions for update/rollback, dirty-tree refusal, Telegram/OpenSky/local receiver validation and support-bundle redaction, plus a real MongoDB migration integration gate.
+- No live prediction, provider, storage-schema, dependency, configuration or five-second monitoring behavior change; the full cross-platform community matrix remains owned by the weekly Community Release workflow.
 
 ## v5.8.6 — Bounded ADS-B Diagnostics
 
