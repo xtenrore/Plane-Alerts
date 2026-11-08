@@ -312,3 +312,50 @@ def test_support_bundle_redacts_credentials_and_receiver_coordinates(tmp_path: P
     assert "123456:secret" not in rendered
     assert "41.1" not in rendered
     assert "28.7" not in rendered
+
+def test_fresh_install_configures_sqlite_and_marks_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    installer = _installer()
+    root = tmp_path / "fresh-install"
+    root.mkdir()
+    (root / ".env.example").write_text((ROOT / ".env.example").read_text(encoding="utf-8"), encoding="utf-8")
+
+    calls: list[object] = []
+    monkeypatch.setattr(installer, "install_dependencies", lambda _root: calls.append("dependencies"))
+    monkeypatch.setattr(installer, "choose", lambda _prompt, _options, default=1: default)
+    monkeypatch.setattr(installer, "prompt_secret", lambda *_args, **_kwargs: "123456:mock-community-token")
+    monkeypatch.setattr(installer, "validate_telegram", lambda _token: (True, "Telegram mock authenticated"))
+    monkeypatch.setattr(installer.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        installer,
+        "run_doctor",
+        lambda _root, offline=False: calls.append(("doctor", offline)) or True,
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda _root, metadata: calls.append(("service", metadata["database_backend"])),
+    )
+    monkeypatch.setattr(installer, "current_tag", lambda _root: "v5.8.7")
+    monkeypatch.setattr(installer, "git_head", lambda _root: "a" * 40)
+
+    installer.install(root)
+
+    values = installer.parse_env(root / ".env")
+    assert values["DATABASE_BACKEND"] == "sqlite"
+    assert values["SQLITE_PATH"].endswith(".community/data/planealerts.db")
+    assert values["TELEGRAM_BOT_TOKEN"] == "123456:mock-community-token"
+    metadata = json.loads((root / ".community" / "installation.json").read_text(encoding="utf-8"))
+    checkpoint = json.loads((root / ".community" / "setup-state.json").read_text(encoding="utf-8"))
+    assert metadata["installed_tag"] == "v5.8.7"
+    assert metadata["installed_commit"] == "a" * 40
+    assert metadata["database_backend"] == "sqlite"
+    assert "mock-community-token" not in json.dumps(metadata)
+    assert checkpoint["step"] == "ready"
+    assert checkpoint["secrets"] == "not-stored"
+    assert "dependencies" in calls
+    assert ("doctor", True) in calls
+    assert ("doctor", False) in calls
+    assert ("service", "sqlite") in calls
+
