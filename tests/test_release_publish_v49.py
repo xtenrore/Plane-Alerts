@@ -42,7 +42,7 @@ def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix()
     assert "automation/community-matrix-" in workflow
     assert "community-validation-summary" in workflow
     assert "Verify exact release candidate checkout" in workflow
-    assert "gh run download" in workflowdef test_release_publish_is_version_and_notes_driven():
+    assert "gh run download" in workflow\n\n\ndef test_release_publish_is_version_and_notes_driven():
     workflow = _workflow_text()
     assert "from app.version import VERSION" in workflow
     assert 'TAG="v$VERSION"' in workflow
@@ -52,7 +52,7 @@ def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix()
     assert "requirements.lock" in workflow
     assert ".env.example" in workflow
     assert "docs/self-hosting.md" in workflow
-    assert "weekly Community Release workflow" in workflowdef test_release_publish_never_moves_an_existing_tag():
+    assert "weekly Community Release workflow" in workflow\n\n\ndef test_release_publish_never_moves_an_existing_tag():
     workflow = _workflow_text()
     assert 'git rev-parse -q --verify "refs/tags/$TAG^{commit}"' in workflow
     assert '[[ "$TAG_SHA" == "$TESTED_SHA" ]]' in workflow
@@ -63,7 +63,7 @@ def test_community_release_publish_uses_exact_tested_sha_and_successful_matrix()
     assert "sha256sum -c SHA256SUMS.txt" in workflow
     assert "cmp " in workflow
     assert "latest stable channel" in workflow
-    assert "Potential embedded credentials in release assets" in workflowdef test_railway_test_workflow_does_not_run_long_community_platform_matrix():
+    assert "Potential embedded credentials in release assets" in workflow\n\n\ndef test_railway_test_workflow_does_not_run_long_community_platform_matrix():
     workflow = _test_workflow_text()
     assert "  self-hosting:" not in workflow
     assert "docker/setup-qemu-action" not in workflow
@@ -88,7 +88,7 @@ def test_community_matrix_is_manual_and_automation_branch_only():
     assert "raspberry-pi-arm64-emulation:" in workflow
     assert "mongodb-upgrade:" in workflow
     assert "community-validation-summary:" in workflow
-    assert workflow.count("Verify exact release candidate checkout") == 7def test_railway_deploy_runs_only_after_trusted_green_main_push():
+    assert workflow.count("Verify exact release candidate checkout") == 7\n\n\ndef test_railway_deploy_runs_only_after_trusted_green_main_push():
     workflow = _deploy_workflow_text()
     assert "workflow_run:" in workflow
     assert "github.event.workflow_run.conclusion == 'success'" in workflow
@@ -123,7 +123,7 @@ def test_railway_deploy_gate_skips_community_only_changes_and_targets_main_servi
     assert f"DEPLOY_SHA: {tested_sha}" in deploy_block
     assert f"ref: {tested_sha}" in deploy_block
     assert '--message "Plane Alerts main $DEPLOY_SHA"' in deploy_block
-    assert "MAIN_SERVICE_ID" in deploy_blockdef test_v490_release_notes_exist_for_automatic_publishing():
+    assert "MAIN_SERVICE_ID" in deploy_block\n\n\ndef test_v490_release_notes_exist_for_automatic_publishing():
     notes = Path("docs/releases/v4.9.0.md")
     assert notes.exists()
     text = notes.read_text(encoding="utf-8")
