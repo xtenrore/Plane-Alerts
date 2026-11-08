@@ -109,6 +109,9 @@ def test_community_matrix_is_manual_and_automation_branch_only():
     assert "raspberry-pi-arm64-emulation:" in workflow
     assert "mongodb-upgrade:" in workflow
     assert "community-validation-summary:" in workflow
+    assert "docker compose config --quiet" in workflow
+    assert "docker compose run --rm plane-alerts planealerts doctor --offline" in workflow
+    assert "Build x64 community Docker image and verify readiness healthcheck" in workflow
     assert workflow.count("Verify exact release candidate checkout") == 7
 
 
