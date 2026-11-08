@@ -86,6 +86,43 @@ jobs:
           }
           [[ "$(git rev-parse HEAD)" == "$TESTED_SHA" ]]
 
+      - name: Verify successful Railway/application CI for this exact SHA
+        id: application_ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_WORKFLOW_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml" --jq '.id')"
+          TEST_RUNS="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$TEST_WORKFLOW_ID/runs?per_page=100")"
+          TEST_RUN="$(jq -c --arg sha "$TESTED_SHA" '
+            [.workflow_runs[]
+              | select(.status == "completed" and .conclusion == "success")
+              | select(.event == "push" and .head_branch == "main" and .head_sha == $sha)
+            ]
+            | sort_by(.updated_at)
+            | last // empty
+          ' <<< "$TEST_RUNS")"
+          [[ -n "$TEST_RUN" ]] || {
+            echo "No successful full application CI run exists for exact main SHA $TESTED_SHA." >&2
+            exit 1
+          }
+          TEST_RUN_ID="$(jq -r '.id' <<< "$TEST_RUN")"
+          TEST_JOBS="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TEST_RUN_ID/jobs?per_page=100")"
+          PYTEST_JOB="$(jq -c '[.jobs[] | select(.name == "pytest")] | first // empty' <<< "$TEST_JOBS")"
+          [[ -n "$PYTEST_JOB" ]] || { echo "Missing pytest job in exact-SHA application CI." >&2; exit 1; }
+          [[ "$(jq -r '.conclusion' <<< "$PYTEST_JOB")" == "success" ]] || {
+            echo "Exact-SHA pytest job did not pass." >&2
+            exit 1
+          }
+          FULL_SUITE="$(jq -r '[.steps[] | select(.name == "Run full test suite") | .conclusion] | first // empty' <<< "$PYTEST_JOB")"
+          [[ "$FULL_SUITE" == "success" ]] || {
+            echo "Exact-SHA full application test suite did not pass." >&2
+            exit 1
+          }
+          echo "run_id=$TEST_RUN_ID" >> "$GITHUB_OUTPUT"
+
       - name: Verify successful community matrix for this exact SHA
         id: matrix
         env:
