@@ -1,4 +1,4 @@
-# Plane Alerts v5.5.1 production/community dependency lock
+# Plane Alerts v5.8.7 production/community dependency lock
 # Exact versions remain pinned; uvloop is POSIX-only and is excluded on Windows.
 annotated-doc==0.0.5
 annotated-types==0.8.0
