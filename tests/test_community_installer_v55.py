@@ -486,3 +486,11 @@ def test_uninstall_remove_data_removes_only_configuration_and_community_data(
     assert not env_path.exists()
     assert not metadata_path.parent.exists()
     assert (root / "user-notes.txt").read_text(encoding="utf-8") == "preserve files outside the managed data directory"
+
+def test_windows_installers_add_new_git_install_to_current_process_path() -> None:
+    for filename in ("setup-windows.bat", "setup-windows-arm64.bat"):
+        script = (ROOT / filename).read_text(encoding="utf-8")
+        git_install = script.index("winget install --id Git.Git")
+        path_update = script.index('set "PATH=%ProgramFiles%\\Git\\cmd;%PATH%"', git_install)
+        git_check = script.index("git --version", git_install)
+        assert git_install < path_update < git_check, filename
