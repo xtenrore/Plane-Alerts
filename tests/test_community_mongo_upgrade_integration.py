@@ -130,6 +130,7 @@ async def test_v553_to_v588_mongo_upgrade_migrates_operational_data_and_preserve
         archive_text = "\n".join(path.read_text(encoding="utf-8") for path in archive_files)
         assert "fixture-secret-must-not-export" not in archive_text
         assert "fixture-api-key-must-not-export" not in archive_text
+        assert "778899" not in archive_text
         assert "telegram_bot_token" not in archive_text.lower()
         assert "api_key" not in archive_text.lower()
         assert "observer_ref" in archive_text
