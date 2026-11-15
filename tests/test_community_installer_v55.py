@@ -494,3 +494,52 @@ def test_windows_installers_add_new_git_install_to_current_process_path() -> Non
         path_update = script.index('set "PATH=%ProgramFiles%\\Git\\cmd;%PATH%"', git_install)
         git_check = script.index("git --version", git_install)
         assert git_install < path_update < git_check, filename
+
+
+
+def test_linux_service_registration_sets_restart_and_boot_autostart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    installer = _installer()
+    writes: dict[str, str] = {}
+    commands: list[list[str]] = []
+
+    def capture_write(path: Path, data: str, *args, **kwargs):
+        writes[str(path)] = data
+        return len(data)
+
+    monkeypatch.setattr(Path, "write_text", capture_write)
+    monkeypatch.setattr(installer, "run", lambda command, **_kwargs: commands.append(command))
+
+    installer.install_service(tmp_path, {"update_policy": "automatic"})
+
+    service_unit = writes["/etc/systemd/system/plane-alerts-community.service"]
+    update_service = writes["/etc/systemd/system/plane-alerts-community-update.service"]
+    update_timer = writes["/etc/systemd/system/plane-alerts-community-update.timer"]
+    assert "Restart=always" in service_unit
+    assert "WantedBy=multi-user.target" in service_unit
+    assert "planealerts" in service_unit or "uvicorn app.community_main_v55:app" in service_unit
+    assert "OnCalendar=*-*-* 04:15:00" in update_timer
+    assert "Persistent=true" in update_timer
+    assert "community_installer_v55.py --update" in update_service
+    assert commands == [
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable", "--now", "plane-alerts-community.service"],
+        ["systemctl", "enable", "--now", "plane-alerts-community-update.timer"],
+    ]
+
+
+def test_windows_service_registration_uses_boot_task_and_optional_stable_update_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer = _installer()
+    commands: list[list[str]] = []
+    fake_os = type("FakeOS", (), {"name": "nt"})()
+    monkeypatch.setattr(installer, "os", fake_os)
+    monkeypatch.setattr(installer, "run", lambda command, **_kwargs: commands.append(command))
+
+    installer.install_service(tmp_path, {"update_policy": "automatic"})
+
+    assert commands[0][:6] == ["schtasks", "/Create", "/TN", "Plane Alerts Community", "/SC", "ONSTART"]
+    assert "/RU" in commands[0] and "SYSTEM" in commands[0]
+    assert commands[1][:6] == ["schtasks", "/Create", "/TN", "Plane Alerts Community Updater", "/SC", "DAILY"]
+    assert "--update" in " ".join(commands[1])
+    assert commands[2] == ["schtasks", "/Run", "/TN", "Plane Alerts Community"]
