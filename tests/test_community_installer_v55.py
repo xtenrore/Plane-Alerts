@@ -383,7 +383,7 @@ def test_fresh_install_configures_sqlite_and_marks_ready(tmp_path: Path, monkeyp
 
     values = installer.parse_env(root / ".env")
     assert values["DATABASE_BACKEND"] == "sqlite"
-    assert values["SQLITE_PATH"].endswith(".community/data/planealerts.db")
+    assert Path(values["SQLITE_PATH"]).parts[-3:] == (".community", "data", "planealerts.db")
     assert values["TELEGRAM_BOT_TOKEN"] == "123456:mock-community-token"
     metadata = json.loads((root / ".community" / "installation.json").read_text(encoding="utf-8"))
     checkpoint = json.loads((root / ".community" / "setup-state.json").read_text(encoding="utf-8"))
@@ -498,22 +498,26 @@ def test_windows_installers_add_new_git_install_to_current_process_path() -> Non
 
 
 def test_linux_service_registration_sets_restart_and_boot_autostart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
     installer = _installer()
     writes: dict[str, str] = {}
     commands: list[list[str]] = []
 
     def capture_write(path: Path, data: str, *args, **kwargs):
-        writes[str(path)] = data
+        writes[path.name] = data
         return len(data)
 
+    # Exercise the Linux systemd branch even when this shared test file runs on Windows.
+    monkeypatch.setattr(installer, "os", SimpleNamespace(name="posix"))
     monkeypatch.setattr(Path, "write_text", capture_write)
     monkeypatch.setattr(installer, "run", lambda command, **_kwargs: commands.append(command))
 
     installer.install_service(tmp_path, {"update_policy": "automatic"})
 
-    service_unit = writes["/etc/systemd/system/plane-alerts-community.service"]
-    update_service = writes["/etc/systemd/system/plane-alerts-community-update.service"]
-    update_timer = writes["/etc/systemd/system/plane-alerts-community-update.timer"]
+    service_unit = writes["plane-alerts-community.service"]
+    update_service = writes["plane-alerts-community-update.service"]
+    update_timer = writes["plane-alerts-community-update.timer"]
     assert "Restart=always" in service_unit
     assert "WantedBy=multi-user.target" in service_unit
     assert "planealerts" in service_unit or "uvicorn app.community_main_v55:app" in service_unit
