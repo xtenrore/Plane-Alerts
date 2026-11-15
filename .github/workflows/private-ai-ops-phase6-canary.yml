@@ -1,0 +1,97 @@
+name: Private Operations Phase 6 one-shot free inference canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ai-ops-phase6-canary
+  cancel-in-progress: false
+
+jobs:
+  one-packet-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GROQ_KEY: ${{ secrets.GROQ_KEY }}
+      MISTRAL_API: ${{ secrets.MISTRAL_API }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      AI_OPS_GITHUB_DR_TOKEN: ${{ secrets.AI_OPS_GITHUB_DR_TOKEN }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      AI_OPS_PAID_USAGE_ALLOWED: 'false'
+      # Live catalog checked, and the shared inference prompt now states the
+      # exact outer JSON schema and numeric-array field types for one canary.
+      AI_OPS_CANARY_GROQ_MODEL: openai/gpt-oss-120b
+      AI_OPS_CANARY_MISTRAL_MODEL: mistral-small-latest
+      AI_OPS_CANARY_SECOND_PROVIDER: gemini
+      AI_OPS_CANARY_GEMINI_MODEL: gemini-3.8-flash
+      # A single bounded request reports only the failure class and HTTP status.
+      PROJECT_ID: 167a00b7-c56c-4cbb-9f24-3daded12443c
+      ENVIRONMENT_ID: 092b0d8c-cfd9-44d4-9f25-64795ea634d6
+      SERVICE_ID: d701080d-1a41-4054-a810-fd89742e1187
+      WORKSPACE_ID: 3fcd544c-7798-4d82-b331-8ea8294ad9e5
+    steps:
+      - name: Check out exact engineering commit
+        uses: actions/checkout@v4
+        with:
+          path: engineering
+      - name: Read existing Prediction Lab source without changing it
+        uses: actions/checkout@v4
+        with:
+          # Retained Phase 4 source snapshot, before the growing daily branch
+          # exceeded the safety bound on source files per day.
+          ref: 2d6775b5b98a900b09d74124cfc409505bf751fa
+          path: evidence
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bounded inference dependencies
+        run: python -m pip install 'httpx>=0.27,<1'
+      - name: Refuse a superseded engineering commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/feature/private-ai-operations" --jq '.object.sha')"
+          test "$CURRENT" = "$GITHUB_SHA"
+      - name: One sanitized real packet, one call to each approved free provider
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd engineering
+          PYTHONPATH=. python scripts/private_ai_ops_phase6_canary.py \
+            --source ../evidence --hour 2026-09-27T08:00:00Z \
+            --source-commit "$SOURCE_COMMIT" \
+            --evidence-commit 2d6775b5b98a900b09d74124cfc409505bf751fa \
+            --output /tmp/phase6-canary.json
+      - name: Save sanitized checkpoint to owner-private DR and deploy isolated volume reader
+        run: |
+          set -euo pipefail
+          test "$(cat /tmp/phase6-canary.status)" = COMPLETE
+          cd engineering
+          PYTHONPATH=. python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          from app.private_ops.github_dr import GitHubDR
+          raw = Path('/tmp/phase6-canary.json').read_bytes()
+          assert len(raw) < 100000
+          repo = GitHubDR(os.environ['AI_OPS_GITHUB_DR_TOKEN'])
+          path = 'private-ai-ops/snapshots/phase6-canary-' + os.environ['GITHUB_SHA'] + '.json'
+          repo.put(path, raw)
+          assert repo.get(path) == raw
+          print('PHASE6_PRIVATE_CANARY_READBACK_VERIFIED sha256=' + hashlib.sha256(raw).hexdigest())
+          PY
+          npm install --global @railway/cli >/dev/null
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            test -n "${RAILWAY_API_TOKEN:-}"
+            export RAILWAY_TOKEN="$RAILWAY_API_TOKEN"
+          fi
+          railway variable set "AI_OPS_PHASE6_CANARY_SHA=$GITHUB_SHA" \
+            --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" --skip-deploys >/dev/null
+          railway up --project "$PROJECT_ID" --service "$SERVICE_ID" --environment "$ENVIRONMENT_ID" \
+            --ci --message "Private Ops Phase 6 independent canary $GITHUB_SHA"
