@@ -365,6 +365,20 @@ jobs:
           PY
           fi
 
+      - name: Reconfirm exact candidate is still current main immediately before publication
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main --no-tags
+          MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+          [[ "$MAIN_SHA" == "$TESTED_SHA" ]] || {
+            echo "Refusing publication because main advanced: candidate=$TESTED_SHA current_main=$MAIN_SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$TESTED_SHA" ]]
+
       - name: Publish immutable GitHub community release
         if: steps.existing.outputs.release_exists != 'true'
         env:
