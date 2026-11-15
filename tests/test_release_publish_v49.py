@@ -116,7 +116,10 @@ def test_community_matrix_is_manual_and_automation_branch_only():
     assert "docker compose config --quiet" in workflow
     assert "docker compose run --rm plane-alerts planealerts doctor --offline" in workflow
     assert "Build x64 community Docker image and verify readiness healthcheck" in workflow
-    assert workflow.count("Verify exact release candidate checkout") == 7
+    # Five platform jobs plus the real MongoDB integration job each verify checkout;
+    # the resolver has a separate current-main verification step.
+    assert "Verify exact current-main release candidate checkout" in workflow
+    assert workflow.count("Verify exact release candidate checkout") == 6
 
 
 def test_railway_deploy_runs_only_after_trusted_green_main_push():
@@ -142,7 +145,8 @@ def test_railway_deploy_gate_skips_community_only_changes_and_targets_main_servi
     assert 'if [[ "$CURRENT_MAIN_SHA" != "$DEPLOY_SHA" ]]' in gate_block
     assert "git diff --name-only" in gate_block
     assert "RUNTIME_CHANGED=false" in gate_block
-    assert "app/*|worker.py|Dockerfile|requirements.txt" in gate_block
+    assert "app/*)" in gate_block
+    assert "worker.py|Dockerfile|requirements.txt|pyproject.toml" in gate_block
     assert "requirements.lock" in gate_block
     assert "community/docs/installer-only commit" in gate_block
     assert 'echo "deploy=false" >> "$GITHUB_OUTPUT"' in gate_block
