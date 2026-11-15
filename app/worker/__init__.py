@@ -66,6 +66,12 @@ if "pytest" not in sys.modules:
 
     install_runtime_recovery_hotfix()
 
+    # Keep Next60 behavior unchanged but expose bounded per-request source counts
+    # and volume metadata so an empty forecast is diagnosable in production.
+    from app.worker.next60_diagnostics import install_next60_diagnostics
+
+    install_next60_diagnostics()
+
     # Keep new Prediction Lab records on the canonical spool schema while allowing
     # the authenticated bridge to archive the known v5.2 shadow schema backlog.
     from app.prediction_lab_schema_guard import install_prediction_lab_schema_guard
