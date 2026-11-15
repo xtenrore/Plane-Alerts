@@ -398,3 +398,91 @@ def test_fresh_install_configures_sqlite_and_marks_ready(tmp_path: Path, monkeyp
     assert ("doctor", False) in calls
     assert ("service", "sqlite") in calls
 
+
+
+def test_repair_preserves_existing_configuration_and_installation_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    installer = _installer()
+    root = tmp_path / "repair"
+    root.mkdir()
+    env_path, metadata_path, checkpoint_path = installer.installation_paths(root)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    env_text = "DATABASE_BACKEND=sqlite\nSQLITE_PATH=.community/data/planealerts.db\nTELEGRAM_BOT_TOKEN=private-token\n"
+    metadata = {"format": 1, "community": True, "installed_tag": "v5.5.3", "update_policy": "manual"}
+    checkpoint = {"step": "ready", "secrets": "not-stored"}
+    env_path.write_text(env_text, encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    calls: list[object] = []
+    monkeypatch.setattr(installer, "install_dependencies", lambda _root: calls.append("dependencies"))
+    monkeypatch.setattr(installer, "install_service", lambda _root, value: calls.append(("service", value.copy())))
+    monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: calls.append(("doctor", offline)) or True)
+
+    installer.repair(root)
+
+    assert env_path.read_text(encoding="utf-8") == env_text
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == metadata
+    assert json.loads(checkpoint_path.read_text(encoding="utf-8")) == checkpoint
+    assert "dependencies" in calls
+    assert any(item[0] == "service" and item[1]["installed_tag"] == "v5.5.3" for item in calls if isinstance(item, tuple))
+    assert ("doctor", False) in calls
+
+
+def test_uninstall_keep_data_preserves_configuration_metadata_checkpoint_and_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    installer = _installer()
+    root = tmp_path / "uninstall-keep"
+    root.mkdir()
+    env_path, metadata_path, checkpoint_path = installer.installation_paths(root)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path = metadata_path.parent / "data" / "planealerts.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("DATABASE_BACKEND=sqlite\nSQLITE_PATH=.community/data/planealerts.db\n", encoding="utf-8")
+    metadata_path.write_text('{"community":true}', encoding="utf-8")
+    checkpoint_path.write_text('{"step":"ready"}', encoding="utf-8")
+    db_path.write_bytes(b"sqlite-fixture")
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(installer, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(installer, "run", lambda command, **_kwargs: commands.append(command))
+
+    installer.uninstall(root, keep_data=True)
+
+    assert env_path.exists()
+    assert metadata_path.exists()
+    assert checkpoint_path.exists()
+    assert db_path.read_bytes() == b"sqlite-fixture"
+    assert len(commands) == 2
+    assert all(command[0] == "schtasks" for command in commands)
+
+
+def test_uninstall_remove_data_removes_only_configuration_and_community_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    installer = _installer()
+    root = tmp_path / "uninstall-remove"
+    root.mkdir()
+    env_path, metadata_path, checkpoint_path = installer.installation_paths(root)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("DATABASE_BACKEND=sqlite\n", encoding="utf-8")
+    metadata_path.write_text('{"community":true}', encoding="utf-8")
+    checkpoint_path.write_text('{"step":"ready"}', encoding="utf-8")
+    (root / "user-notes.txt").write_text("preserve files outside the managed data directory", encoding="utf-8")
+
+    monkeypatch.setattr(installer, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(installer, "run", lambda *_args, **_kwargs: None)
+
+    installer.uninstall(root, keep_data=False)
+
+    assert not env_path.exists()
+    assert not metadata_path.parent.exists()
+    assert (root / "user-notes.txt").read_text(encoding="utf-8") == "preserve files outside the managed data directory"
