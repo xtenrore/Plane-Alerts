@@ -219,10 +219,11 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     checkpoint_path.write_text(json.dumps(original_checkpoint), encoding="utf-8")
 
     monkeypatch.setattr(installer, "latest_stable_release", lambda: {"tag_name": "v5.8.8", "draft": False, "prerelease": False})
-    monkeypatch.setattr(installer, "stop_service", lambda: None)
+    service_calls: list[str] = []
+    monkeypatch.setattr(installer, "stop_service", lambda: service_calls.append("stop"))
     doctor_results = iter([True, True, True])
     monkeypatch.setattr(installer, "run_doctor", lambda _root, offline=False: next(doctor_results))
-    monkeypatch.setattr(installer, "restart_service", lambda: None)
+    monkeypatch.setattr(installer, "restart_service", lambda: service_calls.append("restart"))
     monkeypatch.setattr(installer.time, "sleep", lambda _seconds: None)
 
     install_calls = 0
@@ -253,6 +254,7 @@ def test_updater_rolls_back_code_env_sqlite_and_metadata_if_final_state_write_fa
     with sqlite3.connect(database_path) as db:
         assert db.execute("SELECT value FROM state").fetchone()[0] == "before-update"
     assert install_calls == 2
+    assert service_calls == ["stop", "restart", "stop", "restart"]
 
 
 def test_updater_stops_service_before_snapshot_and_restarts_if_snapshot_fails(
