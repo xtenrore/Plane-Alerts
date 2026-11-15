@@ -160,7 +160,7 @@ Do not interpret missing ADS-B coverage as proof that a route did or did not occ
 
 Before a version upgrade, back up normal application storage and persistent local data. Keep `.env` and local receiver configuration separately; do not put secrets into backups intended for sharing.
 
-For v5.5.1, keep the pre-upgrade Mongo backup until the Prediction Lab migration reports verified export counts and the application is production-healthy. The file archive is additive evidence; normal application data remains in the configured normal database.
+For upgrades from the previous published community stable v5.5.3 to v5.8.8, keep the verified pre-upgrade MongoDB backup until the cumulative operational-storage migrations report verified export counts and the application is production-healthy. The file archive is additive evidence; normal application data remains in MongoDB.
 
 The guided updater discovers only the newest stable semantic GitHub release, refuses dirty tracked source changes, and validates the target with offline and live doctor checks. Before changing code it backs up `.env`, installation metadata, setup checkpoint and (when SQLite is selected) the SQLite database. If validation or final state recording fails, it restores the previous code commit and those backed-up local files. It never follows `main` as the installed stable version.
 
