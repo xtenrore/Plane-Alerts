@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 WORKFLOW = Path(".github/workflows/publish-release.yml")
@@ -167,3 +168,23 @@ def test_v490_release_notes_exist_for_automatic_publishing():
     text = notes.read_text(encoding="utf-8")
     assert text.startswith("# Plane Alerts v4.9.0")
     assert "rollback" in text.lower()
+
+
+
+def test_railway_version_only_change_is_excluded_without_ignoring_runtime_version_fields():
+    workflow = _deploy_workflow_text()
+    gate_block = workflow.split("\n  deploy:\n", 1)[0]
+    match = re.search(r"grep -Ev '([^']+)'", gate_block)
+    assert match is not None
+    exclusion = match.group(1)
+
+    assert re.search(exclusion, '+VERSION = "5.8.8"')
+    assert re.search(exclusion, '+# v5.8.8 release identity')
+    assert not re.search(exclusion, '+PREDICTION_VERSION = "5.3-3d-proximity-age-aware"')
+
+
+def test_publish_gate_checks_the_resolver_jobs_distinct_exact_main_checkout_step():
+    workflow = _workflow_text()
+    assert 'if [[ "$JOB_NAME" == "resolve" ]]; then' in workflow
+    assert 'select(.name == "Verify exact current-main release candidate checkout")' in workflow
+    assert 'select(.name == "Verify exact release candidate checkout")' in workflow
