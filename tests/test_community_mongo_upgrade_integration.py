@@ -28,7 +28,7 @@ async def test_v553_to_v588_mongo_upgrade_migrates_operational_data_and_preserve
     today = now.date().isoformat()
     seed_client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5000)
     seed_db = seed_client[database_name]
-    await seed_db.drop_database(database_name)
+    await seed_client.drop_database(database_name)
     await seed_db["users"].insert_one({"user_id": 778899, "is_admin": False, "setup_complete": True})
     await seed_db["flight_route_samples"].insert_one(
         {
