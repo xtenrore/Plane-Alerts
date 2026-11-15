@@ -528,6 +528,9 @@ def update(root: Path) -> bool:
         return True
     except Exception:
         print("Update validation failed. Rolling back to the previously verified commit...")
+        # The target service may have restarted before live validation or final
+        # metadata persistence failed. Stop it before replacing files on rollback.
+        stop_service()
         run(["git", "checkout", "--detach", old_commit], cwd=root)
         if git_head(root) != old_commit:
             raise RuntimeError("Rollback could not restore the previously verified code commit")
