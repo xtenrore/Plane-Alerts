@@ -145,6 +145,8 @@ Container rollout readiness is based on `/ready`; `/health` remains a liveness/d
 
 `/ready` requires a verified monitoring configuration, a live worker and an initialized Telegram runtime. A warmed process can remain ready while database persistence is temporarily degraded because v4.8 last-known-good configuration/persistence isolation remains active. A cold process does not fabricate missing configuration and therefore does not pass readiness.
 
+The community CI checks that Linux systemd units are registered for boot with restart-on-failure behavior and that Windows installs an ONSTART scheduled task. Hosted CI does not reboot a physical host. After installing or repairing a real machine, verify that its service starts successfully after an operator-controlled reboot; that hardware/OS reboot check is not claimed as CI-tested.
+
 To inspect Compose status:
 
 ```bash
