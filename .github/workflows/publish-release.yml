@@ -212,8 +212,12 @@ jobs:
               echo "Community matrix job $JOB_NAME did not pass: $JOB_RESULT" >&2
               exit 1
             }
-            if [[ "$JOB_NAME" != "community-validation-summary" ]]; then
+            if [[ "$JOB_NAME" == "resolve" ]]; then
+              VERIFY_RESULT="$(jq -r '[.steps[] | select(.name == "Verify exact current-main release candidate checkout") | .conclusion] | first // empty' <<< "$JOB")"
+            elif [[ "$JOB_NAME" != "community-validation-summary" ]]; then
               VERIFY_RESULT="$(jq -r '[.steps[] | select(.name == "Verify exact release candidate checkout") | .conclusion] | first // empty' <<< "$JOB")"
+            fi
+            if [[ "$JOB_NAME" != "community-validation-summary" ]]; then
               [[ "$VERIFY_RESULT" == "success" ]] || {
                 echo "Job $JOB_NAME did not verify the exact candidate checkout." >&2
                 exit 1
