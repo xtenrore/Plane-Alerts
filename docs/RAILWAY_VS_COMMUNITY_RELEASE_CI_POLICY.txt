@@ -1,0 +1,117 @@
+PLANE ALERTS — RAILWAY VS COMMUNITY RELEASE / CI POLICY
+==========================================================
+
+PURPOSE
+-------
+Keep Railway production releases fast and safe without making every hosted
+patch wait for the long self-host installer/platform matrix. Community stable
+releases have a separate weekly validation and publication path.
+
+A RAILWAY DEPLOYMENT IS NOT A COMMUNITY STABLE RELEASE.
+
+1. RAILWAY PRODUCTION RELEASES
+------------------------------
+Run the checks required to prove the changed Railway runtime is safe:
+- compile/static validation relevant to changed code
+- full application tests and exact regression/replay/Error Museum tests
+- provider/storage tests when those runtime paths change
+- Railway container/runtime/readiness validation
+- five-second monitoring-cadence and performance checks
+- deterministic trajectory, CPA, ETA, qualification, cancellation and alert
+  lifecycle checks
+- secret/privacy checks relevant to the change
+- actual required GitHub CI jobs
+- deploy the exact tested commit and verify production health, Telegram,
+  logs, cadence and rollback readiness
+
+Do NOT make these long community checks routine Railway gates:
+- Windows ARM64 or Linux ARM64 installer matrices
+- Raspberry Pi installer/platform matrix
+- full Windows/Linux installer matrix
+- fresh self-host installation on every platform
+- broad community updater/rollback/repair/uninstall matrix
+- community release bundle/checksum generation and publication
+
+Do not weaken Railway tests. Do not block a Railway-only deployment solely
+because a community-only matrix has not run. Record any possible community
+impact for the weekly task.
+
+2. WEEKLY COMMUNITY STABLE RELEASE
+----------------------------------
+The weekly Community Release task owns the deferred self-host validation.
+It must inspect all changes since the previous community stable release,
+including dependencies, .env.example, database migrations, providers,
+service/startup behavior, updater, installers, release workflow and docs.
+
+The target is the newest exact main commit eligible for release plus only
+necessary, reviewed community installer/documentation fixes. Do not silently
+include unmerged experimental branches.
+
+3. REQUIRED COMMUNITY MATRIX
+-----------------------------
+Run and inspect all applicable jobs on the exact candidate commit:
+- Linux x64
+- Linux ARM64
+- Windows x64
+- Windows ARM64
+- Raspberry Pi 64-bit ARM64 under QEMU (emulation only; not physical Pi proof)
+- real MongoDB upgrade/migration integration against an isolated service
+- full application tests, installer/config tests and relevant replay/Error
+  Museum regressions
+- fresh self-host/SQLite and Mongo paths where infrastructure supports them
+- update, stable-only selection, failed-update rollback and data preservation
+- Telegram/OpenSky/local ADS-B configuration validation
+- doctor/repair/uninstall preservation and support-bundle redaction
+- Docker/Compose readiness and architecture compatibility
+- dependency consistency, secret scan, documentation/version consistency
+- exact candidate SHA verification in every matrix job
+
+A job is "tested" only if it actually ran and completed successfully. A
+workflow-level green badge is insufficient: inspect every required job and
+its exact-checkout verification step. Do not claim physical Raspberry Pi,
+real Telegram credentials, real OpenSky credentials or reboot testing unless
+those were actually exercised on real infrastructure.
+
+4. EXACT-COMMIT RELEASE GATE
+----------------------------
+Community publication MUST independently verify:
+- the tested SHA is the intended candidate and belongs to main history
+- a successful community-installer run exists for that exact SHA
+- every required platform/integration job is present and successful
+- every job checked out the exact tested SHA
+- the canonical VERSION and release notes match the tag
+- no existing immutable tag is moved or overwritten
+- release assets are built from that same tested commit
+- SHA256SUMS.txt verifies against every published installer asset
+- asset and secret/redaction checks pass
+
+Never trust a manually supplied SHA or an ancestry-only check as proof of
+community validation. The publish workflow must fail closed if the exact-SHA
+matrix evidence is absent, stale, incomplete or unsuccessful.
+
+5. INSTALLER / DATA SAFETY
+--------------------------
+The guided updater must select stable semantic community releases only; it
+must never follow main or prereleases. It must refuse dirty tracked source
+changes, validate the target, record the installed tag/commit, and restore
+the previous code/configuration/checkpoint/local SQLite state if validation
+fails.
+
+MongoDB/Atlas is not snapshotted by the guided updater. Documentation must
+require an operator-managed MongoDB backup before upgrades, especially across
+storage migrations. A code checkout cannot reverse a completed Mongo
+collection retirement. Preserve persistent-volume route, notification and
+Prediction Lab data.
+
+6. RELEASE CLAIMS
+-----------------
+Railway CI proves Railway behavior. The community matrix proves only the
+platforms and behaviors it actually exercised. QEMU is emulation, not
+physical-device validation. Mark unsupported or unavailable tests as
+not tested / not supported with limitations. Never claim a platform passed
+because another architecture passed.
+
+Do not publish an empty version when no changes exist. Do not publish a
+community stable release until every applicable exact-commit gate passes.
+
+END OF POLICY

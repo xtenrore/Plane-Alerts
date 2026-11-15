@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,7 +17,7 @@ async def test_notification_volume_persists_and_expires_on_volume(tmp_path, monk
     volume._ready = False
     volume._ready_lock = None
 
-    occurred = datetime(2026, 9, 25, 6, 0, tzinfo=timezone.utc)
+    occurred = datetime.now(timezone.utc) - timedelta(days=1)
     await telemetry._persist_event({
         "notification_id": "vol-1",
         "user_id": 7,
@@ -58,7 +58,7 @@ async def test_legacy_notification_migration_copies_then_drops_only_operational_
     legacy_doc = {
         "_id": "old-1",
         "user_id": 1,
-        "last_event_at": datetime(2026, 9, 25, 5, 0, tzinfo=timezone.utc),
+        "last_event_at": datetime.now(timezone.utc) - timedelta(days=1),
         "events": [],
     }
 

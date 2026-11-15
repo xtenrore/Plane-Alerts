@@ -49,6 +49,7 @@ if errorlevel 1 (
   echo Installing Git from the official winget package...
   winget install --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements
   if errorlevel 1 exit /b 7
+  set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
 )
 git --version || exit /b 7
 
