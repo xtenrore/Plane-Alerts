@@ -4,11 +4,19 @@ Plane Alerts is a Telegram-based aircraft spotting alert system. It combines liv
 
 AI is not part of the live qualification path. It does not decide trajectory, CPA, ETA, confidence, destination/path qualification, pass/no-pass, cancellation or notification timing.
 
-**Current code version: Plane Alerts v5.8.8**
+**Current code version: Plane Alerts v6.0.0**
 
 **Current prediction version: `5.3-3d-proximity-age-aware`**
 
 Telegram: **[@planebotnotifierbot](https://t.me/planebotnotifierbot)**
+
+## v6.0.0 — Main-Based Diagnostic, Airport/Arrival, Terrain LOS, and ETA/CPA Release
+
+- Pins current `main` baseline and verified rollback route (`v5.8.8` / community stable `v5.5.3`) while treating inherited Error Museum records as unverified historical context.
+- Adds privacy-safe Phase 1 decision diagnostics and 5-way user feedback (`saw_it`, `terrain_blocked`, `poor_visibility`, `wrong_timing_path`, `unsure`) with bounded retention and `unknown` coverage handling.
+- Adds Phase 2 5-class failure triage (`DATA_FRESHNESS`, `ETA_TRAJECTORY`, `AIRPORT_LOGIC`, `TERRAIN_VISIBILITY`, `NOTIFICATION_LIFECYCLE`).
+- Adds Phase 3A explainable runway-threshold airport/arrival detection, Phase 3B curvature-aware terrain line-of-sight visibility (`clear`, `blocked`, `unknown`), and Phase 3C age-aware ETA/CPA attribution and confirmed-pass scoring while preserving `5.3-3d-proximity-age-aware`.
+- Adds Phase 4 denominator-explicit release validation metrics. See [release notes](docs/releases/v6.0.0.md).
 
 ## v5.8.8 — Prediction and community self-host reliability
 

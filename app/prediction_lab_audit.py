@@ -150,6 +150,24 @@ def _snapshot_diagnostics(aircraft: Any, prediction: Any, diagnostics: dict | No
         "altitude_relevance_applied": bool(getattr(prediction, "altitude_relevance_applied", False)),
         "altitude_relevance_reason": str(getattr(prediction, "altitude_relevance_reason", "") or "")[:500],
     }
+    try:
+        from app.intelligence.diagnostics_v6 import classify_observation_freshness
+        pos_age = _safe_float(getattr(aircraft, "position_age_s", None))
+        has_pos = getattr(aircraft, "latitude", None) is not None and getattr(aircraft, "longitude", None) is not None
+        freshness_status, coverage_status = classify_observation_freshness(
+            observation_age_s=pos_age,
+            has_position=has_pos,
+        )
+        merged["v6_diagnostics"] = {
+            "freshness_status": freshness_status,
+            "coverage_status": coverage_status,
+            "terrain_los_status": str(merged.get("v6_terrain_los_status", "unknown")),
+            "terrain_data_version": str(merged.get("v6_terrain_data_version", "UNAVAILABLE")),
+            "airport_classification": str(merged.get("v6_airport_classification", "OVERFLIGHT")),
+            "eta_cpa_root_cause": str(merged.get("v6_eta_cpa_root_cause", "NOMINAL")),
+        }
+    except Exception:
+        logger.debug("v6_diagnostics_unavailable", exc_info=True)
     return merged
 
 

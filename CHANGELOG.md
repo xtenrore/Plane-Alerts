@@ -2,6 +2,16 @@
 
 Plane Alerts uses separate production releases. Detailed notes live under `docs/releases/`.
 
+## v6.0.0 — Main-Based Diagnostic and Fix Plan Release
+
+- Executed the Main-Based Diagnostic and Fix Plan on current `main` (pinned baseline `e856aa3449d7f509af0b2f853b5c814ab28d0eb5`) with confirmed rollback targets `v5.8.8` and community stable `v5.5.3`, treating inherited Error Museum and old scheduled Prediction Lab outputs as unverified historical context.
+- Added Phase 1 privacy-safe decision diagnostics (`app/intelligence/diagnostics_v6.py`) and 5-way structured user feedback (`saw_it`, `terrain_blocked`, `poor_visibility`, `wrong_timing_path`, `unsure`) without changing alert decisions when in diagnostic mode; missing or stale ADS-B coverage is strictly recorded as `unknown`.
+- Added Phase 2 fresh failure triage across five distinct problem classes (`DATA_FRESHNESS`, `ETA_TRAJECTORY`, `AIRPORT_LOGIC`, `TERRAIN_VISIBILITY`, `NOTIFICATION_LIFECYCLE`).
+- Added Phase 3A explainable runway-threshold and extended-centerline airport/arrival detection (`app/intelligence/airport_arrival_v6.py`), protecting genuine observer passes before the runway threshold and releasing suppression on missed approaches.
+- Added Phase 3B curvature-aware geometric terrain line-of-sight visibility (`app/intelligence/terrain_visibility_v6.py`) returning `blocked` only on verified elevation profiles and `unknown` for missing/coarse DEM data while keeping terrain geometry distinct from clouds, haze, and buildings.
+- Added Phase 3C age-aware sub-step radius-entry ETA refinement, root-cause attribution, and confirmed-pass ETA error scoring (`app/intelligence/eta_cpa_v6.py`) while preserving `PREDICTION_VERSION = "5.3-3d-proximity-age-aware"`.
+- Added Phase 4 denominator-explicit release validation metrics and full unit test coverage in `tests/test_v6_diagnostic_and_fixes.py`.
+
 ## v5.8.8 — Community Self-Host Reliability
 
 - Consolidated post-v5.8.7 trajectory/lifecycle/Next60/provider-handoff and terminal-arrival replay fixes into the next release identity.

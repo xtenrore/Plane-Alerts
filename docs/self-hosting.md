@@ -1,6 +1,6 @@
 # Self-hosting Plane Alerts
 
-Plane Alerts v5.8.8 supports guided and manual self-hosting on Linux x86-64, Linux ARM64, Raspberry Pi 4/5 with a 64-bit OS, Windows x64 and Windows ARM64. The alert-critical prediction path remains the same deterministic/statistical code used in production.
+Plane Alerts v6.0.0 supports guided and manual self-hosting on Linux x86-64, Linux ARM64, Raspberry Pi 4/5 with a 64-bit OS, Windows x64 and Windows ARM64. The alert-critical prediction path remains the same deterministic/statistical code used in production.
 
 ## Recommended: guided stable-release installer
 

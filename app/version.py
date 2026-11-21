@@ -4,7 +4,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "5.8.8"
+VERSION = "6.0.0"
+ROLLBACK_TARGET_RELEASE = "v5.8.8"
+COMMUNITY_ROLLBACK_RELEASE = "v5.5.3"
+PINNED_MAIN_SHA = "e856aa3449d7f509af0b2f853b5c814ab28d0eb5"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
@@ -83,6 +86,12 @@ VERSION = "5.8.8"
 # matching Docker Compose and Railway's already configured /ready endpoint.
 # v5.8.8 consolidates the post-v5.8.7 trajectory/lifecycle/Next60/provider and
 # Prediction Lab backlog fixes, and hardens the community stable updater/rollback.
+# v6.0.0 executes the Main-Based Diagnostic and Fix Plan: pins main SHA and rollback
+# target (v5.8.8 / community v5.5.3), adds Phase 1 privacy-safe decision diagnostics
+# and 5-way user feedback, Phase 2 5-class failure triage, Phase 3A explainable
+# runway-threshold airport/arrival detection, Phase 3B curvature-aware terrain LOS
+# visibility, Phase 3C age-aware ETA/CPA root-cause attribution and confirmed-pass
+# scoring, and Phase 4 denominator-explicit release validation metrics.
 PREDICTION_VERSION = "5.3-3d-proximity-age-aware"
 
 

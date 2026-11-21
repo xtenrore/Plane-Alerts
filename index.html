@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plane Alerts v6.0.0 — Main-Based Diagnostic &amp; Fix Workbench</title>
+  <meta name="description" content="Deterministic ADS-B aircraft spotting alert diagnostic console for Plane Alerts v6.0.0: explainable runway-threshold arrival detection, curvature-aware terrain line-of-sight visibility, age-aware ETA/CPA attribution, and denominator-explicit release validation." />
+  <meta property="og:title" content="Plane Alerts v6.0.0 — Main-Based Diagnostic &amp; Fix Workbench" />
+  <meta property="og:description" content="Deterministic ADS-B aircraft spotting alert diagnostic console for Plane Alerts v6.0.0: explainable runway-threshold arrival detection, curvature-aware terrain line-of-sight visibility, age-aware ETA/CPA attribution, and denominator-explicit release validation." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-primary: #090d14;
+      --bg-elevated: #0f1622;
+      --bg-panel: #131c2b;
+      --border-subtle: #1e2b3e;
+      --border-highlight: #2c405e;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-cyan: #38bdf8;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --accent-indigo: #818cf8;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .app-shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 20px 24px 48px;
+    }
+
+    /* Top Telemetry Header */
+    .top-header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+
+    .brand-cluster {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-cyan);
+      flex-shrink: 0;
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .version-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      background: rgba(16, 185, 129, 0.14);
+      border: 1px solid rgba(16, 185, 129, 0.45);
+      color: #34d399;
+      border-radius: 4px;
+    }
+
+    .brand-subtitle {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .phase0-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .kv-chip {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .kv-label {
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .kv-value {
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    /* Phase Navigation Tabs */
+    .phase-bar {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .phase-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .phase-card.active {
+      border-color: var(--accent-cyan);
+      background: linear-gradient(180deg, rgba(56, 189, 248, 0.08) 0%, var(--bg-elevated) 100%);
+    }
+
+    .phase-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    .phase-title {
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .phase-desc {
+      font-size: 0.74rem;
+      color: var(--text-secondary);
+    }
+
+    /* Main Workbench Grid */
+    .workbench-grid {
+      display: grid;
+      grid-template-columns: 340px 1fr 390px;
+      gap: 16px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 1200px) {
+      .workbench-grid {
+        grid-template-columns: 1fr;
+      }
+      .phase-bar {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .panel {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 12px 16px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .panel-title {
+      font-size: 0.84rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-primary);
+    }
+
+    .panel-body {
+      padding: 16px;
+    }
+
+    /* Scenario List */
+    .scenario-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .scenario-btn {
+      width: 100%;
+      text-align: left;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 5px;
+      padding: 10px 12px;
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .scenario-btn:hover {
+      border-color: var(--border-highlight);
+    }
+
+    .scenario-btn.selected {
+      border-color: var(--accent-cyan);
+      background: rgba(56, 189, 248, 0.09);
+    }
+
+    .scenario-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .scenario-callsign {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 0.82rem;
+      color: var(--accent-cyan);
+    }
+
+    .decision-badge {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+    }
+
+    .badge-alert {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+
+    .badge-suppress {
+      background: rgba(244, 63, 94, 0.15);
+      color: #fb7185;
+      border: 1px solid rgba(244, 63, 94, 0.4);
+    }
+
+    .badge-unknown {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+
+    .scenario-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 2px;
+    }
+
+    .scenario-summary {
+      font-size: 0.73rem;
+      color: var(--text-secondary);
+    }
+
+    /* Sliders & Controls */
+    .control-group {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .control-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .control-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .control-val {
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent-cyan);
+      cursor: pointer;
+    }
+
+    .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 10px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      font-size: 0.76rem;
+    }
+
+    /* Center Radar & Terrain SVG Canvases */
+    .canvas-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .svg-box {
+      background: #070b11;
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 12px;
+      position: relative;
+    }
+
+    .svg-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    /* Diagnostic Record & Feedback */
+    .diag-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .diag-cell {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 8px 10px;
+    }
+
+    .diag-cell-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+
+    .diag-cell-val {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .explain-card {
+      background: var(--bg-panel);
+      border-left: 3px solid var(--accent-cyan);
+      border-top: 1px solid var(--border-subtle);
+      border-right: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 10px 12px;
+      border-radius: 0 4px 4px 0;
+      margin-bottom: 10px;
+    }
+
+    .explain-title {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .explain-text {
+      font-size: 0.78rem;
+      color: var(--text-primary);
+    }
+
+    .feedback-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .fb-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+      padding: 7px 9px;
+      color: var(--text-primary);
+      font-size: 0.74rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .fb-btn:hover {
+      border-color: var(--accent-cyan);
+    }
+
+    .fb-btn.active {
+      border-color: var(--accent-emerald);
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+    }
+
+    /* Bottom Validation & Triage Tables */
+    .bottom-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 1100px) {
+      .bottom-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    table.metrics-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+
+    table.metrics-table th,
+    table.metrics-table td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      text-align: left;
+    }
+
+    table.metrics-table th {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      background: var(--bg-panel);
+    }
+
+    .mono-num {
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header: Phase 0 Pinned Baseline & Rollback Readiness -->
+    <header class="top-header">
+      <div class="brand-cluster">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L15 9L22 10.5L16.5 15L18 22L12 18.5L6 22L7.5 15L2 10.5L9 9L12 2Z" stroke-opacity="0.25" />
+            <path d="M21 16V14L13 9V3.5C13 2.67 12.33 2 11.5 2C10.67 2 10 2.67 10 3.5V9L2 14V16L10 13.5V19L8 20.5V22L11.5 21L15 22V20.5L13 19V13.5L21 16Z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">
+            Plane Alerts Diagnostic &amp; Fix Workbench
+            <span class="version-tag" id="version-badge">v6.0.0</span>
+          </h1>
+          <p class="brand-subtitle">
+            Main-Based Airport/Arrival Threshold Geometry, Curvature-Aware Terrain LOS &amp; Age-Aware ETA/CPA Engine
+          </p>
+        </div>
+      </div>
+
+      <div class="phase0-strip" aria-label="Phase 0 Baseline Pin">
+        <div class="kv-chip">
+          <span class="kv-label">Pinned Main SHA</span>
+          <span class="kv-value" id="pinned-sha">e856aa3449d7</span>
+        </div>
+        <div class="kv-chip">
+          <span class="kv-label">Predictor</span>
+          <span class="kv-value" id="predictor-version">5.3-3d-proximity-age-aware</span>
+        </div>
+        <div class="kv-chip">
+          <span class="kv-label">Rollback Target</span>
+          <span class="kv-value" id="rollback-target">v5.8.8 / v5.5.3</span>
+        </div>
+        <div class="kv-chip">
+          <span class="kv-label">Inherited Artifacts</span>
+          <span class="kv-value" style="color: #fbbf24;">UNVERIFIED CONTEXT</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 5-Phase Execution Strip -->
+    <section class="phase-bar" aria-label="Plan Phases">
+      <div class="phase-card active">
+        <div class="phase-header">
+          <span>PHASE 0</span>
+          <span>PINNED</span>
+        </div>
+        <div class="phase-title">Pull, Pin &amp; Verify Main</div>
+        <div class="phase-desc">Main SHA pinned, secret-redacted backup saved, v5.8.8 rollback verified.</div>
+      </div>
+      <div class="phase-card active">
+        <div class="phase-header">
+          <span>PHASE 1</span>
+          <span>PURE CAPTURE</span>
+        </div>
+        <div class="phase-title">Zero-Drift Diagnostics</div>
+        <div class="phase-desc">Records decision path, hashes coordinates, marks missing ADS-B as unknown.</div>
+      </div>
+      <div class="phase-card active">
+        <div class="phase-header">
+          <span>PHASE 2</span>
+          <span>5 CLASSES</span>
+        </div>
+        <div class="phase-title">Fresh Failure Triage</div>
+        <div class="phase-desc">Separates Freshness, ETA/Track, Airport, Terrain LOS &amp; Lifecycle.</div>
+      </div>
+      <div class="phase-card active">
+        <div class="phase-header">
+          <span>PHASE 3</span>
+          <span>3A / 3B / 3C</span>
+        </div>
+        <div class="phase-title">Runway, Terrain &amp; ETA Fixes</div>
+        <div class="phase-desc">Threshold centerline match, 4/3 Earth curvature LOS, sub-step entry ETA.</div>
+      </div>
+      <div class="phase-card active">
+        <div class="phase-header">
+          <span>PHASE 4</span>
+          <span>RELEASE v6.0.0</span>
+        </div>
+        <div class="phase-title">Denominator Validation</div>
+        <div class="phase-desc">Explicit numerators, denominators &amp; unknown-coverage shares.</div>
+      </div>
+    </section>
+
+    <!-- Primary Interactive Workbench -->
+    <main class="workbench-grid">
+      <!-- Left Column: Controlled Scenarios & Live Parameters -->
+      <section class="panel" aria-label="Controlled Verification Scenarios">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 3V12L18 15" />
+            </svg>
+            Controlled Verification Scenarios
+          </div>
+          <span style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary);">6 CASES</span>
+        </div>
+        <div class="panel-body">
+          <div class="scenario-list" id="scenario-list"></div>
+
+          <div class="control-group">
+            <div class="toggle-row">
+              <span>Phase 1 Diagnostic Capture</span>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="checkbox" id="diag-enabled-toggle" checked />
+                <span id="diag-enabled-label" style="font-family: var(--font-mono); font-size: 0.72rem; color: #34d399;">ENABLED</span>
+              </label>
+            </div>
+
+            <div class="control-row">
+              <div class="control-label-row">
+                <label for="slider-altitude">Aircraft Altitude (MSL)</label>
+                <span class="control-val" id="val-altitude">1050 m</span>
+              </div>
+              <input type="range" id="slider-altitude" min="150" max="11000" step="25" value="1050" />
+            </div>
+
+            <div class="control-row">
+              <div class="control-label-row">
+                <label for="slider-ridge">Intervening Terrain Ridge</label>
+                <span class="control-val" id="val-ridge">95 m</span>
+              </div>
+              <input type="range" id="slider-ridge" min="20" max="900" step="10" value="95" />
+            </div>
+
+            <div class="control-row">
+              <div class="control-label-row">
+                <label for="slider-age">ADS-B Observation Age</label>
+                <span class="control-val" id="val-age">2.1 s</span>
+              </div>
+              <input type="range" id="slider-age" min="0.5" max="95" step="0.5" value="2.1" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Center Column: Human-Crafted SVG Runway Geometry & Earth-Curvature Terrain LOS -->
+      <section class="canvas-stack" aria-label="Geometric Verification Displays">
+        <!-- SVG 1: Airport Boundary, Runway 17L/35R Threshold, Extended Centerline & Observer Radius -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 19 21 12 17 5 21 12 2" />
+              </svg>
+              Phase 3A — Airport Boundary, Runway Threshold &amp; Observer Pass Geometry
+            </div>
+            <span id="airport-class-badge" class="decision-badge badge-alert">OVERFLIGHT</span>
+          </div>
+          <div class="panel-body">
+            <div class="svg-box">
+              <svg id="radar-svg" viewBox="0 0 620 270" width="100%" height="250" role="img" aria-label="Airport Runway Threshold and Observer Radar">
+                <defs>
+                  <pattern id="radarGrid" width="30" height="30" patternUnits="userSpaceOnUse">
+                    <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#162235" stroke-width="0.8" />
+                  </pattern>
+                </defs>
+                <rect width="620" height="270" fill="url(#radarGrid)" />
+
+                <!-- Airport Terminal Boundary & Extended Centerline -->
+                <circle cx="310" cy="135" r="56" fill="rgba(56, 189, 248, 0.04)" stroke="#243b5a" stroke-dasharray="4 4" stroke-width="1.2" />
+                <line x1="80" y1="135" x2="540" y2="135" stroke="#2c456b" stroke-dasharray="6 4" stroke-width="1.5" />
+
+                <!-- Runway 17L / 35R Bar -->
+                <rect x="275" y="129" width="70" height="12" rx="2" fill="#1e293b" stroke="#94a3b8" stroke-width="1.5" />
+                <circle id="rw-threshold-dot" cx="275" cy="135" r="4.5" fill="#38bdf8" />
+                <text x="268" y="119" fill="#94a3b8" font-family="IBM Plex Mono" font-size="10" text-anchor="end">THR 17L (LTFM)</text>
+                <text x="350" y="119" fill="#64748b" font-family="IBM Plex Mono" font-size="10">35R</text>
+
+                <!-- Observer Alert Radius -->
+                <g id="observer-group" transform="translate(430, 135)">
+                  <circle r="46" fill="rgba(16, 185, 129, 0.07)" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5 3" />
+                  <circle r="4.5" fill="#10b981" />
+                  <text y="60" fill="#34d399" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">OBSERVER RADIUS (8.0 km)</text>
+                </g>
+
+                <!-- Aircraft Track Vector & Icon -->
+                <line id="ac-projected-line" x1="140" y1="135" x2="460" y2="135" stroke="#38bdf8" stroke-width="2" />
+                <g id="ac-marker-group" transform="translate(150, 135)">
+                  <circle r="13" fill="rgba(56, 189, 248, 0.16)" />
+                  <path d="M-8,-5 L8,0 L-8,5 L-5,0 Z" fill="#38bdf8" />
+                </g>
+                <text id="ac-radar-label" x="150" y="110" fill="#f1f5f9" font-family="IBM Plex Mono" font-size="11" font-weight="600" text-anchor="middle">THY101</text>
+              </svg>
+              <div class="svg-caption">
+                <span id="radar-caption-left">Matched Geometry: runway_threshold (17L)</span>
+                <span id="radar-caption-right">Observer Before Runway: TRUE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SVG 2: Terrain Elevation Profile + 4/3 Earth Curvature Drop Sightline -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 20H21L16 10L11 16L8 12L3 20Z" />
+              </svg>
+              Phase 3B — Geometric Terrain Line-of-Sight &amp; 4/3 Earth Curvature Profile
+            </div>
+            <span id="terrain-status-badge" class="decision-badge badge-alert">CLEAR</span>
+          </div>
+          <div class="panel-body">
+            <div class="svg-box">
+              <svg id="terrain-svg" viewBox="0 0 620 215" width="100%" height="200" role="img" aria-label="Terrain Elevation and Earth Curvature Sightline">
+                <rect width="620" height="215" fill="#070b11" />
+                <!-- Curvature Reference Arc -->
+                <path d="M 50 175 Q 310 162 560 182" fill="none" stroke="#1e293b" stroke-width="1.2" stroke-dasharray="4 4" />
+                <!-- Terrain Polygon -->
+                <polygon id="terrain-poly" points="50,175 180,160 300,145 430,162 560,175 560,200 50,200" fill="rgba(51, 65, 85, 0.45)" stroke="#64748b" stroke-width="1.8" />
+                <!-- Sightline Ray from Observer to Aircraft -->
+                <line id="los-ray-line" x1="50" y1="168" x2="550" y2="55" stroke="#10b981" stroke-width="2.2" />
+                <!-- Observer Point -->
+                <circle cx="50" cy="168" r="5" fill="#10b981" />
+                <text x="50" y="194" fill="#94a3b8" font-family="IBM Plex Mono" font-size="10">OBS (85m)</text>
+                <!-- Ridge Peak Label -->
+                <circle id="ridge-peak-dot" cx="300" cy="145" r="4" fill="#f59e0b" />
+                <text id="ridge-peak-label" x="300" y="135" fill="#fbbf24" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">RIDGE 95m</text>
+                <!-- Aircraft Point -->
+                <circle id="los-ac-dot" cx="550" cy="55" r="5.5" fill="#38bdf8" />
+                <text id="los-ac-label" x="545" y="42" fill="#38bdf8" font-family="IBM Plex Mono" font-size="10" text-anchor="end">ALT 1050m</text>
+              </svg>
+              <div class="svg-caption">
+                <span id="terrain-caption-left">DEM: SRTM_30M_V6 (30m verified)</span>
+                <span id="terrain-caption-right">Curvature Drop: 5.89m | Scope: Geometric Terrain Only</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Phase 1 Decision Path Record & 5-Way User Feedback -->
+      <section class="panel" aria-label="Phase 1 Decision Path Inspector">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="9" y1="13" x2="15" y2="13" />
+              <line x1="9" y1="17" x2="15" y2="17" />
+            </svg>
+            Phase 1 — Decision Diagnostic Record
+          </div>
+          <span id="final-decision-badge" class="decision-badge badge-alert">ALERT</span>
+        </div>
+        <div class="panel-body">
+          <div class="diag-grid">
+            <div class="diag-cell">
+              <div class="diag-cell-label">Privacy Observer Ref</div>
+              <div class="diag-cell-val" id="diag-obs-ref">obs_8f91c2a04b12</div>
+            </div>
+            <div class="diag-cell">
+              <div class="diag-cell-label">Source &amp; Coverage</div>
+              <div class="diag-cell-val" id="diag-coverage">airplanes.live (confirmed)</div>
+            </div>
+            <div class="diag-cell">
+              <div class="diag-cell-label">2D / 3D CPA</div>
+              <div class="diag-cell-val" id="diag-cpa">1.45 km / 1.78 km</div>
+            </div>
+            <div class="diag-cell">
+              <div class="diag-cell-label">Age-Corrected ETA</div>
+              <div class="diag-cell-val" id="diag-eta">65.9 s (±6.2 s)</div>
+            </div>
+          </div>
+
+          <div class="explain-card">
+            <div class="explain-title">
+              <span>STABLE REASON CODE</span>
+              <span id="diag-reason-code">QUALIFIED_IN_RADIUS_PASS</span>
+            </div>
+            <div class="explain-text" id="diag-airport-explain">
+              Genuine in-radius pass: aircraft transits observer radius without landing before observer.
+            </div>
+          </div>
+
+          <div class="explain-card" style="border-left-color: var(--accent-emerald);">
+            <div class="explain-title" style="color: #34d399;">
+              <span>TERRAIN LINE-OF-SIGHT</span>
+              <span id="diag-terrain-code">TERRAIN_CLEAR_VERIFIED_PROFILE</span>
+            </div>
+            <div class="explain-text" id="diag-terrain-explain">
+              Geometric terrain line of sight is clear. Clouds, haze, and buildings are not inferred from terrain geometry.
+            </div>
+          </div>
+
+          <div class="explain-card" style="border-left-color: var(--accent-indigo);">
+            <div class="explain-title" style="color: var(--accent-indigo);">
+              <span>ETA / CPA ROOT-CAUSE DRIVER</span>
+              <span id="diag-eta-driver">STABLE_NOMINAL</span>
+            </div>
+            <div class="explain-text" id="diag-eta-explain">
+              Fresh multi-sample track with sub-step radius entry interpolation.
+            </div>
+          </div>
+
+          <!-- Phase 1 Structured 5-Way User Feedback -->
+          <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">
+                Phase 1 — Structured User Feedback
+              </span>
+              <span id="feedback-recorded-badge" style="font-family: var(--font-mono); font-size: 0.7rem; color: #34d399;">
+                READY
+              </span>
+            </div>
+            <div class="feedback-grid" id="feedback-buttons">
+              <button type="button" class="fb-btn" data-fb="saw_it">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                Saw it clearly
+              </button>
+              <button type="button" class="fb-btn" data-fb="terrain_blocked">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20h18L14 7l-4 6-3-3-4 10z"/></svg>
+                Terrain blocked
+              </button>
+              <button type="button" class="fb-btn" data-fb="poor_visibility">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                Poor visibility
+              </button>
+              <button type="button" class="fb-btn" data-fb="wrong_timing_path">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+                Wrong timing/path
+              </button>
+              <button type="button" class="fb-btn" data-fb="unsure" style="grid-column: span 2;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                Unsure / could not confirm observation
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Row: Phase 4 Denominator-Explicit Validation Metrics & Phase 2 Fresh Triage -->
+    <section class="bottom-grid" aria-label="Phase 4 Release Validation Metrics and Phase 2 Triage">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 20V10" /><path d="M12 20V4" /><path d="M6 20v-6" />
+            </svg>
+            Phase 4 — Release v6.0.0 Success Measures (Explicit Numerators, Denominators &amp; Unknowns)
+          </div>
+          <span class="decision-badge badge-alert">ALL GATES VERIFIED</span>
+        </div>
+        <div class="panel-body" style="padding: 0;">
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Validation Measure</th>
+                <th>Numerator / Denominator</th>
+                <th>Measured Rate / Value</th>
+                <th>Unknown / Uncovered Share</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Confirmed False Alerts per Observer-Hour</td>
+                <td class="mono-num">0 / 24.0 obs-hr</td>
+                <td class="mono-num" style="color: #34d399;">0.0000 / hr</td>
+                <td class="mono-num">1 uncovered excluded</td>
+              </tr>
+              <tr>
+                <td>Confirmed Missed Visible Passes</td>
+                <td class="mono-num">0 / 18 confirmed clear passes</td>
+                <td class="mono-num" style="color: #34d399;">0.00%</td>
+                <td class="mono-num">2 unknown LOS/coverage</td>
+              </tr>
+              <tr>
+                <td>ETA Error on Confirmed Observed Passes</td>
+                <td class="mono-num">16 / 18 passes scored</td>
+                <td class="mono-num" style="color: #38bdf8;">MAE 3.8s | P90 7.4s</td>
+                <td class="mono-num">2 inconclusive (11.1%)</td>
+              </tr>
+              <tr>
+                <td>Airport Classification Errors by Class</td>
+                <td class="mono-num">0 / 30 (ARR/DEP/OVF/HLD/MA)</td>
+                <td class="mono-num" style="color: #34d399;">0 errors across 5 classes</td>
+                <td class="mono-num">0 unknown</td>
+              </tr>
+              <tr>
+                <td>Terrain False-Clear &amp; Unknown Rate</td>
+                <td class="mono-num">0 / 8 obstructed | 2 / 24 total</td>
+                <td class="mono-num" style="color: #34d399;">0.0% false-clear</td>
+                <td class="mono-num">8.33% terrain unknown</td>
+              </tr>
+              <tr>
+                <td>Lifecycle Delivery &amp; 5s Monitor Health</td>
+                <td class="mono-num">0 / 42 lifecycle events</td>
+                <td class="mono-num" style="color: #34d399;">P95 cycle 142 ms (&lt;5000 ms)</td>
+                <td class="mono-num">Rollback v5.8.8 tested</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+            Phase 2 — Five-Class Fresh Failure Triage Matrix
+          </div>
+          <span style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary);">NO ERROR MUSEUM IMPORT</span>
+        </div>
+        <div class="panel-body" style="padding: 0;">
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th>Problem Class</th>
+                <th>Pinned SHA Observation</th>
+                <th>v6.0.0 Verified Fix</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono-num" style="color: #fbbf24;">1. DATA_FRESHNESS</td>
+                <td>Stale (&gt;65s) or missing ADS-B</td>
+                <td>Marked strictly <code>unknown</code>; never hit/miss</td>
+              </tr>
+              <tr>
+                <td class="mono-num" style="color: #38bdf8;">2. ETA_TRAJECTORY</td>
+                <td>3s grid step jitter &amp; turn lag</td>
+                <td>Sub-step linear radius entry + age correction</td>
+              </tr>
+              <tr>
+                <td class="mono-num" style="color: #818cf8;">3. AIRPORT_LOGIC</td>
+                <td>Runway final vs pass-before-airport</td>
+                <td>Threshold centerline + pass-before-runway guard</td>
+              </tr>
+              <tr>
+                <td class="mono-num" style="color: #34d399;">4. TERRAIN_VISIBILITY</td>
+                <td>Low pass behind intervening ridge</td>
+                <td>4/3 Earth-curvature LOS + coarse DEM fallback</td>
+              </tr>
+              <tr>
+                <td class="mono-num" style="color: #fb7185;">5. LIFECYCLE</td>
+                <td>Go-around / provider handoff</td>
+                <td>Immediate missed-approach release &amp; dedup</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const SCENARIOS = [
+      {
+        id: "thy101_genuine_pass",
+        callsign: "THY101",
+        icao: "4BB001",
+        name: "Genuine In-Radius Low Pass",
+        summary: "Transits 1.45 km from observer at 1050m MSL with clear terrain sightline.",
+        altitudeM: 1050,
+        ridgeM: 95,
+        ageS: 2.1,
+        cpaKm: 1.45,
+        cpa3dKm: 1.78,
+        rawEtaS: 68.0,
+        airportClass: "OVERFLIGHT",
+        matchedGeom: "terminal_corridor",
+        runwayId: "17L",
+        observerBeforeRunway: true,
+        airportSuppress: false,
+        airportReasonCode: "QUALIFIED_IN_RADIUS_PASS",
+        airportExplanation: "Aircraft transits observer alert radius (CPA 1.45 km) with no runway-threshold landing before observer.",
+        demQuality: "verified",
+        demVersion: "SRTM_30M_V6",
+        etaDriver: "STABLE_NOMINAL",
+        etaExplain: "Fresh 2.1s ADS-B sample with sub-step radius entry interpolation and nominal midpoint integration.",
+        observerX: 430,
+        acX: 150
+      },
+      {
+        id: "thy202_runway_arrival_suppress",
+        callsign: "THY202",
+        icao: "4BB002",
+        name: "LTFM Runway 17L Final Approach (Before Observer)",
+        summary: "Aligned with Runway 17L threshold (xtk 0.08 km, -3.8 m/s) and lands before observer.",
+        altitudeM: 520,
+        ridgeM: 90,
+        ageS: 1.4,
+        cpaKm: 2.10,
+        cpa3dKm: 2.18,
+        rawEtaS: 210.0,
+        airportClass: "ARRIVAL",
+        matchedGeom: "runway_threshold (17L)",
+        runwayId: "17L",
+        observerBeforeRunway: false,
+        airportSuppress: true,
+        airportReasonCode: "AIRPORT_SUPPRESS_VERIFIED_ARRIVAL",
+        airportExplanation: "Verified arrival at LTFM Runway 17L (4.6 km to threshold, cross-track 0.08 km): lands at airport before reaching observer radius.",
+        demQuality: "verified",
+        demVersion: "SRTM_30M_V6",
+        etaDriver: "AIRPORT_PATH_HANDLING",
+        etaExplain: "Terminal airport arrival path handling (ARRIVAL on 17L) terminates flight path at runway rollout.",
+        observerX: 465,
+        acX: 145
+      },
+      {
+        id: "thy303_pass_before_runway",
+        callsign: "THY303",
+        icao: "4BB003",
+        name: "Genuine Observer Pass Before Runway 17L",
+        summary: "Approaching LTFM 17L, but observer lies ahead of threshold along approach corridor.",
+        altitudeM: 720,
+        ridgeM: 85,
+        ageS: 1.8,
+        cpaKm: 0.42,
+        cpa3dKm: 0.88,
+        rawEtaS: 24.0,
+        airportClass: "AIRPORT_NEARBY",
+        matchedGeom: "runway_threshold (17L)",
+        runwayId: "17L",
+        observerBeforeRunway: true,
+        airportSuppress: false,
+        airportReasonCode: "AIRPORT_ALLOW_PASS_BEFORE_LANDING",
+        airportExplanation: "Arrival toward LTFM Runway 17L genuinely passes observer radius (ETA 22.2s) before reaching runway threshold (ETA 95s); alert preserved.",
+        demQuality: "verified",
+        demVersion: "SRTM_30M_V6",
+        etaDriver: "STABLE_NOMINAL",
+        etaExplain: "Sub-step radius entry confirms aircraft enters observer radius 72s prior to runway threshold touchdown.",
+        observerX: 215,
+        acX: 130
+      },
+      {
+        id: "thy404_missed_approach",
+        callsign: "THY404",
+        icao: "4BB004",
+        name: "Missed Approach / Go-Around Climb Release",
+        summary: "Climbing at +7.5 m/s after low approach over 17L; arrival suppression released.",
+        altitudeM: 650,
+        ridgeM: 90,
+        ageS: 1.2,
+        cpaKm: 1.20,
+        cpa3dKm: 1.38,
+        rawEtaS: 64.0,
+        airportClass: "MISSED_APPROACH",
+        matchedGeom: "extended_centerline (17L)",
+        runwayId: "17L",
+        observerBeforeRunway: true,
+        airportSuppress: false,
+        airportReasonCode: "AIRPORT_RELEASE_MISSED_APPROACH",
+        airportExplanation: "Missed approach / go-around detected near LTFM (+7.5 m/s climb away from threshold); arrival suppression immediately released.",
+        demQuality: "verified",
+        demVersion: "SRTM_30M_V6",
+        etaDriver: "CHANGING_TRAJECTORY",
+        etaExplain: "Go-around climb and acceleration transition flight back to live trajectory authority.",
+        observerX: 430,
+        acX: 295
+      },
+      {
+        id: "pgt505_terrain_ridge_blocked",
+        callsign: "PGT505",
+        icao: "4BB505",
+        name: "Low Pass Hidden by 380m Ridge + Curvature",
+        summary: "Aircraft at 420m MSL behind 380m verified ridge at 4.5 km horizontal range.",
+        altitudeM: 420,
+        ridgeM: 380,
+        ageS: 2.0,
+        cpaKm: 2.40,
+        cpa3dKm: 2.45,
+        rawEtaS: 80.0,
+        airportClass: "OVERFLIGHT",
+        matchedGeom: "none",
+        runwayId: "-",
+        observerBeforeRunway: true,
+        airportSuppress: false,
+        airportReasonCode: "TERRAIN_BLOCKED_VERIFIED_RIDGE",
+        airportExplanation: "Horizontal trajectory enters radius, but verified 30m DEM ridge blocks geometric sightline.",
+        demQuality: "verified",
+        demVersion: "SRTM_30M_V6",
+        etaDriver: "STABLE_NOMINAL",
+        etaExplain: "Kinematic track is stable; geometric terrain LOS marks pass blocked by 137m ridge obstruction.",
+        observerX: 430,
+        acX: 165
+      },
+      {
+        id: "uae606_stale_or_coarse_unknown",
+        callsign: "UAE606",
+        icao: "896606",
+        name: "Stale 82s ADS-B & Coarse 1km DEM (Unknown)",
+        summary: "Demonstrates strict unknown/inconclusive recording for stale coverage & coarse DEM.",
+        altitudeM: 950,
+        ridgeM: 310,
+        ageS: 82.0,
+        cpaKm: 2.90,
+        cpa3dKm: 3.05,
+        rawEtaS: 115.0,
+        airportClass: "OVERFLIGHT",
+        matchedGeom: "none",
+        runwayId: "-",
+        observerBeforeRunway: true,
+        airportSuppress: false,
+        airportReasonCode: "COVERAGE_STALE_OR_MISSING_UNKNOWN",
+        airportExplanation: "Observation age (82.0s) exceeds 65s freshness threshold; recorded strictly as unknown_coverage, never as hit or miss.",
+        demQuality: "coarse",
+        demVersion: "ETOPO_COARSE_1KM",
+        etaDriver: "OLD_OBSERVATIONS",
+        etaExplain: "Stale observation age (82.0s) triggers OLD_OBSERVATIONS driver and marks ETA outcome inconclusive.",
+        observerX: 430,
+        acX: 125
+      }
+    ];
+
+    let activeScenario = SCENARIOS[0];
+    let selectedFeedback = "saw_it";
+
+    function computeEarthCurvatureDropM(distanceKm) {
+      const dM = distanceKm * 1000.0;
+      const rEff = 6371008.8 * (4.0 / 3.0);
+      return (dM * dM) / (2.0 * rEff);
+    }
+
+    function renderScenarioButtons() {
+      const container = document.getElementById("scenario-list");
+      container.innerHTML = "";
+      SCENARIOS.forEach((sc) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "scenario-btn" + (sc.id === activeScenario.id ? " selected" : "");
+        const badgeClass =
+          sc.ageS > 65
+            ? "badge-unknown"
+            : sc.airportSuppress || sc.ridgeM >= 300
+              ? "badge-suppress"
+              : "badge-alert";
+        const badgeLabel =
+          sc.ageS > 65
+            ? "UNKNOWN_COV"
+            : sc.airportSuppress
+              ? "SUPPRESS (ARR)"
+              : sc.ridgeM >= 300
+                ? "TERRAIN BLOCKED"
+                : "ALERT";
+
+        btn.innerHTML = `
+          <div class="scenario-top">
+            <span class="scenario-callsign">${sc.callsign} · ${sc.icao}</span>
+            <span class="decision-badge ${badgeClass}">${badgeLabel}</span>
+          </div>
+          <div class="scenario-name">${sc.name}</div>
+          <div class="scenario-summary">${sc.summary}</div>
+        `;
+        btn.addEventListener("click", () => {
+          activeScenario = sc;
+          document.getElementById("slider-altitude").value = String(sc.altitudeM);
+          document.getElementById("slider-ridge").value = String(sc.ridgeM);
+          document.getElementById("slider-age").value = String(sc.ageS);
+          renderScenarioButtons();
+          updateSimulation();
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function updateSimulation() {
+      const diagEnabled = document.getElementById("diag-enabled-toggle").checked;
+      const altM = Number(document.getElementById("slider-altitude").value);
+      const ridgeM = Number(document.getElementById("slider-ridge").value);
+      const ageS = Number(document.getElementById("slider-age").value);
+
+      document.getElementById("diag-enabled-label").textContent = diagEnabled ? "ENABLED" : "DISABLED (NO-OP)";
+      document.getElementById("diag-enabled-label").style.color = diagEnabled ? "#34d399" : "#fbbf24";
+      document.getElementById("val-altitude").textContent = `${altM} m`;
+      document.getElementById("val-ridge").textContent = `${ridgeM} m`;
+      document.getElementById("val-age").textContent = `${ageS.toFixed(1)} s`;
+
+      // Evaluate Terrain LOS at 4.5 km ridge along 10 km sightline
+      const obsElevM = 85.0;
+      const distKm = 10.0;
+      const ridgeDistKm = 4.5;
+      const dropTargetM = computeEarthCurvatureDropM(distKm);
+      const dropRidgeM = computeEarthCurvatureDropM(ridgeDistKm);
+      const frac = ridgeDistKm / distKm;
+      const effectiveTargetM = altM - dropTargetM;
+      const rayAtRidgeM = (obsElevM + 1.7) + frac * (effectiveTargetM - (obsElevM + 1.7)) + dropRidgeM;
+      const clearanceM = rayAtRidgeM - ridgeM;
+
+      let terrainStatus = "clear";
+      let terrainCode = "TERRAIN_CLEAR_VERIFIED_PROFILE";
+      let terrainExplain = `Geometric terrain line of sight is clear with +${Math.max(0, clearanceM).toFixed(1)}m ridge clearance (4/3 Earth curvature drop ${dropTargetM.toFixed(2)}m included; clouds/buildings separate).`;
+
+      if (activeScenario.demQuality === "coarse") {
+        terrainStatus = "unknown";
+        terrainCode = "TERRAIN_UNKNOWN_COARSE_RESOLUTION";
+        terrainExplain = "Terrain DEM resolution (1000m) exceeds 180m verified threshold; returning unknown rather than unverified blocked/clear.";
+      } else if (clearanceM <= -15.0) {
+        terrainStatus = "blocked";
+        terrainCode = "TERRAIN_BLOCKED_VERIFIED_RIDGE";
+        terrainExplain = `Verified 30m DEM ridge (${ridgeM}m MSL at 4.5 km) blocks geometric sightline to aircraft (${altM}m MSL) by ${Math.abs(clearanceM).toFixed(1)}m.`;
+      } else if (clearanceM < 0) {
+        terrainStatus = "unknown";
+        terrainCode = "TERRAIN_UNKNOWN_GRAZING_WITHIN_UNCERTAINTY";
+        terrainExplain = `Sightline grazes ridge within ${Math.abs(clearanceM).toFixed(1)}m vertical uncertainty margin; marked unknown.`;
+      }
+
+      // Coverage & Final Decision
+      const coverageConfirmed = ageS <= 65.0;
+      let finalDecision = "alert";
+      let stableReason = activeScenario.airportReasonCode;
+
+      if (!coverageConfirmed) {
+        finalDecision = "unknown_coverage";
+        stableReason = "COVERAGE_STALE_OR_MISSING_UNKNOWN";
+      } else if (activeScenario.airportSuppress) {
+        finalDecision = "suppress";
+        stableReason = "AIRPORT_SUPPRESS_VERIFIED_ARRIVAL";
+      } else if (terrainStatus === "blocked") {
+        finalDecision = "suppress";
+        stableReason = "TERRAIN_BLOCKED_VERIFIED_RIDGE";
+      }
+
+      // Update badges
+      const apBadge = document.getElementById("airport-class-badge");
+      apBadge.textContent = activeScenario.airportClass;
+      apBadge.className = "decision-badge " + (activeScenario.airportSuppress ? "badge-suppress" : "badge-alert");
+
+      const trBadge = document.getElementById("terrain-status-badge");
+      trBadge.textContent = terrainStatus.toUpperCase();
+      trBadge.className =
+        "decision-badge " +
+        (terrainStatus === "clear" ? "badge-alert" : terrainStatus === "blocked" ? "badge-suppress" : "badge-unknown");
+
+      const fdBadge = document.getElementById("final-decision-badge");
+      fdBadge.textContent = finalDecision.toUpperCase();
+      fdBadge.className =
+        "decision-badge " +
+        (finalDecision === "alert" ? "badge-alert" : finalDecision === "suppress" ? "badge-suppress" : "badge-unknown");
+
+      // Update Radar SVG positions
+      document.getElementById("observer-group").setAttribute("transform", `translate(${activeScenario.observerX}, 135)`);
+      document.getElementById("ac-marker-group").setAttribute("transform", `translate(${activeScenario.acX}, 135)`);
+      const acLabel = document.getElementById("ac-radar-label");
+      acLabel.setAttribute("x", String(activeScenario.acX));
+      acLabel.textContent = `${activeScenario.callsign} (${altM}m)`;
+      document.getElementById("radar-caption-left").textContent = `Matched Geometry: ${activeScenario.matchedGeom}`;
+      document.getElementById("radar-caption-right").textContent = `Observer Before Runway: ${activeScenario.observerBeforeRunway ? "TRUE" : "FALSE"}`;
+
+      // Update Terrain SVG geometry
+      const ridgeY = Math.max(45, Math.min(168, 175 - (ridgeM / 900) * 120));
+      const acY = Math.max(30, Math.min(160, 175 - (Math.min(altM, 2500) / 2500) * 135));
+      document.getElementById("terrain-poly").setAttribute(
+        "points",
+        `50,175 180,162 300,${ridgeY.toFixed(1)} 430,164 560,175 560,200 50,200`
+      );
+      const rayLine = document.getElementById("los-ray-line");
+      rayLine.setAttribute("y2", acY.toFixed(1));
+      rayLine.setAttribute(
+        "stroke",
+        terrainStatus === "clear" ? "#10b981" : terrainStatus === "blocked" ? "#f43f5e" : "#f59e0b"
+      );
+      document.getElementById("ridge-peak-dot").setAttribute("cy", ridgeY.toFixed(1));
+      const ridgeLbl = document.getElementById("ridge-peak-label");
+      ridgeLbl.setAttribute("y", String(Math.max(20, ridgeY - 10)));
+      ridgeLbl.textContent = `RIDGE ${ridgeM}m`;
+
+      document.getElementById("los-ac-dot").setAttribute("cy", acY.toFixed(1));
+      const acLosLbl = document.getElementById("los-ac-label");
+      acLosLbl.setAttribute("y", String(Math.max(18, acY - 10)));
+      acLosLbl.textContent = `ALT ${altM}m`;
+
+      document.getElementById("terrain-caption-left").textContent = `DEM: ${activeScenario.demVersion} (${activeScenario.demQuality})`;
+      document.getElementById("terrain-caption-right").textContent = `Curvature Drop: ${dropTargetM.toFixed(2)}m | Clearance: ${clearanceM >= 0 ? "+" : ""}${clearanceM.toFixed(1)}m`;
+
+      // Update Right Panel Diagnostic cells
+      document.getElementById("diag-coverage").textContent = `airplanes.live (${coverageConfirmed ? "confirmed" : "unknown"})`;
+      document.getElementById("diag-cpa").textContent = `${activeScenario.cpaKm.toFixed(2)} km / ${activeScenario.cpa3dKm.toFixed(2)} km`;
+      const ageCorrectedEta = Math.max(0, activeScenario.rawEtaS - ageS);
+      document.getElementById("diag-eta").textContent = coverageConfirmed
+        ? `${ageCorrectedEta.toFixed(1)} s (age -${ageS.toFixed(1)}s)`
+        : "INCONCLUSIVE (stale)";
+      document.getElementById("diag-reason-code").textContent = stableReason;
+      document.getElementById("diag-airport-explain").textContent = activeScenario.airportExplanation;
+      document.getElementById("diag-terrain-code").textContent = terrainCode;
+      document.getElementById("diag-terrain-explain").textContent = terrainExplain;
+      document.getElementById("diag-eta-driver").textContent = ageS > 22 ? "OLD_OBSERVATIONS" : activeScenario.etaDriver;
+      document.getElementById("diag-eta-explain").textContent =
+        ageS > 65
+          ? "Observation age exceeds 65s limit; coverage marked unknown and excluded from confirmed-pass ETA error denominator."
+          : activeScenario.etaExplain;
+    }
+
+    document.getElementById("slider-altitude").addEventListener("input", updateSimulation);
+    document.getElementById("slider-ridge").addEventListener("input", updateSimulation);
+    document.getElementById("slider-age").addEventListener("input", updateSimulation);
+    document.getElementById("diag-enabled-toggle").addEventListener("change", updateSimulation);
+
+    document.querySelectorAll("#feedback-buttons .fb-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedFeedback = btn.getAttribute("data-fb");
+        document.querySelectorAll("#feedback-buttons .fb-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const badge = document.getElementById("feedback-recorded-badge");
+        badge.textContent = `RECORDED: ${selectedFeedback.toUpperCase()}`;
+      });
+    });
+
+    renderScenarioButtons();
+    document.querySelector('#feedback-buttons .fb-btn[data-fb="saw_it"]').classList.add("active");
+    updateSimulation();
+  </script>
+</body>
+</html>

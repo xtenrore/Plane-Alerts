@@ -18,6 +18,7 @@ from urllib.parse import quote
 from app.aircraft.providers import get_http_client
 from app.config import settings
 from app.intelligence import route_history as route_mod
+from app.intelligence.airport_arrival_v6 import AirportArrivalExplanation, evaluate_airport_arrival_v6
 from app.intelligence.trajectory import bearing_deg, haversine_km
 
 logger = logging.getLogger(__name__)
@@ -1017,11 +1018,40 @@ async def evaluate_destination_path(
     )
 
 
+def explain_destination_path_v6(
+    ac: Any,
+    pred: Any,
+    *,
+    user_lat: float,
+    user_lon: float,
+    alert_radius_km: float,
+    current_samples: Iterable[Any] = (),
+    candidate_airport: Any | None = None,
+    destination_airport: Any | None = None,
+    route_plausible: bool = False,
+    now: float | None = None,
+) -> AirportArrivalExplanation:
+    """Return Phase 3A explainable airport/arrival classification without mutating route decisions."""
+    return evaluate_airport_arrival_v6(
+        aircraft=ac,
+        prediction=pred,
+        samples=list(current_samples or ()),
+        user_lat=float(user_lat),
+        user_lon=float(user_lon),
+        alert_radius_km=float(alert_radius_km),
+        candidate_airport=candidate_airport,
+        destination_airport=destination_airport,
+        route_plausible=bool(route_plausible),
+        now=now,
+    )
+
+
 def install_destination_path_guard() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     route_mod.RouteHistoryService.evaluate = evaluate_destination_path
+    route_mod.RouteHistoryService.explain_v6 = staticmethod(explain_destination_path_v6)
     _INSTALLED = True
     logger.info(
         "Destination path guard enabled providers=adsb.lol,adsbdb "

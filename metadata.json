@@ -1,0 +1,8 @@
+{
+  "name": "Plane Alerts v6.0.0 — Main-Based Diagnostic & Fix Workbench",
+  "description": "Deterministic ADS-B aircraft spotting alert diagnostic console for Plane Alerts v6.0.0: explainable runway-threshold arrival detection, curvature-aware terrain line-of-sight visibility, age-aware ETA/CPA attribution, and denominator-explicit release validation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

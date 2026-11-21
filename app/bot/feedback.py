@@ -132,3 +132,9 @@ async def _on_dislike(query: Any, user_id: int, notif_id: str) -> None:
 
     if query.message:
         await query.message.reply_text(reply_msg, parse_mode=ParseMode.HTML)
+
+
+from app.intelligence.diagnostics_v6 import (  # noqa: E402
+    V6_FEEDBACK_LABELS,
+    normalize_v6_feedback_reason,
+)

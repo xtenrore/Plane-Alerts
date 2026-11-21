@@ -1,0 +1,13 @@
+{
+  "name": "plane-alerts-v6-workbench",
+  "version": "6.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts",
+    "build": "tsx scripts/verify_v6_build.ts",
+    "lint": "tsx scripts/verify_v6_build.ts",
+    "test": "tsx --test src/lib/planeAlertsV6Engine.test.ts"
+  }
+}
