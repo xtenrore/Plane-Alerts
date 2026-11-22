@@ -16,7 +16,10 @@ def test_v490_or_later_has_one_canonical_runtime_and_prediction_identity():
 
 def test_railway_workflow_embeds_exact_tested_commit_and_keeps_retired_agent_out_of_normal_releases():
     workflow = Path(".github/workflows/deploy-railway.yml").read_text(encoding="utf-8")
-    assert 'DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}' in workflow
+    assert 'WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}' in workflow
+    assert 'DEPLOY_SHA: ${{ needs.gate.outputs.tested_sha }}' in workflow
+    assert 'ref: ${{ needs.gate.outputs.tested_sha }}' in workflow
+    assert 'automation/railway-deploy-' in workflow
     assert 'printf \'%s\\n\' "$DEPLOY_SHA" > app/build_commit.txt' in workflow
     assert "v4.2.2" not in workflow
     assert '--message "Plane Alerts main ${DEPLOY_SHA}"' in workflow
