@@ -16,7 +16,7 @@ assert.equal(VERSION, "6.0.0");
 assert.equal(PREDICTION_VERSION, "5.3-3d-proximity-age-aware");
 assert.equal(ROLLBACK_TARGET_RELEASE, "v5.8.8");
 assert.equal(COMMUNITY_ROLLBACK_RELEASE, "v5.5.3");
-assert.ok(DEFAULT_PINNED_MAIN_SHA.length >= 7);
+assert.match(DEFAULT_PINNED_MAIN_SHA, /^[0-9a-f]{40}$/);
 
 for (const requiredFile of [
   "metadata.json",

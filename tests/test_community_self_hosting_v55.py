@@ -100,3 +100,46 @@ def test_v5610_prediction_sync_uses_existing_admin_http_bridge_not_sftp() -> Non
     assert "/admin/api/prediction-lab/sync-ack" in sync
     assert "railway service files" not in sync
     assert "ssh-keygen" not in sync
+
+def test_blank_env_example_values_fall_back_to_validated_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The checked-in template deliberately leaves optional values blank. Pydantic
+    # must treat those as unset rather than feeding empty strings into typed fields.
+    for name in (
+        "MONGO_URI",
+        "DATABASE_NAME",
+        "API_KEYS_DIR",
+        "LOCAL_ADSB_RECEIVER_TYPE",
+        "LOCAL_ADSB_TIMEOUT_SECONDS",
+        "LOCAL_ADSB_MAX_POSITION_AGE_SECONDS",
+        "GEMINI_PHOTO_TIMEOUT_SECONDS",
+        "PHOTOGRAPHY_HTTP_TIMEOUT_SECONDS",
+        "PHOTOGRAPHY_CONDITIONS_CACHE_SECONDS",
+        "HOST",
+        "LOG_LEVEL",
+        "POLL_INTERVAL_SECONDS",
+        "DEFAULT_RADIUS_KM",
+        "COOLDOWN_MINUTES",
+        "LEARNING_PLANE_THRESHOLD",
+        "RELEARN_PLANE_COUNT",
+        "ADMIN_TELEGRAM_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    loaded = Settings(_env_file=ROOT / ".env.example")
+    assert loaded.mongo_uri == "mongodb://localhost:27017"
+    assert loaded.database_name == "aircraft_bot"
+    assert loaded.api_keys_dir == "api"
+    assert loaded.local_adsb_receiver_type == "auto"
+    assert loaded.local_adsb_timeout_seconds == 0.8
+    assert loaded.local_adsb_max_position_age_seconds == 12.0
+    assert loaded.gemini_photo_timeout_seconds == 30.0
+    assert loaded.photography_http_timeout_seconds == 12.0
+    assert loaded.photography_conditions_cache_seconds == 120
+    assert loaded.host == "0.0.0.0"
+    assert loaded.log_level == "INFO"
+    assert loaded.poll_interval_seconds == 5
+    assert loaded.default_radius_km == 15.0
+    assert loaded.cooldown_minutes == 30
+    assert loaded.learning_plane_threshold == 100
+    assert loaded.relearn_plane_count == 25
+    assert loaded.admin_telegram_id is None

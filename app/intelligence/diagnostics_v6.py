@@ -33,7 +33,7 @@ from app.intelligence.eta_cpa_v6 import EtaCpaDiagnosis, EtaOutcomeEvaluation
 from app.intelligence.terrain_visibility_v6 import TerrainLineOfSightResult
 
 
-DEFAULT_PINNED_MAIN_SHA = "e856aa3449d7f509af0b2f853b5c814ab28d0eb5"
+DEFAULT_PINNED_MAIN_SHA = "b86310def623a3dec891677d143066e066354aaa"
 DEFAULT_BASELINE_VERSION = "5.8.8"
 DEFAULT_TARGET_VERSION = "6.0.0"
 DEFAULT_ROLLBACK_TARGET_RELEASE = "v5.8.8"
