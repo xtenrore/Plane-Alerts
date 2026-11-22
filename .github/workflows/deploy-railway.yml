@@ -146,7 +146,7 @@ jobs:
                   # Any other executable/version-model change still deploys.
                   if git diff -U0 "$PARENT_SHA" "$DEPLOY_SHA" -- "$file" |
                     grep -E '^[+-][^+-]' |
-                    grep -Ev '^[+-](VERSION = "[0-9]+\\.[0-9]+\\.[0-9]+"|#)' |
+                    grep -Ev '^[+-](VERSION = "[0-9]+\.[0-9]+\.[0-9]+"|#)' |
                     grep -q .; then
                     RUNTIME_CHANGED=true
                   fi
