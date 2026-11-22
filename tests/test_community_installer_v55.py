@@ -552,14 +552,14 @@ def test_windows_service_registration_uses_boot_task_and_optional_stable_update_
 def test_gemini_rest_clients_do_not_require_unused_google_genai_sdk():
     lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
     assert not any(
-        re.match(r"^\\s*google-genai(?:==|[<>=!~; ]|$)", line, re.IGNORECASE)
+        re.match(r"^\s*google-genai(?:==|[<>=!~; ]|$)", line, re.IGNORECASE)
         for line in lock.splitlines()
     )
 
     import_patterns = (
-        re.compile(r"(?m)^\\s*from\\s+google\\.genai\\s+import\\b"),
-        re.compile(r"(?m)^\\s*from\\s+google\\s+import\\s+genai\\b"),
-        re.compile(r"(?m)^\\s*import\\s+google\\.genai\\b"),
+        re.compile(r"(?m)^\s*from\s+google\.genai\s+import\b"),
+        re.compile(r"(?m)^\s*from\s+google\s+import\s+genai\b"),
+        re.compile(r"(?m)^\s*import\s+google\.genai\b"),
     )
     for source_path in (ROOT / "app").rglob("*.py"):
         source = source_path.read_text(encoding="utf-8")
