@@ -213,7 +213,7 @@ jobs:
               exit 1
             }
             if [[ "$JOB_NAME" == "resolve" ]]; then
-              VERIFY_RESULT="$(jq -r '[.steps[] | select(.name == "Verify exact current-main release candidate checkout") | .conclusion] | first // empty' <<< "$JOB")"
+              VERIFY_RESULT="$(jq -r '[.steps[] | select(.name == "Verify exact current-main or open-PR release candidate checkout") | .conclusion] | first // empty' <<< "$JOB")"
             elif [[ "$JOB_NAME" != "community-validation-summary" ]]; then
               VERIFY_RESULT="$(jq -r '[.steps[] | select(.name == "Verify exact release candidate checkout") | .conclusion] | first // empty' <<< "$JOB")"
             fi
