@@ -23,6 +23,8 @@ Covers:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
+import re
 from typing import List, Optional
 
 from app.intelligence.airport_arrival_v6 import (
@@ -670,3 +672,16 @@ def test_phase4_release_validation_metrics_and_denominators() -> None:
     assert metrics.terrain_unknown_count == 1
     assert metrics.delivery_cancellation_error_count == 0
     assert metrics.monitoring_loop_healthy is True
+
+def test_phase0_pinned_main_sha_matches_all_release_artifacts() -> None:
+    from app.version import PINNED_MAIN_SHA
+
+    assert DEFAULT_PINNED_MAIN_SHA == PINNED_MAIN_SHA
+    assert re.fullmatch(r"[0-9a-f]{40}", PINNED_MAIN_SHA)
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "src/lib/planeAlertsV6Engine.ts",
+        "docs/releases/v6.0.0.md",
+        "CHANGELOG.md",
+    ):
+        assert PINNED_MAIN_SHA in (root / relative).read_text(encoding="utf-8")
