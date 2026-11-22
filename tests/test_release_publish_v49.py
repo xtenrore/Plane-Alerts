@@ -136,12 +136,16 @@ def test_railway_deploy_runs_only_after_trusted_green_main_push():
 
 def test_railway_deploy_gate_skips_community_only_changes_and_targets_main_service():
     workflow = _deploy_workflow_text()
-    tested_sha = "${{ github.event.workflow_run.head_sha }}"
+    tested_sha = "${{ needs.gate.outputs.tested_sha }}"
     gate_block, deploy_block = workflow.split("\n  deploy:\n", 1)
     assert "  gate:" in gate_block
     assert "runs-on: ubuntu-latest" in gate_block
     assert "container:" not in gate_block
-    assert f"DEPLOY_SHA: {tested_sha}" in gate_block
+    assert 'WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}' in gate_block
+    assert 'TRIGGER_SHA: ${{ github.sha }}' in gate_block
+    assert 'automation/railway-deploy-' in gate_block
+    assert 'git show -s --format=%P "$TRIGGER_SHA"' in gate_block
+    assert 'steps.candidate.outputs.sha' in gate_block
     assert 'gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq' in gate_block
     assert 'if [[ "$CURRENT_MAIN_SHA" != "$DEPLOY_SHA" ]]' in gate_block
     assert "git diff --name-only" in gate_block
