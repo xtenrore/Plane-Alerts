@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   resolve:
@@ -45,20 +46,36 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.candidate.outputs.sha }}
-      - name: Verify exact current-main release candidate checkout
+      - name: Verify exact current-main or open-PR release candidate checkout
         shell: bash
         env:
           TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ACTUAL="$(git rev-parse HEAD)"
           test "$ACTUAL" = "$TESTED_SHA"
           git fetch origin main:refs/remotes/origin/main --no-tags
           MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
-          [[ "$MAIN_SHA" == "$TESTED_SHA" ]] || {
-            echo "Refusing stale community matrix candidate: candidate=$TESTED_SHA current_main=$MAIN_SHA" >&2
-            exit 1
-          }
+          if [[ "$MAIN_SHA" == "$TESTED_SHA" ]]; then
+            echo "Verified exact current-main community candidate."
+          else
+            OPEN_PRS="$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100")"
+            PR_MATCH="$(jq --arg sha "$TESTED_SHA" --arg main "$MAIN_SHA" --arg repo "$GITHUB_REPOSITORY" '
+              [.[] | select(
+                .state == "open"
+                and .head.sha == $sha
+                and .head.repo.full_name == $repo
+                and .base.ref == "main"
+                and .base.sha == $main
+              )] | length
+            ' <<< "$OPEN_PRS")"
+            [[ "$PR_MATCH" == "1" ]] || {
+              echo "Candidate is neither current main nor the exact head of one open same-repository PR based on current main." >&2
+              exit 1
+            }
+            echo "Verified exact open-PR head for pre-merge community validation only."
+          fi
           echo "COMMUNITY_TESTED_SHA=$ACTUAL"
 
   linux-x64:
