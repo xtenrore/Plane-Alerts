@@ -7,7 +7,7 @@
 
 export const VERSION = "6.0.0";
 export const PREDICTION_VERSION = "5.3-3d-proximity-age-aware";
-export const DEFAULT_PINNED_MAIN_SHA = "e856aa3449d7f509af0b2f853b5c814ab28d0eb5";
+export const DEFAULT_PINNED_MAIN_SHA = "b86310def623a3dec891677d143066e066354aaa";
 export const ROLLBACK_TARGET_RELEASE = "v5.8.8";
 export const COMMUNITY_ROLLBACK_RELEASE = "v5.5.3";
 
