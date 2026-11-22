@@ -118,8 +118,12 @@ def test_community_matrix_is_manual_and_automation_branch_only():
     assert "docker compose run --rm plane-alerts planealerts doctor --offline" in workflow
     assert "Build x64 community Docker image and verify readiness healthcheck" in workflow
     # Five platform jobs plus the real MongoDB integration job each verify checkout;
-    # the resolver has a separate current-main verification step.
-    assert "Verify exact current-main release candidate checkout" in workflow
+    # the resolver accepts either exact main or the exact head of one open same-repo PR.
+    assert "Verify exact current-main or open-PR release candidate checkout" in workflow
+    assert "pull-requests: read" in workflow
+    assert 'gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"' in workflow
+    assert '.head.sha == $sha' in workflow
+    assert '.base.sha == $main' in workflow
     assert workflow.count("Verify exact release candidate checkout") == 6
 
 
@@ -190,5 +194,5 @@ def test_railway_version_only_change_is_excluded_without_ignoring_runtime_versio
 def test_publish_gate_checks_the_resolver_jobs_distinct_exact_main_checkout_step():
     workflow = _workflow_text()
     assert 'if [[ "$JOB_NAME" == "resolve" ]]; then' in workflow
-    assert 'select(.name == "Verify exact current-main release candidate checkout")' in workflow
+    assert 'select(.name == "Verify exact current-main or open-PR release candidate checkout")' in workflow
     assert 'select(.name == "Verify exact release candidate checkout")' in workflow
