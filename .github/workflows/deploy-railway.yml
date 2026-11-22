@@ -129,40 +129,49 @@ jobs:
           CHANGED_FILES="$(git diff --name-only "$PARENT_SHA" "$DEPLOY_SHA")"
           RUNTIME_CHANGED=false
 
-          while IFS= read -r file; do
-            [[ -n "$file" ]] || continue
-            case "$file" in
-              app/version.py)
-                # A community release-version bump and its release-history
-                # comments do not change the already-tested Railway runtime.
-                # Any other executable/version-model change still deploys.
-                if git diff -U0 "$PARENT_SHA" "$DEPLOY_SHA" -- "$file" |
-                  grep -E '^[+-][^+-]' |
-                  grep -Ev '^[+-](VERSION = "[0-9]+\.[0-9]+\.[0-9]+"|#)' |
-                  grep -q .; then
+          if [[ "$EVENT_KIND" == "push" ]]; then
+            # This branch exists only for an explicit exact-SHA recovery after
+            # the normal workflow_run path was skipped. Candidate resolution
+            # above already proves current main, direct parent, unchanged tree,
+            # and successful full application CI for this exact SHA.
+            echo "Explicit exact-SHA Railway deployment recovery requested."
+            RUNTIME_CHANGED=true
+          else
+            while IFS= read -r file; do
+              [[ -n "$file" ]] || continue
+              case "$file" in
+                app/version.py)
+                  # A community release-version bump and its release-history
+                  # comments do not change the already-tested Railway runtime.
+                  # Any other executable/version-model change still deploys.
+                  if git diff -U0 "$PARENT_SHA" "$DEPLOY_SHA" -- "$file" |
+                    grep -E '^[+-][^+-]' |
+                    grep -Ev '^[+-](VERSION = "[0-9]+\\.[0-9]+\\.[0-9]+"|#)' |
+                    grep -q .; then
+                    RUNTIME_CHANGED=true
+                  fi
+                  ;;
+                app/*)
+                  # File-mode-only changes to Python modules are not runtime
+                  # changes. Any actual content change remains a Railway gate.
+                  if git diff --numstat "$PARENT_SHA" "$DEPLOY_SHA" -- "$file" |
+                    awk '$1 != "0" || $2 != "0" { changed=1 } END { exit !changed }'; then
+                    RUNTIME_CHANGED=true
+                  fi
+                  ;;
+                worker.py|Dockerfile|requirements.txt|pyproject.toml|vercel_runtime/*|scripts/planealerts|scripts/railway-entrypoint.sh|scripts/build_airport_database.py|data/aviation/*)
                   RUNTIME_CHANGED=true
-                fi
-                ;;
-              app/*)
-                # File-mode-only changes to Python modules are not runtime
-                # changes. Any actual content change remains a Railway gate.
-                if git diff --numstat "$PARENT_SHA" "$DEPLOY_SHA" -- "$file" |
-                  awk '$1 != "0" || $2 != "0" { changed=1 } END { exit !changed }'; then
-                  RUNTIME_CHANGED=true
-                fi
-                ;;
-              worker.py|Dockerfile|requirements.txt|pyproject.toml|vercel_runtime/*|scripts/planealerts|scripts/railway-entrypoint.sh|scripts/build_airport_database.py|data/aviation/*)
-                RUNTIME_CHANGED=true
-                ;;
-              requirements.lock)
-                # Package names begin with an alphanumeric or underscore.
-                # This POSIX ERE deliberately avoids a malformed bracket range.
-                if git diff -U0 "$PARENT_SHA" "$DEPLOY_SHA" -- requirements.lock | grep -Eq '^[+-][[:alnum:]_]'; then
-                  RUNTIME_CHANGED=true
-                fi
-                ;;
-            esac
-          done <<< "$CHANGED_FILES"
+                  ;;
+                requirements.lock)
+                  # Package names begin with an alphanumeric or underscore.
+                  # This POSIX ERE deliberately avoids a malformed bracket range.
+                  if git diff -U0 "$PARENT_SHA" "$DEPLOY_SHA" -- requirements.lock | grep -Eq '^[+-][[:alnum:]_]'; then
+                    RUNTIME_CHANGED=true
+                  fi
+                  ;;
+              esac
+            done <<< "$CHANGED_FILES"
+          fi
 
           if [[ "$RUNTIME_CHANGED" != "true" ]]; then
             echo "No Railway runtime-impacting files changed; this is a community/docs/installer-only commit."
