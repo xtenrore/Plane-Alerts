@@ -162,7 +162,7 @@ Do not interpret missing ADS-B coverage as proof that a route did or did not occ
 
 Before a version upgrade, back up normal application storage and persistent local data. Keep `.env` and local receiver configuration separately; do not put secrets into backups intended for sharing.
 
-For upgrades from the previous published community stable v5.5.3 to v5.8.8, keep the verified pre-upgrade MongoDB backup until the cumulative operational-storage migrations report verified export counts and the application is production-healthy. The file archive is additive evidence; normal application data remains in MongoDB.
+For upgrades from the previous published community stable v5.5.3 to the v6.0.0 community candidate, keep the verified pre-upgrade MongoDB backup until the cumulative operational-storage migrations report verified export counts and the application is production-healthy. The file archive is additive evidence; normal application data remains in MongoDB.
 
 The guided updater discovers only the newest stable semantic GitHub release, refuses dirty tracked source changes, and validates the target with offline and live doctor checks. Before changing code it backs up `.env`, installation metadata, setup checkpoint and (when SQLite is selected) the SQLite database. If validation or final state recording fails, it restores the previous code commit and those backed-up local files. It never follows `main` as the installed stable version.
 
@@ -178,7 +178,7 @@ docker compose run --rm plane-alerts planealerts doctor --offline
 docker compose up -d
 ```
 
-The previous published community stable before the v5.8.8 community candidate is v5.5.3. Do not assume that checking out an older code tag reverses a completed data migration. If rolling back across the v5.6.x operational-storage migrations, restore the matching pre-upgrade Mongo backup and preserve the persistent-volume route, notification and Prediction Lab data. Never overwrite newer normal user/configuration data casually.
+The previous published community stable before the v6.0.0 candidate is v5.5.3. The v5.8.8 identifier is an application rollback reference, not a published community stable tag. The guided updater must restore the previously installed verified commit rather than assuming an unpublished tag exists. Do not assume that checking out older code reverses a completed data migration. If rolling back across the v5.6.x operational-storage migrations, restore the matching pre-upgrade Mongo backup and preserve the persistent-volume route, notification and Prediction Lab data. Never overwrite newer normal user/configuration data casually.
 
 ## Reporting a problem
 
