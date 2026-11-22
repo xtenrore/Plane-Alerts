@@ -7,7 +7,7 @@ from pathlib import Path
 VERSION = "6.0.0"
 ROLLBACK_TARGET_RELEASE = "v5.8.8"
 COMMUNITY_ROLLBACK_RELEASE = "v5.5.3"
-PINNED_MAIN_SHA = "e856aa3449d7f509af0b2f853b5c814ab28d0eb5"
+PINNED_MAIN_SHA = "b86310def623a3dec891677d143066e066354aaa"
 # v5.1 adds deterministic altitude-aware relevance and true 3D CPA while
 # retaining horizontal CPA as the mandatory safe fallback for uncertain data.
 # v5.1.1 changes release/deployment infrastructure only.
