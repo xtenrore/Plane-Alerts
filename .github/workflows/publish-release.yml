@@ -279,6 +279,24 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
 
+      - name: Verify pinned v6 baseline exists in tested main history
+        shell: bash
+        env:
+          TESTED_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          PINNED_SHA="$(python -c 'from app.version import PINNED_MAIN_SHA; print(PINNED_MAIN_SHA)')"
+          [[ "$PINNED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Pinned main baseline must be a full 40-character commit SHA." >&2
+            exit 1
+          }
+          git fetch --no-tags origin "$PINNED_SHA"
+          git cat-file -e "$PINNED_SHA^{commit}"
+          git merge-base --is-ancestor "$PINNED_SHA" "$TESTED_SHA" || {
+            echo "Pinned main baseline is not an ancestor of the exact tested candidate." >&2
+            exit 1
+          }
+
       - name: Validate guided installer assets and scan for embedded secrets
         shell: bash
         run: |
